@@ -411,7 +411,13 @@ Agent profiles give your containers isolated, persistent agent identities. Each 
 
 ### Why agent profiles?
 
-On macOS, agents like Claude Code store credentials in the macOS Keychain. Inside Linux containers, the Keychain isn't available. Agent profiles solve this by giving each container its own Linux-native credential store that persists across sessions.
+Agent profiles let you keep separate identities per workspace — one account
+for work, another for personal projects, without re-authenticating.
+
+They also solve a macOS-specific problem: some agents, like Claude Code, store
+credentials in the macOS Keychain, which isn't available inside Linux
+containers. By default each isolated profile gets its own Linux-native
+credential store that persists across sessions.
 
 ### Setup
 
