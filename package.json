@@ -4,8 +4,8 @@
   "description": "macOS-native container workspace manager built on Apple's container CLI",
   "type": "module",
   "bin": {
-    "pi-tin": "./dist/cli.js",
-    "pt": "./dist/cli.js"
+    "pi-tin": "dist/cli.js",
+    "pt": "dist/cli.js"
   },
   "files": [
     "dist/"
