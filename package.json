@@ -1,7 +1,7 @@
 {
   "name": "pi-tin",
   "version": "0.1.0",
-  "description": "macOS-native container workspace manager built on Apple's container CLI",
+  "description": "Give your AI coding agents their own VM-isolated dev sandboxes on macOS, via Apple's container CLI",
   "type": "module",
   "bin": {
     "pi-tin": "dist/cli.js",
@@ -17,12 +17,18 @@
     "prepublishOnly": "tsc --noEmit && bun test && bun run build"
   },
   "keywords": [
+    "ai-agents",
+    "ai-coding-agent",
+    "claude-code",
+    "sandbox",
     "container",
+    "apple-container",
+    "apple-silicon",
     "macos",
-    "apple",
-    "pi-tin",
+    "virtualization",
     "workspace",
-    "cli"
+    "cli",
+    "pi-tin"
   ],
   "license": "GPL-3.0-or-later",
   "author": "dave-tn",
