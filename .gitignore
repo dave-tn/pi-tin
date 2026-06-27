@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+*.tgz
+
+# Logs & diagnostics
+*.log
+logs/
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+*.pid
+*.seed
+*.pid.lock
+*.cpuprofile
+*.heapsnapshot
+
+# Test coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Caches
+.npm/
+.eslintcache
+.cache/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+.zed/
+*.swp
+*.swo
+*~
+
+# Agent tooling — local/working state.
+.superpowers/
+.claude/

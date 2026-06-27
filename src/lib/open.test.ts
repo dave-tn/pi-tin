@@ -1,0 +1,287 @@
+import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
+import { openWorkspace, countSharedDirectories } from './open.js';
+
+describe('openWorkspace workspace loading errors', () => {
+  let tmpDir: string;
+  let wsDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    wsDir = path.join(tmpDir, 'pi-tin', 'workspaces');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'pi-tin', 'config.yaml'), 'shell: zsh\n');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  async function captureRejection(promise: Promise<unknown>): Promise<Error> {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof Error) {
+        return error;
+      }
+      throw new Error(`Expected an Error rejection, got: ${String(error)}`);
+    }
+    throw new Error('Expected promise to reject');
+  }
+
+  test('surfaces schema errors naming the field instead of "not found"', async () => {
+    fs.writeFileSync(
+      path.join(wsDir, 'bad.yaml'),
+      'profile: node-dev\nprojects: not-an-array\n',
+    );
+
+    const error = await captureRejection(openWorkspace('bad', {}));
+    expect(error.message).toContain('Invalid workspace configuration');
+    expect(error.message).toContain('projects');
+    expect(error.message).not.toContain('not found');
+  });
+
+  test('surfaces YAML syntax errors instead of "not found"', async () => {
+    fs.writeFileSync(path.join(wsDir, 'bad.yaml'), 'profile: [unclosed\n');
+
+    const error = await captureRejection(openWorkspace('bad', {}));
+    expect(error.message).toContain('Failed to parse YAML');
+    expect(error.message).not.toContain('not found');
+  });
+
+  test('surfaces the name rule for invalid names instead of "not found"', async () => {
+    const error = await captureRejection(openWorkspace('MyWS', {}));
+    expect(error.message).toContain("Invalid workspace name 'MyWS'");
+    expect(error.message).toContain('lowercase');
+    expect(error.message).not.toContain('not found');
+  });
+
+  test('reports "not found" when no workspaces are configured', async () => {
+    const error = await captureRejection(openWorkspace('ghost', {}));
+    expect(error.message).toBe("Workspace 'ghost' not found. No workspaces configured.");
+  });
+
+  test('reports "not found" with available workspaces when others exist', async () => {
+    fs.writeFileSync(
+      path.join(wsDir, 'good.yaml'),
+      'profile: node-dev\nprojects: []\n',
+    );
+
+    const error = await captureRejection(openWorkspace('ghost', {}));
+    expect(error.message).toBe("Workspace 'ghost' not found. Available: good");
+  });
+});
+
+describe('countSharedDirectories', () => {
+  let tmpDir: string;
+  let wsDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    wsDir = path.join(tmpDir, 'pi-tin', 'workspaces');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'pi-tin', 'config.yaml'), 'shell: zsh\n');
+    // node-dev is synced into the temp profiles dir by ensureInitialised.
+    fs.writeFileSync(
+      path.join(wsDir, 'good.yaml'),
+      'profile: node-dev\nprojects: []\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  test('counts each project as a distinct mount', () => {
+    const oneProject = countSharedDirectories('good', ['/tmp/proj-a']);
+    const twoProjects = countSharedDirectories('good', ['/tmp/proj-a', '/tmp/proj-b']);
+    expect(twoProjects).toBe(oneProject + 1);
+  });
+});
+
+describe('planWorkspaceOpen', () => {
+  test('starts fresh when the container is missing and stale runtime state exists', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'not-found',
+      runtimeState: 'corrupt',
+      hasRuntimeMeta: false,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'start',
+      activeSessionsAfterOpen: 1,
+      clearStaleRuntimeState: true,
+      deleteStoppedContainer: false,
+    });
+  });
+
+  test('starts fresh and deletes a stopped container record first', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'stopped',
+      runtimeState: 'missing',
+      hasRuntimeMeta: false,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'start',
+      activeSessionsAfterOpen: 1,
+      clearStaleRuntimeState: false,
+      deleteStoppedContainer: true,
+    });
+  });
+
+  test('refuses when the container is running but runtime state is unreadable', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'corrupt',
+      hasRuntimeMeta: false,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'refuse',
+      message: [
+        "Workspace 'demo' is running, but its runtime state could not be read.",
+        'pi-tin cannot safely join or restart it in this state.',
+        'To reset it: pi-tin stop demo',
+        'If needed: pi-tin stop demo --force',
+      ].join('\n'),
+    });
+  });
+
+  test('refuses --build while active sessions exist', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 2,
+      buildRequested: true,
+      hasDrift: false,
+    })).toEqual({
+      action: 'refuse',
+      message: "Workspace 'demo' already has 2 active sessions.\nStop it first with 'pi-tin stop demo'.",
+    });
+  });
+
+  test('joins an active workspace and warns when changes are deferred to restart', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 2,
+      buildRequested: false,
+      hasDrift: true,
+    })).toEqual({
+      action: 'join',
+      activeSessionsAfterOpen: 3,
+      warnAboutDeferredRestart: true,
+    });
+  });
+
+  test('restarts during grace when drift or build is requested', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: true,
+    })).toEqual({
+      action: 'restart',
+      activeSessionsAfterOpen: 1,
+    });
+  });
+
+  test('joins during grace when no restart is needed', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'join',
+      activeSessionsAfterOpen: 1,
+      warnAboutDeferredRestart: false,
+    });
+  });
+});
+
+describe('planAddProject', () => {
+  const base = {
+    projectPath: '/Users/dave/Dev/new-app',
+    workspaceName: 'work',
+    existingProjects: ['/Users/dave/Dev/my-app'],
+    projectedSharedDirectoryCount: 5,
+    maxSharedDirectories: 22,
+    containerState: 'stopped' as const,
+  };
+
+  test('adds and opens when the workspace is not running', () => {
+    expect(planAddProject(base)).toEqual({ action: 'add-and-open' });
+  });
+
+  test('adds and messages (no open) when the workspace is running', () => {
+    const plan = planAddProject({ ...base, containerState: 'running' });
+    expect(plan.action).toBe('add-and-message');
+    if (plan.action !== 'add-and-message') throw new Error('wrong action');
+    expect(plan.message).toContain('new-app');
+    expect(plan.message).toContain("'work'");
+    expect(plan.message).toContain('restart');
+    expect(plan.message).not.toContain('pi-tin stop');
+  });
+
+  test('rejects when the project is already present', () => {
+    const plan = planAddProject({ ...base, existingProjects: ['/Users/dave/Dev/new-app'] });
+    expect(plan.action).toBe('reject');
+    if (plan.action !== 'reject') throw new Error('wrong action');
+    expect(plan.message).toContain('already');
+  });
+
+  test('rejects on basename collision', () => {
+    const plan = planAddProject({
+      ...base,
+      projectPath: '/Users/dave/other/my-app',
+      existingProjects: ['/Users/dave/Dev/my-app'],
+    });
+    expect(plan.action).toBe('reject');
+    if (plan.action !== 'reject') throw new Error('wrong action');
+    expect(plan.message).toContain("basename collision 'my-app'");
+  });
+
+  test('rejects when projected mounts exceed the limit', () => {
+    const plan = planAddProject({ ...base, projectedSharedDirectoryCount: 23 });
+    expect(plan.action).toBe('reject');
+    if (plan.action !== 'reject') throw new Error('wrong action');
+    expect(plan.message).toContain('up to 22');
+  });
+});

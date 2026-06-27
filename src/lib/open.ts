@@ -1,0 +1,649 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
+import chalk from 'chalk';
+import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir } from './paths.js';
+import { ensureInitialised } from './init-guard.js';
+import { loadConfig } from './config.js';
+import { loadContainerProfile } from './profiles.js';
+import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
+import { generateDockerfile } from './dockerfile.js';
+import {
+  containerNameFor,
+  imageTagFor,
+  imageExists,
+  buildImage,
+  runContainerDetached,
+  execContainer,
+  getContainerState,
+  deleteContainer,
+  type VolumeMount,
+  type ExecResult,
+} from './container.js';
+import { stopAndRemoveContainer } from './container-lifecycle.js';
+import { isRecord } from './guards.js';
+import { AUTO_STOP_COMMAND } from './auto-stop.js';
+import { resolveResources, type ResolvedResources } from './resources.js';
+import { resolveEnv } from './env.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson } from './agents.js';
+import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
+import {
+  ensureWorkspaceTmuxDir,
+  getHostTmuxConfigDir,
+  getHostTmuxPluginsDir,
+} from './tmux.js';
+import type { Config, ContainerProfile, Workspace } from './validators.js';
+import {
+  withWorkspaceLock,
+  reconcileWorkspaceRuntimeState,
+  registerSession,
+  unregisterSession,
+  writeRuntimeMeta,
+  clearWorkspaceRuntimeState,
+  cancelShutdown,
+  armShutdown,
+} from './runtime-state.js';
+import { parseDurationMs, formatDurationMs } from './duration.js';
+import {
+  MAX_SHARED_DIRECTORIES,
+  countUniqueVolumeSources,
+  resolveProjectVolumes,
+  sharedDirectoryLimitMessage,
+  basenameCollisionMessage,
+} from './project-mounts.js';
+import { planWorkspaceOpen } from './workspace-plans.js';
+
+const KEEPALIVE_COMMAND = [
+  '/bin/sh',
+  '-lc',
+  'trap "exit 0" TERM INT; while :; do sleep 86400; done',
+];
+
+interface WorkspaceContext {
+  wsName: string;
+  containerName: string;
+  imageTag: string;
+  workspace: Workspace;
+  containerProfile: ContainerProfile;
+  config: Config;
+  resources: ResolvedResources;
+}
+
+interface BuildPlan {
+  dockerfile: string;
+  extras: Array<{ name: string; content: string }>;
+  buildHash: string;
+  hashPath: string;
+}
+
+interface RuntimeStartPlan {
+  volumes: VolumeMount[];
+  env: Record<string, string>;
+  runtimeHash: string;
+  ssh: boolean;
+  command: string[];
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function hashContent(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function readBuildHash(hashPath: string): string | null {
+  return fs.existsSync(hashPath)
+    ? fs.readFileSync(hashPath, 'utf-8').trim()
+    : null;
+}
+
+function writeBuildHash(hashPath: string, buildHash: string): void {
+  fs.mkdirSync(path.dirname(hashPath), { recursive: true });
+  fs.writeFileSync(hashPath, buildHash, 'utf-8');
+}
+
+function loadWorkspaceContext(wsName: string): WorkspaceContext {
+  ensureInitialised();
+
+  const config = loadConfig();
+
+  let workspace: Workspace;
+  try {
+    workspace = loadWorkspace(wsName);
+  } catch (error) {
+    // Invalid-name, parse, and schema errors carry instructive detail and
+    // must surface as-is; only a genuinely missing file gets the "not found"
+    // rewrite.
+    if (!isValidWorkspaceName(wsName) || workspaceExists(wsName)) {
+      throw error;
+    }
+    const available = listWorkspaces();
+    if (available.length > 0) {
+      const names = available.map((entry) => entry.name).join(', ');
+      throw new Error(`Workspace '${wsName}' not found. Available: ${names}`);
+    }
+    throw new Error(`Workspace '${wsName}' not found. No workspaces configured.`);
+  }
+
+  const containerProfile = loadContainerProfile(workspace.profile);
+  const resources = resolveResources({
+    cpus: containerProfile.cpus,
+    memory: containerProfile.memory,
+  });
+
+  return {
+    wsName,
+    containerName: containerNameFor(wsName),
+    imageTag: imageTagFor(wsName),
+    workspace,
+    containerProfile,
+    config,
+    resources,
+  };
+}
+
+function computeBuildPlan(context: WorkspaceContext): BuildPlan {
+  const tools = context.workspace.tools ?? [];
+  const skipPermissions = context.workspace.agent?.skipPermissions ?? true;
+  const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools) : [];
+  const agentEnv = agentContainerEnv(tools);
+  const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
+  const { dockerfile, extras } = generateDockerfile(context.containerProfile, context.config.shell, tools, {
+    agentWraps,
+    agentEnv,
+    claudeManagedSettings,
+  });
+
+  const hashInput = dockerfile + extras.map((file) => file.name + file.content).join('');
+
+  return {
+    dockerfile,
+    extras,
+    buildHash: hashContent(hashInput),
+    hashPath: getBuildHashPath(context.wsName),
+  };
+}
+
+function validateProjects(projects: string[]): void {
+  for (const projectPath of projects) {
+    if (!path.isAbsolute(projectPath)) {
+      throw new Error(`Project path must be absolute: ${projectPath}`);
+    }
+    if (!fs.existsSync(projectPath)) {
+      throw new Error(`Project path does not exist: ${projectPath}`);
+    }
+  }
+
+  const basenames = projects.map((projectPath) => path.basename(projectPath));
+  const seen = new Set<string>();
+  for (const basename of basenames) {
+    if (seen.has(basename)) {
+      const colliding = projects.filter((projectPath) => path.basename(projectPath) === basename);
+      throw new Error(basenameCollisionMessage(basename, colliding));
+    }
+    seen.add(basename);
+  }
+}
+
+function resolveWorkspaceVolumes(
+  context: WorkspaceContext,
+  options: { quiet?: boolean } = {},
+): VolumeMount[] {
+  const quiet = options.quiet === true;
+  const { workspace, containerProfile, wsName } = context;
+  const homeContainer = containerHomeDir(containerProfile.user);
+  const volumes = resolveProjectVolumes(workspace.projects);
+
+  const hostMounts = workspace.host?.mounts ?? [];
+  for (const mount of hostMounts) {
+    const hostPath = expandTilde(mount.host);
+    if (!fs.existsSync(hostPath)) {
+      if (!quiet) console.warn(chalk.yellow(`Skipping host mount (path does not exist): ${hostPath}`));
+      continue;
+    }
+    if (!fs.statSync(hostPath).isDirectory()) {
+      throw new Error(
+        `Host mount is a file, not a directory: ${hostPath}\nOnly directory mounts are supported. Edit the workspace config to fix this.`,
+      );
+    }
+    volumes.push({
+      host: hostPath,
+      container: mount.container,
+      readonly: mount.readonly,
+    });
+  }
+
+  if (workspace.tmux) {
+    const tmuxConfigContainer = `${homeContainer}/.config/tmux`;
+    const tmuxPluginsContainer = `${homeContainer}/.tmux`;
+
+    const conflictingTmuxConfig = hostMounts.find((mount) => mount.container === tmuxConfigContainer);
+    if (conflictingTmuxConfig && !quiet) {
+      console.warn(
+        chalk.yellow(`Warning: workspace.tmux provides ${tmuxConfigContainer}, but host.mounts also mounts ${conflictingTmuxConfig.host} there. workspace.tmux will take precedence.`),
+      );
+    }
+    const conflictingTmuxPlugins = hostMounts.find((mount) => mount.container === tmuxPluginsContainer);
+    if (conflictingTmuxPlugins && !quiet) {
+      console.warn(
+        chalk.yellow(`Warning: workspace.tmux provides ${tmuxPluginsContainer}, but host.mounts also mounts ${conflictingTmuxPlugins.host} there. workspace.tmux will take precedence.`),
+      );
+    }
+
+    if (workspace.tmux.mode === 'host') {
+      const hostConfigDir = getHostTmuxConfigDir();
+      if (fs.existsSync(hostConfigDir) && fs.statSync(hostConfigDir).isDirectory()) {
+        volumes.push({
+          host: hostConfigDir,
+          container: tmuxConfigContainer,
+          readonly: true,
+        });
+        if (!quiet) console.log(chalk.dim(`tmux host config mounted as ${tmuxConfigContainer}`));
+      } else {
+        if (!quiet) console.warn(chalk.yellow(`Warning: tmux host mode is enabled but ${hostConfigDir} does not exist.`));
+      }
+
+      if (workspace.tmux.mountPlugins) {
+        const hostPluginsDir = getHostTmuxPluginsDir();
+        if (fs.existsSync(hostPluginsDir) && fs.statSync(hostPluginsDir).isDirectory()) {
+          volumes.push({
+            host: hostPluginsDir,
+            container: tmuxPluginsContainer,
+            readonly: true,
+          });
+          if (!quiet) console.log(chalk.dim(`tmux host plugins mounted as ${tmuxPluginsContainer}`));
+        } else {
+          if (!quiet) console.warn(chalk.yellow(`Warning: tmux plugin mount is enabled but ${hostPluginsDir} does not exist.`));
+        }
+      }
+    } else {
+      const tmuxDir = ensureWorkspaceTmuxDir(wsName);
+      volumes.push({
+        host: path.join(tmuxDir, '.config', 'tmux'),
+        container: tmuxConfigContainer,
+      });
+      volumes.push({
+        host: path.join(tmuxDir, '.tmux'),
+        container: tmuxPluginsContainer,
+      });
+      if (!quiet) console.log(chalk.dim(`tmux workspace config mounted from ${tmuxDir}`));
+    }
+  }
+
+  const agentProfiles = workspace.agent?.profiles ?? [];
+  if (agentProfiles.length > 0) {
+    const resolvedProfiles = validateAgentProfilesForWorkspace(agentProfiles);
+    for (const agentProfile of resolvedProfiles) {
+      const conflicting = hostMounts.find((mount) => mount.container.endsWith(`/${agentProfile.mount}`));
+      if (conflicting && !quiet) {
+        console.warn(
+          chalk.yellow(`Warning: agent profile '${agentProfile.name}' provides ${agentProfile.mount}, but host.mounts also mounts ${conflicting.host} to ${conflicting.container}. The agent profile mount will take precedence.`),
+        );
+      }
+
+      volumes.push({
+        host: agentProfile.hostPath,
+        container: `${homeContainer}/${agentProfile.mount}`,
+      });
+      if (!quiet) console.log(chalk.dim(`Agent profile '${agentProfile.name}' mounted as ~/${agentProfile.mount}`));
+    }
+  }
+
+  if (workspace.host?.githubCLI) {
+    const ghConfigHost = getHostGhConfigDir();
+    if (fs.existsSync(ghConfigHost)) {
+      volumes.push({
+        host: ghConfigHost,
+        container: `${homeContainer}/.config/gh`,
+        readonly: true,
+      });
+    }
+  }
+
+  return volumes;
+}
+
+export function countSharedDirectories(wsName: string, projects: string[]): number {
+  const context = loadWorkspaceContext(wsName);
+  const candidate: WorkspaceContext = {
+    ...context,
+    workspace: { ...context.workspace, projects },
+  };
+  return countUniqueVolumeSources(resolveWorkspaceVolumes(candidate, { quiet: true }));
+}
+
+function resolveRuntimeEnv(context: WorkspaceContext): Record<string, string> {
+  const resolvedEnv = resolveEnv(context.workspace.host?.env ?? {});
+  const githubCLI = context.workspace.host?.githubCLI ?? false;
+
+  if (!githubCLI) {
+    return resolvedEnv;
+  }
+
+  const ghConfigHost = getHostGhConfigDir();
+  if (!fs.existsSync(ghConfigHost)) {
+    console.warn(chalk.yellow('Warning: host.githubCLI is enabled but ~/.config/gh does not exist. Run `gh auth login` on the host first.'));
+  }
+
+  if (!resolvedEnv['GH_TOKEN']) {
+    try {
+      const token = execFileSync('gh', ['auth', 'token'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      if (token) {
+        resolvedEnv['GH_TOKEN'] = token;
+      }
+    } catch {
+      // gh not installed on host or not logged in — skip silently
+    }
+  }
+
+  return resolvedEnv;
+}
+
+function computeRuntimeHash(
+  context: WorkspaceContext,
+  volumes: VolumeMount[],
+): string {
+  const sortedVolumes = [...volumes]
+    .map((volume) => ({
+      host: volume.host,
+      container: volume.container,
+      readonly: volume.readonly === true,
+    }))
+    .sort((left, right) => {
+      const leftKey = `${left.container}\0${left.host}\0${left.readonly}`;
+      const rightKey = `${right.container}\0${right.host}\0${right.readonly}`;
+      return leftKey.localeCompare(rightKey);
+    });
+
+  const hostEnvEntries = Object.entries(context.workspace.host?.env ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => ({ key, value }));
+
+  return hashContent(stableStringify({
+    volumes: sortedVolumes,
+    resources: context.resources,
+    sshAgent: context.workspace.host?.sshAgent ?? true,
+    githubCLI: context.workspace.host?.githubCLI ?? false,
+    hostEnv: hostEnvEntries,
+  }));
+}
+
+function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
+  validateProjects(context.workspace.projects);
+
+  const volumes = resolveWorkspaceVolumes(context);
+  const sharedDirectoryCount = countUniqueVolumeSources(volumes);
+  if (sharedDirectoryCount > MAX_SHARED_DIRECTORIES) {
+    throw new Error(sharedDirectoryLimitMessage(context.wsName, sharedDirectoryCount));
+  }
+
+  return {
+    volumes,
+    env: resolveRuntimeEnv(context),
+    runtimeHash: computeRuntimeHash(context, volumes),
+    ssh: context.workspace.host?.sshAgent ?? true,
+    command: KEEPALIVE_COMMAND,
+  };
+}
+
+function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): void {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-build-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'Dockerfile'), buildPlan.dockerfile);
+    for (const extra of buildPlan.extras) {
+      fs.writeFileSync(path.join(tmpDir, extra.name), extra.content);
+    }
+
+    console.log(chalk.blue(`Building image ${context.imageTag}...`));
+    buildImage(context.imageTag, tmpDir);
+    writeBuildHash(buildPlan.hashPath, buildPlan.buildHash);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function ensureImageBuiltIfNeeded(
+  context: WorkspaceContext,
+  buildPlan: BuildPlan,
+  forceBuild: boolean,
+): void {
+  const previousHash = readBuildHash(buildPlan.hashPath);
+  const configChanged = previousHash !== null && previousHash !== buildPlan.buildHash;
+
+  let needsBuild = forceBuild || !imageExists(context.imageTag);
+  if (!needsBuild && configChanged) {
+    console.log(chalk.yellow('⚠ Container profile or workspace config has changed since last build.'));
+    console.log(chalk.yellow('  Rebuilding image to apply changes...'));
+    needsBuild = true;
+  }
+
+  if (needsBuild) {
+    buildImageFromPlan(context, buildPlan);
+  }
+}
+
+function startWorkspaceContainer(
+  context: WorkspaceContext,
+  runtimePlan: RuntimeStartPlan,
+  buildPlan: BuildPlan,
+): void {
+  runContainerDetached({
+    image: context.imageTag,
+    volumes: runtimePlan.volumes,
+    name: context.containerName,
+    cpus: context.resources.cpus,
+    memory: context.resources.memory,
+    ssh: runtimePlan.ssh,
+    env: runtimePlan.env,
+    command: runtimePlan.command,
+  });
+
+  writeRuntimeMeta(context.wsName, {
+    startedAt: new Date().toISOString(),
+    buildHash: buildPlan.buildHash,
+    runtimeHash: runtimePlan.runtimeHash,
+  });
+}
+
+function spawnAutoStopHelper(workspaceName: string, deadlineMs: number): number | undefined {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) {
+    return undefined;
+  }
+
+  try {
+    const child = spawn(process.execPath, [
+      scriptPath,
+      AUTO_STOP_COMMAND,
+      workspaceName,
+      String(deadlineMs),
+    ], {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    });
+
+    child.unref();
+    return child.pid ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readStopTimeout(workspaceName: string, fallback: string): string {
+  try {
+    return loadWorkspace(workspaceName).stopAfterLastSession;
+  } catch {
+    return fallback;
+  }
+}
+
+function setProcessExitCode(result: ExecResult): void {
+  if (result.status !== null) {
+    process.exitCode = result.status;
+    return;
+  }
+
+  if (result.signal !== null) {
+    const signalNumber = os.constants.signals[result.signal];
+    process.exitCode = signalNumber ? 128 + signalNumber : 1;
+  }
+}
+
+async function finishWorkspaceSession(
+  context: WorkspaceContext,
+  sessionId: string,
+): Promise<string> {
+  return await withWorkspaceLock(context.wsName, () => {
+    unregisterSession(context.wsName, sessionId);
+
+    const containerState = getContainerState(context.containerName);
+    if (containerState !== 'running') {
+      clearWorkspaceRuntimeState(context.wsName);
+      return 'Session closed.';
+    }
+
+    const runtime = reconcileWorkspaceRuntimeState(context.wsName);
+    if (runtime.runtimeState !== 'ok') {
+      return 'Session closed.';
+    }
+
+    if (runtime.activeSessions.length > 0) {
+      return `Session closed. Active sessions remaining: ${runtime.activeSessions.length}`;
+    }
+
+    const timeoutValue = readStopTimeout(context.wsName, context.workspace.stopAfterLastSession);
+    const timeoutMs = parseDurationMs(timeoutValue);
+    const deadlineMs = Date.now() + timeoutMs;
+    const helperPid = spawnAutoStopHelper(context.wsName, deadlineMs);
+
+    armShutdown(context.wsName, {
+      armedAt: new Date().toISOString(),
+      deadlineMs,
+      helperPid,
+    });
+
+    if (helperPid === undefined) {
+      return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
+    }
+
+    return `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+  });
+}
+
+export async function openWorkspace(
+  wsName: string,
+  opts: { build?: boolean; workdir?: string | undefined },
+): Promise<void> {
+  const context = loadWorkspaceContext(wsName);
+  console.log(chalk.green(`Opening workspace: ${wsName}`));
+
+  const buildPlan = computeBuildPlan(context);
+  const runtimePlan = computeRuntimeStartPlan(context);
+  const sessionId = crypto.randomUUID();
+
+  const opened = await withWorkspaceLock(context.wsName, async () => {
+    const runtime = reconcileWorkspaceRuntimeState(context.wsName);
+    const containerState = getContainerState(context.containerName);
+    const sessionRecord = {
+      sessionId,
+      startedAt: new Date().toISOString(),
+      hostPid: process.pid,
+      state: 'active' as const,
+    };
+
+    const hasBuildDrift = runtime.meta?.buildHash !== undefined
+      ? runtime.meta.buildHash !== buildPlan.buildHash
+      : false;
+    const hasRuntimeDrift = runtime.meta?.runtimeHash !== undefined
+      ? runtime.meta.runtimeHash !== runtimePlan.runtimeHash
+      : false;
+    const plan = planWorkspaceOpen({
+      workspaceName: context.wsName,
+      containerState,
+      runtimeState: runtime.runtimeState,
+      hasRuntimeMeta: runtime.meta !== null,
+      activeSessions: runtime.activeSessions.length,
+      buildRequested: opts.build === true,
+      hasDrift: hasBuildDrift || hasRuntimeDrift,
+    });
+
+    switch (plan.action) {
+      case 'refuse':
+        throw new Error(plan.message);
+      case 'start':
+        if (plan.clearStaleRuntimeState) {
+          console.warn(chalk.yellow(`Warning: stale runtime state found for workspace '${context.wsName}'. Starting fresh.`));
+          clearWorkspaceRuntimeState(context.wsName);
+        }
+        if (plan.deleteStoppedContainer) {
+          try {
+            deleteContainer(context.containerName);
+          } catch {
+            // Best effort only.
+          }
+        }
+
+        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true);
+        startWorkspaceContainer(context, runtimePlan, buildPlan);
+        registerSession(context.wsName, sessionRecord);
+        cancelShutdown(context.wsName);
+        return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+      case 'join':
+        if (plan.warnAboutDeferredRestart) {
+          console.warn(chalk.yellow(`Warning: workspace changes will apply on the next restart of '${context.wsName}'.`));
+        }
+        registerSession(context.wsName, sessionRecord);
+        cancelShutdown(context.wsName);
+        return { mode: 'joined' as const, activeSessions: plan.activeSessionsAfterOpen };
+      case 'restart':
+        await stopAndRemoveContainer(context.containerName);
+        clearWorkspaceRuntimeState(context.wsName);
+        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true || hasBuildDrift);
+        startWorkspaceContainer(context, runtimePlan, buildPlan);
+        registerSession(context.wsName, sessionRecord);
+        cancelShutdown(context.wsName);
+        return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+    }
+  });
+
+  if (opened.mode === 'started') {
+    console.log(chalk.green(`Started workspace '${context.wsName}'`));
+  } else {
+    console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
+  }
+  console.log(`Active sessions: ${opened.activeSessions}`);
+
+  let execResult: ExecResult | null = null;
+  try {
+    execResult = execContainer({
+      name: context.containerName,
+      command: [context.config.shell],
+      workdir: opts.workdir,
+      user: context.containerProfile.user,
+    });
+  } finally {
+    const exitMessage = await finishWorkspaceSession(context, sessionId);
+    console.log(exitMessage);
+  }
+
+  if (execResult !== null) {
+    setProcessExitCode(execResult);
+  }
+}
