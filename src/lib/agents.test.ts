@@ -39,10 +39,10 @@ describe('KNOWN_AGENTS', () => {
     expect(codex?.skipPermissionsFlag).toBe('--dangerously-bypass-approvals-and-sandbox');
 
     const amp = KNOWN_AGENTS.find((a) => a.name === 'Amp');
-    expect(amp?.skipPermissionsFlag).toBe('--dangerously-allow-all');
+    expect(amp?.skipPermissionsFlag).toBeUndefined();
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
-    expect(gemini?.skipPermissionsFlag).toBe('--yolo');
+    expect(gemini?.skipPermissionsFlag).toBe('--approval-mode=yolo');
   });
 
   test('agents with containerEnv have the expected env vars', () => {

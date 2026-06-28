@@ -135,7 +135,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     binary: 'amp',
     dotDirs: ['.local/share/amp', '.config/amp'],
     hostModeSupported: true,
-    skipPermissionsFlag: '--dangerously-allow-all',
+    // Amp runs without approval prompts by default — no flag needed.
   },
   {
     name: 'Gemini CLI',
@@ -143,7 +143,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     binary: 'gemini',
     dotDirs: ['.gemini'],
     hostModeSupported: true,
-    skipPermissionsFlag: '--yolo',
+    skipPermissionsFlag: '--approval-mode=yolo',
     containerEnv: { NO_BROWSER: 'true' },
   },
 ];

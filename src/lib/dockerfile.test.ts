@@ -188,7 +188,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
-      { name: 'Amp', package: '@ampcode/cli@latest' },
+      { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
     ];
     const claudeManagedSettings = JSON.stringify({
       permissions: {
@@ -198,7 +198,7 @@ describe('generateDockerfile', () => {
     const { extras, dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
       agentWraps: [
         { binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' },
-        { binary: 'amp', flag: '--dangerously-allow-all' },
+        { binary: 'gemini', flag: '--approval-mode=yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
@@ -209,8 +209,8 @@ describe('generateDockerfile', () => {
     expect(entrypoint).not.toContain('--dangerously-skip-permissions');
     expect(entrypoint).toContain('which codex');
     expect(entrypoint).toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(entrypoint).toContain('which amp');
-    expect(entrypoint).toContain('--dangerously-allow-all');
+    expect(entrypoint).toContain('which gemini');
+    expect(entrypoint).toContain('--approval-mode=yolo');
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
     expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
   });
@@ -222,7 +222,7 @@ describe('generateDockerfile', () => {
     ];
     const { dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
       agentWraps: [
-        { binary: 'gemini', flag: '--yolo' },
+        { binary: 'gemini', flag: '--approval-mode=yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' },
       claudeManagedSettings: null,
