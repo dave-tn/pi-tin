@@ -1,0 +1,13 @@
+# Keep GitHub Actions used in CI current. Scoped to github-actions only:
+# npm deps are bundled into dist/ at build time, so routine npm bumps don't
+# reach users until a rebuild + republish — those are handled alert-driven and
+# by hand. Actions updates don't touch bun.lock, so Dependabot is reliable here.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
