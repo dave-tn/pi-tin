@@ -188,7 +188,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
-      { name: 'Amp', package: '@sourcegraph/amp@latest' },
+      { name: 'Amp', package: '@ampcode/cli@latest' },
     ];
     const claudeManagedSettings = JSON.stringify({
       permissions: {

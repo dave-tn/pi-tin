@@ -119,19 +119,19 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     dotDirs: ['.codex'],
     hostModeSupported: true,
     hostModeWarning:
-      'Shared mode requires file-based auth (cli_auth_credentials_store = "file"). If you use keychain-based auth, choose Isolated instead.',
+      'Shared mode persists login via ~/.codex/auth.json, which is the default. If you set cli_auth_credentials_store = "keyring" (or "auto" on macOS, which prefers the OS keychain), the credential lives outside ~/.codex and will not transfer — choose Isolated instead.',
     skipPermissionsFlag: '--dangerously-bypass-approvals-and-sandbox',
   },
   {
     name: 'OpenCode',
-    package: 'opencode@latest',
+    package: 'opencode-ai@latest',
     binary: 'opencode',
     dotDirs: ['.local/share/opencode', '.config/opencode'],
     hostModeSupported: true,
   },
   {
     name: 'Amp',
-    package: '@sourcegraph/amp@latest',
+    package: '@ampcode/cli@latest',
     binary: 'amp',
     dotDirs: ['.local/share/amp', '.config/amp'],
     hostModeSupported: true,
