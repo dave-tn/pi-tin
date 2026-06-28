@@ -1,6 +1,6 @@
 {
   "name": "pi-tin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Give your AI coding agents their own VM-isolated dev sandboxes on macOS, via Apple's container CLI",
   "type": "module",
   "bin": {
