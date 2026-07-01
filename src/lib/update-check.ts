@@ -37,6 +37,10 @@ export function writeUpdateCache(cache: UpdateCheckCache): void {
 
 // Pure gate: notices are for interactive humans only. Suppressed for non-TTY /
 // piped / JSON output, on CI, and via either opt-out env var.
+// Note: always-JSON commands (show, *-apply, detect-host) can pass this gate on
+// a bare TTY invocation — that is intentional. The notice writes to stderr while
+// their JSON goes to stdout, so the machine-readable channel is never corrupted,
+// and any real capture (`> out.json`) makes stdout non-TTY and trips !isTty here.
 export function computeUpdateNoticeEnabled(input: {
   argv: string[];
   env: NodeJS.ProcessEnv;
