@@ -244,6 +244,28 @@ Notes:
 - `pi-tin create` detects your Mac's timezone (from `/etc/localtime`) and writes it as a literal `host.env.TZ` (e.g. `TZ: America/New_York`) so the container shares your local time by default. Edit the value to use a different zone, or remove the line to fall back to UTC. The value is a snapshot taken at create time — it does not track later host changes. Existing workspaces are unaffected; add `TZ` by hand to opt in. The managed `node-dev` container profile bundles `tzdata` so IANA zone names resolve; **custom container profiles must include a zoneinfo source (e.g. the `tzdata` package)** or `TZ` will silently fall back to UTC.
 - Git identity is detected from your host `~/.gitconfig` during `pi-tin create`.
 
+### Update notifications
+
+pi-tin checks npm in the background — at most once every 24 hours — for a newer
+release, and prints a single-line notice the next time you return to your shell
+when one is available:
+
+```
+pi-tin <latest> available (you have <current>) · update: npm i -g pi-tin
+```
+
+The notice is automatically suppressed for non-interactive or machine-readable
+use (piped output, `--json`, or a non-TTY stdout). To opt out entirely, set any
+of the following to a non-empty value:
+
+- `PI_TIN_NO_UPDATE_NOTIFIER` — pi-tin's own opt-out.
+- `NO_UPDATE_NOTIFIER` — the ecosystem-wide convention.
+- `CI` — notices are off on CI by default.
+
+> [!NOTE]
+> The check queries the public npm registry directly and does not honour a
+> private/custom registry configuration.
+
 ## Commands
 
 | Command | Description |

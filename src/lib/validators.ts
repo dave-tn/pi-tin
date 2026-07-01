@@ -218,3 +218,14 @@ export function validateWorkspace(raw: unknown): Workspace {
 export function validateAgentProfileMeta(raw: unknown): AgentProfileMeta {
   return parseWithContext('agent profile', AgentProfileMetaSchema, raw);
 }
+
+// npm dist-tags response: GET https://registry.npmjs.org/-/package/pi-tin/dist-tags
+// Non-strict: npm returns other tags (beta, next, …) we deliberately ignore.
+export const NpmDistTagsSchema = v.object({ latest: v.string() });
+
+// On-disk update-check cache (written by the detached checker, read on startup).
+export const UpdateCheckCacheSchema = v.object({
+  lastCheckMs: v.number(),
+  latestVersion: v.string(),
+});
+export type UpdateCheckCache = v.InferOutput<typeof UpdateCheckCacheSchema>;

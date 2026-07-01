@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { buildProgram } from './cli-program.js';
 import { ensurePrerequisites } from './lib/prereqs.js';
 import { runAutoStopHelper, AUTO_STOP_COMMAND } from './lib/auto-stop.js';
+import { runUpdateCheckHelper, scheduleUpdateNotice, CHECK_FOR_UPDATE_COMMAND } from './lib/update-check.js';
 import { isValidWorkspaceName } from './lib/workspaces.js';
 import { CliError, EXIT, errorEnvelope } from './lib/cli-errors.js';
 import { shouldEmitJson, printJson } from './lib/cli-output.js';
@@ -21,6 +22,11 @@ if (args[0] === AUTO_STOP_COMMAND) {
     process.exit(1);
   }
   await runAutoStopHelper(workspaceName, deadlineMs);
+  process.exit(0);
+}
+
+if (args[0] === CHECK_FOR_UPDATE_COMMAND) {
+  await runUpdateCheckHelper();
   process.exit(0);
 }
 
@@ -45,6 +51,13 @@ if (!isHelpOrVersion) {
     process.exit(1);
   }
   await ensurePrerequisites();
+
+  scheduleUpdateNotice({
+    currentVersion: PKG_VERSION,
+    argv: args,
+    env: process.env,
+    isTty: Boolean(process.stdout.isTTY),
+  });
 }
 
 try {
