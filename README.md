@@ -6,13 +6,19 @@
 
 _Pie tins hold pies. `pi-tin` holds your agent dev environments._
 
-**Give your AI coding agents their own sandboxes to work in.**
+**Let your AI coding agents run free — local and contained.**
 
 ```bash
 cd ~/dev/my-app && pt        # opens a VM-isolated workspace, agent ready
 ```
 
-pi-tin can give each AI coding agent its own micro-VM: a real Linux container with a full VM boundary (via Apple's efficient, lightweight `container` CLI — no Docker, no shared VM). Your agent can run with permissions bypassed, free to move fast _inside the box_ — while your Mac, your keys, and your other projects and data stay outside it.
+The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOLO modes), without the danger. pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so your agents can run with permission prompts bypassed, free to move fast _inside the box_, while your Mac, your keys, and your other projects and data stay outside it.
+
+**Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, and Gemini are launched in bypass mode for you. (Prefer prompts? Set `agent.skipPermissions: false`.)
+
+**Runs on your Mac.** No cloud VMs, no remote dev environment to rent or trust — the sandboxes are local, backed by Apple's native virtualization.
+
+**Open source top to bottom.** pi-tin (GPLv3), Apple's `container` runtime (Apache-2.0), and the Linux kernel — all open — running on the virtualization built into macOS.
 
 **OCI-compatible.** Use standard images from Docker Hub, GHCR, and any OCI registry — existing container images just work.
 
