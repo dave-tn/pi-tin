@@ -1,21 +1,39 @@
 {
   "name": "pi-tin",
   "version": "0.1.1",
-  "description": "Give your AI coding agents their own VM-isolated dev sandboxes on macOS, via Apple's container CLI",
-  "type": "module",
+  "author": "dave-tn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dave-tn/pi-tin.git"
+  },
+  "devDependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.4",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "typescript": "^6.0.3",
+    "valibot": "^1.4.2",
+    "yaml": "^2.9.0"
+  },
   "bin": {
     "pi-tin": "dist/cli.js",
     "pt": "dist/cli.js"
   },
+  "bugs": {
+    "url": "https://github.com/dave-tn/pi-tin/issues"
+  },
+  "cpu": [
+    "arm64"
+  ],
+  "description": "Let AI coding agents run free (permissions bypassed) — in lightweight, VM-isolated sandboxes on macOS, via Apple's container CLI",
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist/"
   ],
-  "scripts": {
-    "build": "bun build src/cli.ts --outdir dist --target node --define \"PKG_VERSION='$(node -p \"require('./package.json').version\")'\" --define \"PKG_HOMEPAGE='$(node -p \"require('./package.json').homepage.split('#')[0]\")'\"",
-    "dev": "bun run src/cli.ts",
-    "test": "bun test",
-    "prepublishOnly": "tsc --noEmit && bun test && bun run build"
-  },
+  "homepage": "https://github.com/dave-tn/pi-tin#readme",
   "keywords": [
     "agentic",
     "agents",
@@ -35,35 +53,17 @@
     "vm"
   ],
   "license": "GPL-3.0-or-later",
-  "author": "dave-tn",
-  "homepage": "https://github.com/dave-tn/pi-tin#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/dave-tn/pi-tin.git"
-  },
-  "bugs": {
-    "url": "https://github.com/dave-tn/pi-tin/issues"
-  },
   "os": [
     "darwin"
-  ],
-  "cpu": [
-    "arm64"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "engines": {
-    "node": ">=18"
+  "scripts": {
+    "build": "bun build src/cli.ts --outdir dist --target node --define \"PKG_VERSION='$(node -p \"require('./package.json').version\")'\" --define \"PKG_HOMEPAGE='$(node -p \"require('./package.json').homepage.split('#')[0]\")'\"",
+    "dev": "bun run src/cli.ts",
+    "test": "bun test",
+    "prepublishOnly": "tsc --noEmit && bun test && bun run build"
   },
-  "devDependencies": {
-    "@inquirer/prompts": "^8.5.2",
-    "@types/bun": "^1.3.14",
-    "@types/node": "^25.9.4",
-    "chalk": "^5.6.2",
-    "commander": "^14.0.3",
-    "typescript": "^6.0.3",
-    "valibot": "^1.4.2",
-    "yaml": "^2.9.0"
-  }
+  "type": "module"
 }
