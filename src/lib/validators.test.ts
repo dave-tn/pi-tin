@@ -4,6 +4,8 @@ import {
   ContainerListSchema,
   ContainerSystemVersionSchema,
   ImageListSchema,
+  NpmDistTagsSchema,
+  UpdateCheckCacheSchema,
   validateWorkspace,
   validateConfig,
   validateContainerProfile,
@@ -429,5 +431,38 @@ describe('ConfigSchema shell', () => {
 
   test('rejects empty string', () => {
     expect(() => validateConfig({ shell: '' })).toThrow();
+  });
+});
+
+describe('NpmDistTagsSchema', () => {
+  test('accepts a dist-tags payload and ignores extra tags', () => {
+    const parsed = v.safeParse(NpmDistTagsSchema, { latest: '0.2.0', beta: '0.3.0-beta.1' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.output.latest).toBe('0.2.0');
+    }
+  });
+
+  test('rejects a payload missing latest', () => {
+    expect(v.safeParse(NpmDistTagsSchema, { beta: '0.3.0' }).success).toBe(false);
+  });
+
+  test('rejects a non-string latest', () => {
+    expect(v.safeParse(NpmDistTagsSchema, { latest: 2 }).success).toBe(false);
+  });
+});
+
+describe('UpdateCheckCacheSchema', () => {
+  test('accepts a well-formed cache', () => {
+    const parsed = v.safeParse(UpdateCheckCacheSchema, { lastCheckMs: 1_700_000_000_000, latestVersion: '0.2.0' });
+    expect(parsed.success).toBe(true);
+  });
+
+  test('rejects a cache with a non-numeric timestamp', () => {
+    expect(v.safeParse(UpdateCheckCacheSchema, { lastCheckMs: 'soon', latestVersion: '0.2.0' }).success).toBe(false);
+  });
+
+  test('rejects a cache missing latestVersion', () => {
+    expect(v.safeParse(UpdateCheckCacheSchema, { lastCheckMs: 1 }).success).toBe(false);
   });
 });

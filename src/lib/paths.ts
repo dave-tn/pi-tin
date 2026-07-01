@@ -32,6 +32,10 @@ export function getBuildHashPath(workspaceName: string): string {
   return path.join(getStateDir(), `${workspaceName}.hash`);
 }
 
+export function getUpdateCheckPath(): string {
+  return path.join(getStateDir(), 'update-check.json');
+}
+
 export function getConfigPath(): string {
   return path.join(getConfigDir(), 'config.yaml');
 }
