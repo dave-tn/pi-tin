@@ -8,7 +8,7 @@
 
 _Pie tins hold pies. `pi-tin` holds your agent dev environments._
 
-**Let your AI coding agents run free — local and contained.**
+**Let your AI coding agents run free — local, contained workspaces.**
 
 ```bash
 cd ~/dev/my-app && pt        # opens a VM-isolated workspace, agent ready
