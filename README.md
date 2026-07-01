@@ -1,8 +1,10 @@
 # pi-tin
 
 [![npm version](https://img.shields.io/npm/v/pi-tin.svg)](https://www.npmjs.com/package/pi-tin)
+[![CI](https://github.com/dave-tn/pi-tin/actions/workflows/ci.yml/badge.svg)](https://github.com/dave-tn/pi-tin/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js Version](https://img.shields.io/node/v/pi-tin.svg)](https://nodejs.org)
+[![Platform: macOS 26+ · Apple Silicon](https://img.shields.io/badge/platform-macOS%2026%2B%20%C2%B7%20Apple%20Silicon-000?logo=apple&logoColor=white)](#prerequisites)
 
 _Pie tins hold pies. `pi-tin` holds your agent dev environments._
 
