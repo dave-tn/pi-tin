@@ -27,6 +27,9 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
     .description('macOS-native workspace manager built on Apple\'s container CLI')
     .version(meta.version, '-v, --version')
     .option('--build', 'Force rebuild the container image when auto-opening a matched workspace')
+    // The root default action suppresses commander's implicit `help [command]`
+    // subcommand, so enable it explicitly for `pi-tin help <cmd>`.
+    .helpCommand(true)
     .addHelpText('after', `\nAgents: run \`pi-tin agent-guide\` for machine usage.\nDocs: ${meta.homepage}`);
 
   // Workspace commands

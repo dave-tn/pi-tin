@@ -27,4 +27,14 @@ describe('classifyHelpRequest', () => {
     expect(classifyHelpRequest(['create', '--help'], false)).toBe('normal');
     expect(classifyHelpRequest(['container-profile', 'apply', '--help'], false)).toBe('normal');
   });
+
+  test('help <cmd> falls through to commander (regardless of TTY)', () => {
+    expect(classifyHelpRequest(['help', 'show'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help', 'show'], false)).toBe('normal');
+  });
+
+  test('bare help stays top-level', () => {
+    expect(classifyHelpRequest(['help'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help'], false)).toBe('guide');
+  });
 });
