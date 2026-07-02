@@ -9,8 +9,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// Deep equality via canonical stringify. Only used on arrays/scalars (objects
-// are recursed, never stringified), so key-order sensitivity does not apply.
+// Deep equality via JSON.stringify — key-order sensitive for objects nested
+// inside arrays (e.g. mount entries). Safe because both diffJson inputs are
+// valibot-parsed at the call sites, which rebuilds objects in schema key order.
 function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
