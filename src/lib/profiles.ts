@@ -67,7 +67,9 @@ export function listContainerProfileSummaries(): ContainerProfileSummary[] {
     try {
       const profile = loadContainerProfile(name);
       return { name, description: profile.description, base_image: profile.base_image, valid: true };
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`Warning: invalid container profile '${name}': ${message}`);
       return { name, description: '(invalid)', base_image: '', valid: false };
     }
   });

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -118,15 +118,23 @@ describe('listContainerProfileSummaries', () => {
     expect(typeof node?.description).toBe('string');
   });
 
-  test('marks an unparseable profile invalid rather than throwing', () => {
+  test('marks an unparseable profile invalid and warns with the real parse message', () => {
     fs.writeFileSync(
       path.join(getContainerProfilesDir(), 'broken.yaml'),
       'base_image: 123\n',
       'utf-8',
     );
-    const broken = listContainerProfileSummaries().find((s) => s.name === 'broken');
-    expect(broken).toBeDefined();
-    expect(broken?.valid).toBe(false);
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const broken = listContainerProfileSummaries().find((s) => s.name === 'broken');
+      expect(broken).toEqual({ name: 'broken', description: '(invalid)', base_image: '', valid: false });
+      const warnings = warn.mock.calls.map((call) => String(call[0]));
+      const brokenWarning = warnings.find((w) => w.includes("invalid container profile 'broken'"));
+      expect(brokenWarning).toBeDefined();
+      expect(brokenWarning).toContain('base_image');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
