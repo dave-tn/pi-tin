@@ -1,5 +1,39 @@
 import { describe, test, expect } from 'bun:test';
-import { prunePass } from './cleanup.js';
+import { confirmCleanup, prunePass } from './cleanup.js';
+import { CliError, EXIT } from '../lib/cli-errors.js';
+
+describe('confirmCleanup', () => {
+  // Regression: the global prunes used to run unconditionally when no stopped
+  // pi-tin workspaces existed — the confirmation must gate the whole
+  // destructive phase (README: exit 4 without a TTY unless --force).
+  test('refuses non-interactively without force even with no stopped workspaces', async () => {
+    try {
+      await confirmCleanup({ stopped: [], force: false, isInteractive: false });
+      throw new Error('expected confirmCleanup to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const cliErr: CliError = err instanceof CliError ? err : (() => { throw err; })();
+      expect(cliErr.exitCode).toBe(EXIT.CONFIRMATION_REQUIRED);
+      expect(cliErr.detail.code).toBe('confirmation_required');
+    }
+  });
+
+  test('refuses non-interactively without force when stopped workspaces exist', async () => {
+    try {
+      await confirmCleanup({ stopped: ['ws-a'], force: false, isInteractive: false });
+      throw new Error('expected confirmCleanup to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const cliErr: CliError = err instanceof CliError ? err : (() => { throw err; })();
+      expect(cliErr.exitCode).toBe(EXIT.CONFIRMATION_REQUIRED);
+    }
+  });
+
+  test('force proceeds without prompting, with or without stopped workspaces', async () => {
+    expect(await confirmCleanup({ stopped: [], force: true, isInteractive: false })).toBe(true);
+    expect(await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false })).toBe(true);
+  });
+});
 
 describe('prunePass', () => {
   test('reports removed when the command produces output', () => {

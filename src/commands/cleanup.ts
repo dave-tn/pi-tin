@@ -69,6 +69,44 @@ function run(args: string[], label: string): void {
   }
 }
 
+/**
+ * Confirmation gate for the entire destructive phase of `cleanup` (orphaned
+ * pi-tin image removal plus the global container/image/volume prunes). Must
+ * run regardless of stopped-workspace count — the prunes touch non-pi-tin
+ * resources and the documented contract is prompt-or-exit-4 without --force.
+ */
+export async function confirmCleanup(input: {
+  stopped: string[];
+  force: boolean;
+  isInteractive?: boolean;
+}): Promise<boolean> {
+  if (input.stopped.length > 0) {
+    const names = input.stopped.map((n) => chalk.cyan(n)).join(', ');
+    console.log(
+      chalk.yellow(
+        `⚠ ${input.stopped.length} stopped pi-tin workspace${input.stopped.length === 1 ? '' : 's'} will be removed: ${names}`,
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  Any in-container state (installed packages, files outside mounted volumes) will be lost.',
+      ),
+    );
+  }
+  console.log(
+    chalk.dim(
+      'This removes stopped containers, dangling images, and unused volumes — not limited to pi-tin.',
+    ),
+  );
+  return confirmDestructive({
+    message: 'Continue with cleanup?',
+    action: 'clean up containers, images, and volumes',
+    force: input.force,
+    promptDefault: true,
+    ...(input.isInteractive === undefined ? {} : { isInteractive: input.isInteractive }),
+  });
+}
+
 function getPiTinContainers(): { running: string[]; stopped: string[] } {
   const piTin = listContainers().filter((c) => isPiTinContainerId(c.id));
   return {
@@ -191,31 +229,15 @@ export function registerCleanupCommand(
           console.log();
         }
 
-        if (stopped.length > 0) {
-          const names = stopped.map((n) => chalk.cyan(n)).join(', ');
-          console.log(
-            chalk.yellow(
-              `⚠ ${stopped.length} stopped pi-tin workspace${stopped.length === 1 ? '' : 's'} will be removed: ${names}`,
-            ),
-          );
-          console.log(
-            chalk.dim(
-              '  Any in-container state (installed packages, files outside mounted volumes) will be lost.',
-            ),
-          );
-
-          const proceed = await confirmDestructive({
-            message: 'Continue with cleanup?',
-            action: 'clean up stopped workspaces',
-            force: opts.force === true,
-            promptDefault: true,
-          });
-          if (!proceed) {
-            console.log('Cancelled.');
-            return;
-          }
-          console.log();
+        const proceed = await confirmCleanup({
+          stopped,
+          force: opts.force === true,
+        });
+        if (!proceed) {
+          console.log('Cancelled.');
+          return;
         }
+        console.log();
 
         console.log(chalk.bold('Cleaning up...\n'));
 
