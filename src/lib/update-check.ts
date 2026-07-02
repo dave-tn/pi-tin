@@ -60,25 +60,37 @@ export function computeUpdateNoticeEnabled(input: {
   );
 }
 
-// The detached helper body: fetch the latest version and refresh the cache.
-// Any failure (non-ok status, parse error, network, timeout) is a silent no-op
-// — the cache simply isn't updated and we retry on the next stale run.
-export async function runUpdateCheckHelper(): Promise<void> {
+// Fetch and JSON-decode the npm dist-tags document. The catch is deliberately
+// wrapped around nothing but the network round-trip: offline, DNS, timeout,
+// non-ok status, and malformed-body failures are expected and resolve to null.
+async function fetchDistTagsBody(userAgent: string): Promise<unknown> {
   try {
     const res = await fetch(DIST_TAGS_URL, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { 'user-agent': `pi-tin/${PKG_VERSION}` },
+      headers: { 'user-agent': userAgent },
     });
-    if (!res.ok) {
-      return;
-    }
-    const parsed = v.safeParse(NpmDistTagsSchema, await res.json());
-    if (!parsed.success) {
-      return;
-    }
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+// The detached helper body: fetch the latest version and refresh the cache.
+// Expected failures (network, malformed response, unwritable cache) are silent
+// no-ops — the cache stays stale and the next run retries. Anything else must
+// propagate: this process runs detached with stdio ignored, so a crash never
+// disturbs the user, whereas a blanket catch here once hid a shipped
+// ReferenceError for a full release. Keep the catches narrow.
+export async function runUpdateCheckHelper(): Promise<void> {
+  const body = await fetchDistTagsBody(`pi-tin/${PKG_VERSION}`);
+  const parsed = v.safeParse(NpmDistTagsSchema, body);
+  if (!parsed.success) {
+    return;
+  }
+  try {
     writeUpdateCache({ lastCheckMs: Date.now(), latestVersion: parsed.output.latest });
   } catch {
-    // Silent: a failed check just leaves the cache untouched.
+    // Expected boundary: cache dir/file may be unwritable (permissions, disk).
   }
 }
 
