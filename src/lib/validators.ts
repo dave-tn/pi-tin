@@ -191,12 +191,14 @@ function parseWithContext<T>(
   } catch (error) {
     if (error instanceof v.ValiError) {
       const issues = v.flatten(error.issues);
-      const details = Object.entries(issues.nested ?? {})
-        .map(([field, msgs]) => {
-          const messages = Array.isArray(msgs) ? msgs.join(', ') : 'unknown error';
-          return `  ${field}: ${messages}`;
-        })
-        .join('\n');
+      const rootDetails = [...(issues.root ?? []), ...(issues.other ?? [])].map(
+        (message) => `  ${message}`,
+      );
+      const nestedDetails = Object.entries(issues.nested ?? {}).map(([field, msgs]) => {
+        const messages = Array.isArray(msgs) ? msgs.join(', ') : 'unknown error';
+        return `  ${field}: ${messages}`;
+      });
+      const details = [...rootDetails, ...nestedDetails].join('\n');
       throw new Error(`Invalid ${context} configuration:\n${details}`);
     }
     throw error;
