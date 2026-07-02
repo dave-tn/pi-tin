@@ -4,7 +4,11 @@ import path from 'node:path';
 import os from 'node:os';
 import YAML from 'yaml';
 
-import { syncDefaultContainerProfiles, DEFAULT_CONTAINER_PROFILES } from './init-guard.js';
+import {
+  ensureInitialised,
+  syncDefaultContainerProfiles,
+  DEFAULT_CONTAINER_PROFILES,
+} from './init-guard.js';
 import { validateContainerProfile } from './validators.js';
 import { generateDockerfile } from './dockerfile.js';
 
@@ -163,5 +167,68 @@ describe('syncDefaultContainerProfiles', () => {
       expect(postInstall).toContain('alias fd=fdfind');
       expect(postInstall).toContain('alias bat=batcat');
     }
+  });
+});
+
+describe('ensureInitialised', () => {
+  let tmpDir: string;
+  let configDir: string;
+  let savedXdg: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    configDir = path.join(tmpDir, 'pi-tin');
+    savedXdg = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    if (savedXdg === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = savedXdg;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('creates config dir, subdirs, and config.yaml on first run', () => {
+    const { firstRun } = ensureInitialised();
+
+    expect(firstRun).toBe(true);
+    for (const subdir of ['profiles', 'workspaces', 'agent-profiles', 'tmux']) {
+      expect(fs.existsSync(path.join(configDir, subdir))).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(configDir, 'config.yaml'), 'utf-8')).toContain('shell: zsh');
+  });
+
+  test('repairs missing config.yaml when config dir already exists', () => {
+    fs.mkdirSync(configDir, { recursive: true });
+
+    const { firstRun } = ensureInitialised();
+
+    expect(firstRun).toBe(false);
+    expect(fs.readFileSync(path.join(configDir, 'config.yaml'), 'utf-8')).toContain('shell: zsh');
+  });
+
+  test('recreates missing subdirectories on subsequent runs', () => {
+    ensureInitialised();
+    fs.rmSync(path.join(configDir, 'workspaces'), { recursive: true, force: true });
+    fs.rmSync(path.join(configDir, 'tmux'), { recursive: true, force: true });
+
+    const { firstRun } = ensureInitialised();
+
+    expect(firstRun).toBe(false);
+    expect(fs.existsSync(path.join(configDir, 'workspaces'))).toBe(true);
+    expect(fs.existsSync(path.join(configDir, 'tmux'))).toBe(true);
+  });
+
+  test('does not overwrite an existing config.yaml', () => {
+    ensureInitialised();
+    const configPath = path.join(configDir, 'config.yaml');
+    fs.writeFileSync(configPath, 'shell: bash\n', 'utf-8');
+
+    ensureInitialised();
+
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe('shell: bash\n');
   });
 });
