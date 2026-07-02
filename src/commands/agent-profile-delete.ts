@@ -2,8 +2,8 @@ import chalk from 'chalk';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import {
+  agentProfileExists,
   deleteAgentProfile,
-  loadAgentProfile,
   planAgentProfileDelete,
   type AgentProfileDeleteImpact,
 } from '../lib/agent-profiles.js';
@@ -36,9 +36,9 @@ export function registerAgentProfileDeleteCommand(
         );
       }
 
-      try {
-        loadAgentProfile(name);
-      } catch {
+      // Existence check only — parsing here would rewrite a corrupt
+      // profile.yaml into "not found" and make the profile undeletable.
+      if (!agentProfileExists(name)) {
         throw new CliError(`Agent profile '${name}' not found.`, EXIT.NOT_FOUND, {
           code: 'not_found',
         });

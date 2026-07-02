@@ -2,8 +2,8 @@ import chalk from 'chalk';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import {
+  containerProfileExists,
   deleteContainerProfile,
-  loadContainerProfile,
   planContainerProfileDelete,
   type ContainerProfileDeleteImpact,
 } from '../lib/profiles.js';
@@ -36,9 +36,9 @@ export function registerContainerProfileDeleteCommand(
         );
       }
 
-      try {
-        loadContainerProfile(name);
-      } catch {
+      // Existence check only — parsing here would rewrite a corrupt or
+      // schema-invalid profile into "not found" and make it undeletable.
+      if (!containerProfileExists(name)) {
         throw new CliError(`Container profile '${name}' not found.`, EXIT.NOT_FOUND, {
           code: 'not_found',
         });

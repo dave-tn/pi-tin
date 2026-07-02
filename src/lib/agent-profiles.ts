@@ -62,6 +62,13 @@ export function createAgentProfile(
   return profileDir;
 }
 
+// Existence probe for paths that don't need a parsed profile (e.g. delete):
+// checks the directory only, so a profile with a corrupt profile.yaml still
+// counts as existing rather than being rewritten into "not found".
+export function agentProfileExists(name: string): boolean {
+  return fs.existsSync(getProfileDir(name));
+}
+
 export function loadAgentProfile(name: string): AgentProfileMeta & { path: string } {
   const profileDir = getProfileDir(name);
   const metaPath = path.join(profileDir, 'profile.yaml');
