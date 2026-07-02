@@ -1,5 +1,11 @@
 import { ensureInitialised } from '../lib/init-guard.js';
-import { loadWorkspace, listWorkspaces, workspaceExists } from '../lib/workspaces.js';
+import {
+  loadWorkspace,
+  listWorkspaces,
+  workspaceExists,
+  isValidWorkspaceName,
+  invalidWorkspaceNameMessage,
+} from '../lib/workspaces.js';
 import { printJson } from '../lib/cli-output.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
@@ -12,6 +18,14 @@ export function registerWorkspaceShowCommand(
     .option('--json', 'Output machine-readable JSON')
     .action((name: string, _opts: { json?: boolean }) => {
       ensureInitialised();
+
+      if (!isValidWorkspaceName(name)) {
+        throw new CliError(invalidWorkspaceNameMessage(name), EXIT.VALIDATION, {
+          code: 'validation',
+          badInput: name,
+          remediation: 'Run `pi-tin list` to see available workspaces.',
+        });
+      }
 
       if (!workspaceExists(name)) {
         const available = listWorkspaces().map((w) => w.name);
