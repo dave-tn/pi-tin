@@ -9,6 +9,7 @@ import {
   GitHubReleaseSchema,
 } from './validators.js';
 import { withExitHandling } from './exit-handling.js';
+import { parseSemver } from './semver.js';
 
 const RELEASES_URL = 'https://github.com/apple/container/releases';
 const MIN_CONTAINER_VERSION = '1.0.0';
@@ -31,21 +32,11 @@ function isHomebrewInstalled(): boolean {
   }
 }
 
-function parseContainerVersion(version: string): { major: number; minor: number; patch: number } | null {
-  const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) {
-    return null;
-  }
-
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-function isSupportedContainerVersion(version: string): boolean {
-  const parsed = parseContainerVersion(version);
+// The reported version may wrap the number in surrounding text, so extract
+// the first `x.y.z` token before the strict parse.
+export function isSupportedContainerVersion(version: string): boolean {
+  const token = version.match(/\d+\.\d+\.\d+/)?.[0];
+  const parsed = token === undefined ? null : parseSemver(token);
   return parsed !== null && parsed.major >= 1;
 }
 
