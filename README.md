@@ -274,7 +274,7 @@ of the following to a non-empty value:
 | `pi-tin [--build]` | Auto-open the workspace matching the current directory, or offer to create a new workspace or add the directory to an existing one when none match; `--build` forces a rebuild when a match is found |
 | `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly |
 | `pi-tin open <name> [--build]` | Start or join a workspace |
-| `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output with `sessions`/`shutdownMs`/`projects` counts; JSON is the default when output is piped) |
+| `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
 | `pi-tin detect-host` | Print host facts as JSON (output is always JSON) — `{ gitIdentity, tz, colorterm, apiKeys, agents }` — for an agent to compose into a workspace `apply` payload |

@@ -4,6 +4,7 @@ import {
   isValidDuration,
   formatDurationMs,
   formatRemainingDuration,
+  remainingDurationMs,
 } from './duration.js';
 
 describe('parseDurationMs', () => {
@@ -46,6 +47,13 @@ describe('formatDurationMs', () => {
     expect(formatDurationMs(61_000)).toBe('1m 1s');
     expect(formatDurationMs(60 * 60 * 1000)).toBe('1h');
     expect(formatDurationMs((60 * 60 + 60) * 1000)).toBe('1h 1m');
+  });
+});
+
+describe('remainingDurationMs', () => {
+  test('returns milliseconds until the deadline, clamped at zero', () => {
+    expect(remainingDurationMs(40_000, 10_000)).toBe(30_000);
+    expect(remainingDurationMs(10_000, 20_000)).toBe(0);
   });
 });
 
