@@ -139,10 +139,7 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
   }
 
   const containerProfile = loadContainerProfile(workspace.profile);
-  const resources = resolveResources({
-    cpus: containerProfile.cpus,
-    memory: containerProfile.memory,
-  });
+  const resources = resolveResources(containerProfile);
 
   return {
     wsName,
