@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { containerHomeDir, findProjectRoot, getAgentProfilesDir, getUpdateCheckPath, isSafePathSegment } from './paths.js';
+import { containerHomeDir, findProjectRoot, getAgentProfilesDir, getUpdateCheckPath, isSafePathSegment, isWithinDir } from './paths.js';
 
 describe('isSafePathSegment', () => {
   test('accepts names without a charset rule', () => {
@@ -15,6 +15,36 @@ describe('isSafePathSegment', () => {
     for (const name of ['', '.', '..', 'a/b', 'a\\b', '../x', '..\\x', '/abs']) {
       expect(isSafePathSegment(name)).toBe(false);
     }
+  });
+});
+
+describe('isWithinDir', () => {
+  const parent = path.join(path.sep, 'a', 'b');
+
+  test('true for the directory itself', () => {
+    expect(isWithinDir(parent, parent)).toBe(true);
+  });
+
+  test('true for a nested child', () => {
+    expect(isWithinDir(path.join(parent, 'c', 'd'), parent)).toBe(true);
+  });
+
+  test('false for a sibling sharing a name prefix', () => {
+    expect(isWithinDir(path.join(path.sep, 'a', 'bc'), parent)).toBe(false);
+  });
+
+  test('false for the parent of the directory', () => {
+    expect(isWithinDir(path.join(path.sep, 'a'), parent)).toBe(false);
+  });
+
+  test('false for an unrelated path', () => {
+    expect(isWithinDir(path.join(path.sep, 'x', 'y'), parent)).toBe(false);
+  });
+
+  test('trailing separators are not normalised away — callers must resolve first', () => {
+    expect(isWithinDir(parent + path.sep, parent)).toBe(true);
+    expect(isWithinDir(parent, parent + path.sep)).toBe(false);
+    expect(isWithinDir(path.resolve(parent + path.sep), parent)).toBe(true);
   });
 });
 
