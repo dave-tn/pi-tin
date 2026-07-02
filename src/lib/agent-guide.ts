@@ -100,7 +100,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       command: 'agent-profile add',
       summary: 'Create an agent profile',
       args: ['<name>'],
-      flags: ['--agent <agent>', '--host'],
+      flags: ['--agent <agent>', '--host', '--json'],
     },
     {
       command: 'agent-profile delete',

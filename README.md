@@ -285,7 +285,7 @@ of the following to a non-empty value:
 | `pi-tin container-profile show <name> [--json]` | Show details of a container profile (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin container-profile apply <name> [--dry-run]` | Create or update a container profile from a JSON object on stdin (see [Editing container profiles](#editing-container-profiles)) |
 | `pi-tin container-profile delete <name> [--force] [--dry-run] [--json]` | Delete a container profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
-| `pi-tin agent-profile add` | Create a new agent profile (the non-interactive creation path for agent profiles) |
+| `pi-tin agent-profile add [--json]` | Create a new agent profile (the non-interactive creation path for agent profiles; `--json` for machine-readable output, JSON is the default when output is piped) |
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
@@ -524,7 +524,7 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 
 | Command | Description |
 |---------|-------------|
-| `pi-tin agent-profile add <name> --agent <agent> [--host]` | Create a new agent profile (the non-interactive creation path for agent profiles). `--host` mounts your host config directly instead of an isolated copy — see [Host mode](#host-mode) |
+| `pi-tin agent-profile add <name> --agent <agent> [--host] [--json]` | Create a new agent profile (the non-interactive creation path for agent profiles). `--host` mounts your host config directly instead of an isolated copy — see [Host mode](#host-mode). `--json` for machine-readable output; JSON is the default when output is piped |
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
