@@ -62,7 +62,10 @@ try {
   await program.parseAsync();
 } catch (err) {
   if (err instanceof CliError) {
-    if (shouldEmitJson(undefined)) {
+    // Commander's parsed options aren't visible here, so detect --json from
+    // raw argv (same approach as help-request.ts) — an explicit --json on a
+    // TTY must still get the JSON error envelope.
+    if (shouldEmitJson(args.includes('--json') ? true : undefined)) {
       process.stderr.write(JSON.stringify(errorEnvelope(err)) + '\n');
     } else {
       console.error(chalk.red(err.message));
