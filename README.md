@@ -319,7 +319,7 @@ These commands form the JSON read-modify-write surface an agent uses to inspect 
 The contract is **JSON in, JSON out**:
 
 - Each `show` emits exactly the object its paired `apply` accepts on stdin, so the loop is: read with `show --json`, edit the object, write it back with `apply` (preview first with `--dry-run`). `detect-host` supplies host facts (`{ gitIdentity, tz, colorterm, apiKeys, agents }`) an agent composes into a workspace `apply` payload.
-- `apply` is a **full replace**, not a merge — the target file is rewritten from the JSON object, so any YAML comments are dropped. Always preview with `--dry-run` (it prints the diff and writes nothing) before a real write.
+- `apply` is a **full replace**, not a merge — the target file is rewritten from the JSON object, so any YAML comments are dropped. Always preview with `--dry-run` (it prints the diff and writes nothing) before a real write. An existing file that no longer parses doesn't block `apply`: the parse error becomes a warning on stderr and the diff treats the file as empty, so `apply` can repair a corrupt workspace or container profile.
 - Invalid input is rejected against the relevant schema before anything is written. Every command exits with a stable, semantic code (see the **Stable exit codes** table below) and, in JSON mode, a structured error envelope — so callers branch on `code`, never on prose.
 - `agent-profile add` is the non-interactive creation path; agent-profile credentials are populated by logging in on first workspace use, not via `apply`, so there is no `agent-profile apply`.
 

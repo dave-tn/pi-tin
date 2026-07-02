@@ -16,6 +16,24 @@ export function parseJsonInput(text: string): unknown {
   }
 }
 
+// apply is a full replace, so a corrupt existing file must not block the
+// write — that is exactly when a full replace is the repair. The diff base
+// degrades to {} (everything reads as added, like a create) and the real
+// parse error surfaces as a warning on stderr, keeping stdout pure JSON.
+export function loadApplyDiffBase(
+  kind: 'workspace' | 'container profile',
+  name: string,
+  loadExisting: () => unknown,
+): unknown {
+  try {
+    return loadExisting();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.warn(`Warning: existing ${kind} '${name}' could not be parsed; apply replaces it: ${detail}`);
+    return {};
+  }
+}
+
 // Re-shape a validator throw (already a human-readable, field-enumerating
 // message) into the structured CliError contract.
 export function toValidationError(err: unknown, exampleCommand: string): CliError {
