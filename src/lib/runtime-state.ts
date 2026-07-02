@@ -298,10 +298,7 @@ export function createRuntimeStateApi(
     };
   };
 
-  const acquireLock = async (
-    workspaceName: string,
-    wait: boolean,
-  ): Promise<(() => void) | null> => {
+  const tryAcquireLock = (workspaceName: string): (() => void) | null => {
     const lockPath = getLockPath(workspaceName);
 
     while (true) {
@@ -363,8 +360,15 @@ export function createRuntimeStateApi(
         continue;
       }
 
-      if (!wait) {
-        return null;
+      return null;
+    }
+  };
+
+  const acquireLock = async (workspaceName: string): Promise<() => void> => {
+    while (true) {
+      const release = tryAcquireLock(workspaceName);
+      if (release !== null) {
+        return release;
       }
 
       await deps.sleep(100);
@@ -375,10 +379,7 @@ export function createRuntimeStateApi(
     workspaceName: string,
     fn: () => Promise<T> | T,
   ): Promise<T> => {
-    const release = await acquireLock(workspaceName, true);
-    if (release === null) {
-      throw new Error(`Failed to acquire lock for workspace '${workspaceName}'.`);
-    }
+    const release = await acquireLock(workspaceName);
 
     try {
       return await fn();
@@ -391,7 +392,7 @@ export function createRuntimeStateApi(
     workspaceName: string,
     fn: () => Promise<T> | T,
   ): Promise<T | null> => {
-    const release = await acquireLock(workspaceName, false);
+    const release = tryAcquireLock(workspaceName);
     if (release === null) {
       return null;
     }
