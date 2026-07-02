@@ -10,8 +10,22 @@ import {
   parseContainerListOutput,
   parseImageListOutput,
   listContainers,
+  listImageNames,
   getContainerState,
 } from './container.js';
+
+function withCapturedWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
+  const warnings: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]): void => {
+    warnings.push(args.map(String).join(' '));
+  };
+  try {
+    return { result: fn(), warnings };
+  } finally {
+    console.error = original;
+  }
+}
 
 describe('workspace naming helpers', () => {
   test('container name round-trips back to the workspace name', () => {
@@ -86,19 +100,6 @@ describe('partitionEnvForFile', () => {
 });
 
 describe('listContainers failure signalling', () => {
-  function withCapturedWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
-    const warnings: string[] = [];
-    const original = console.error;
-    console.error = (...args: unknown[]): void => {
-      warnings.push(args.map(String).join(' '));
-    };
-    try {
-      return { result: fn(), warnings };
-    } finally {
-      console.error = original;
-    }
-  }
-
   test('returns null and warns when the container CLI fails', () => {
     const { result, warnings } = withCapturedWarnings(() =>
       listContainers(() => {
@@ -128,6 +129,32 @@ describe('listContainers failure signalling', () => {
     const listJson = JSON.stringify([{ id: 'pi-tin-demo', status: { state: 'running' } }]);
     expect(getContainerState('pi-tin-demo', () => listJson)).toBe('running');
     expect(getContainerState('pi-tin-ghost', () => listJson)).toBe('not-found');
+  });
+});
+
+describe('listImageNames failure signalling', () => {
+  test('returns an empty list and warns when the container CLI fails', () => {
+    const { result, warnings } = withCapturedWarnings(() =>
+      listImageNames(() => {
+        throw new Error('connection refused');
+      }));
+    expect(result).toEqual([]);
+    expect(warnings.join('\n')).toContain('failed to list images');
+    expect(warnings.join('\n')).toContain('connection refused');
+  });
+
+  test('returns an empty list and warns when image list output is not valid JSON', () => {
+    const { result, warnings } = withCapturedWarnings(() =>
+      listImageNames(() => 'not-json'));
+    expect(result).toEqual([]);
+    expect(warnings.join('\n')).toContain('failed to parse image list output');
+  });
+
+  test('still parses names from valid output', () => {
+    const listJson = JSON.stringify([
+      { configuration: { name: 'pi-tin-demo:latest' } },
+    ]);
+    expect(listImageNames(() => listJson)).toEqual(['pi-tin-demo']);
   });
 });
 

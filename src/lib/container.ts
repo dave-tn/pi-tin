@@ -334,13 +334,31 @@ export function deleteImage(tag: string): void {
   });
 }
 
-export function listImageNames(): string[] {
+type ImageListExec = () => string;
+
+const execImageList: ImageListExec = () =>
+  execFileSync(
+    'container',
+    ['image', 'list', '--format', 'json'],
+    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+
+/**
+ * All image names on the host, or an empty list when they could not be
+ * listed (exec or parse failure). Callers only ever narrow this list to
+ * pi-tin images to delete, so the empty fallback fails safe.
+ */
+export function listImageNames(exec: ImageListExec = execImageList): string[] {
+  let output: string;
   try {
-    const output = execFileSync(
-      'container',
-      ['image', 'list', '--format', 'json'],
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    output = exec();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to list images: ${message}`);
+    return [];
+  }
+
+  try {
     return parseImageListOutput(output);
   } catch {
     console.error('Warning: failed to parse image list output');
