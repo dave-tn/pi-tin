@@ -1,5 +1,12 @@
 import path from 'node:path';
-import type { ContainerState } from './container.js';
+import {
+  isPiTinContainerId,
+  workspaceNameFromContainerId,
+  isPiTinImageTag,
+  workspaceNameFromImageTag,
+  type ContainerState,
+} from './container.js';
+import type { ListedContainer } from './validators.js';
 import type { RuntimeStateStatus } from './runtime-state.js';
 import { sharedDirectoryLimitMessage, basenameCollisionMessage } from './project-mounts.js';
 
@@ -281,4 +288,50 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
   }
 
   return { action: 'add-and-open' };
+}
+
+export type CleanupPlan =
+  | {
+    action: 'refuse';
+    message: string;
+  }
+  | {
+    action: 'clean';
+    runningWorkspaces: string[];
+    stoppedWorkspaces: string[];
+  };
+
+// `containers` is null when `container list` itself failed — cleanup cannot
+// tell which workspaces are running, so nothing destructive may proceed.
+export function planCleanup(containers: ListedContainer[] | null): CleanupPlan {
+  if (containers === null) {
+    return {
+      action: 'refuse',
+      message:
+        'Could not list containers, so cleanup cannot tell which workspaces are running.\n'
+        + "Check the container system is running ('container system start'), then retry.",
+    };
+  }
+  const piTinContainers = containers.filter((container) => isPiTinContainerId(container.id));
+  return {
+    action: 'clean',
+    runningWorkspaces: piTinContainers
+      .filter((container) => container.status === 'running')
+      .map((container) => workspaceNameFromContainerId(container.id)),
+    stoppedWorkspaces: piTinContainers
+      .filter((container) => container.status !== 'running')
+      .map((container) => workspaceNameFromContainerId(container.id)),
+  };
+}
+
+/** pi-tin image tags with no matching workspace — what cleanup may delete. */
+export function selectOrphanedImages(options: {
+  imageNames: string[];
+  workspaceNames: string[];
+}): string[] {
+  const knownWorkspaces = new Set(options.workspaceNames);
+  return options.imageNames.filter(
+    (imageName) =>
+      isPiTinImageTag(imageName) && !knownWorkspaces.has(workspaceNameFromImageTag(imageName)),
+  );
 }

@@ -7,14 +7,12 @@ import {
   listContainers,
   listImageNames,
   deleteImage,
-  isPiTinContainerId,
-  workspaceNameFromContainerId,
   isPiTinImageTag,
-  workspaceNameFromImageTag,
 } from '../lib/container.js';
 import { getConfigDir } from '../lib/paths.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { isRecord } from '../lib/guards.js';
+import { planCleanup, selectOrphanedImages } from '../lib/workspace-plans.js';
 
 export type PruneOutcome =
   | { status: 'removed'; output: string }
@@ -107,25 +105,6 @@ export async function confirmCleanup(input: {
   });
 }
 
-function getPiTinContainers(): { running: string[]; stopped: string[] } {
-  const containers = listContainers();
-  if (containers === null) {
-    throw new Error(
-      'Could not list containers, so cleanup cannot tell which workspaces are running.\n'
-      + "Check the container system is running ('container system start'), then retry.",
-    );
-  }
-  const piTin = containers.filter((c) => isPiTinContainerId(c.id));
-  return {
-    running: piTin
-      .filter((c) => c.status === 'running')
-      .map((c) => workspaceNameFromContainerId(c.id)),
-    stopped: piTin
-      .filter((c) => c.status !== 'running')
-      .map((c) => workspaceNameFromContainerId(c.id)),
-  };
-}
-
 async function fullWipe(running: string[], force: boolean): Promise<void> {
   if (running.length > 0) {
     const names = running.map((n) => chalk.cyan(n)).join(', ');
@@ -214,7 +193,11 @@ export function registerCleanupCommand(
     .option('-f, --force', 'Skip confirmation prompt')
     .action(async (opts: { all?: boolean; force?: boolean }) => {
       await withExitHandling(async () => {
-        const { running, stopped } = getPiTinContainers();
+        const plan = planCleanup(listContainers());
+        if (plan.action === 'refuse') {
+          throw new Error(plan.message);
+        }
+        const running = plan.runningWorkspaces;
 
         if (opts.all) {
           await fullWipe(running, opts.force === true);
@@ -237,7 +220,7 @@ export function registerCleanupCommand(
         }
 
         const proceed = await confirmCleanup({
-          stopped,
+          stopped: plan.stoppedWorkspaces,
           force: opts.force === true,
         });
         if (!proceed) {
@@ -249,11 +232,11 @@ export function registerCleanupCommand(
         console.log(chalk.bold('Cleaning up...\n'));
 
         // Remove orphaned pi-tin images (no matching workspace)
-        const workspaceNames = new Set(listWorkspaces().map((w) => w.name));
-        const allImages = listImageNames();
-        const orphanedImages = allImages.filter(
-          (img) => isPiTinImageTag(img) && !workspaceNames.has(workspaceNameFromImageTag(img)),
-        );
+        const workspaceNames = listWorkspaces().map((w) => w.name);
+        const orphanedImages = selectOrphanedImages({
+          imageNames: listImageNames(),
+          workspaceNames,
+        });
         for (const img of orphanedImages) {
           try {
             deleteImage(img);
