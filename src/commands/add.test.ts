@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { runAddCommand, type AddCommandDeps } from './add.js';
+import { CliError, EXIT } from '../lib/cli-errors.js';
 import type { Workspace } from '../lib/validators.js';
 import type { WorkspaceMatch } from '../lib/add-project.js';
 
@@ -48,18 +49,18 @@ describe('runAddCommand — direct arg', () => {
     expect(opened).toEqual({ name: 'work', opts: { build: false, workdir: '/workspace/new-app' } });
   });
 
-  test('errors and exits when the named workspace does not exist', async () => {
-    let exitCode: number | undefined;
-    const errs: string[] = [];
+  test('throws CliError(NOT_FOUND) when the named workspace does not exist', async () => {
     const deps = createDeps({
       listWorkspaces: () => [match('work', ['/a'])],
-      error: (...a: unknown[]) => errs.push(a.join(' ')),
-      exit: (code) => { exitCode = code; throw new Error('exit'); },
     });
-    await expect(runAddCommand('ghost', deps)).rejects.toThrow('exit');
-    expect(exitCode).toBe(1);
-    expect(errs.join('\n')).toContain("not found");
-    expect(errs.join('\n')).toContain('Available: work');
+    const err = await runAddCommand('ghost', deps).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.exitCode).toBe(EXIT.NOT_FOUND);
+    expect(err.detail.code).toBe('not_found');
+    expect(err.detail.badInput).toBe('ghost');
+    expect(err.message).toContain('not found');
+    expect(err.message).toContain('Available: work');
   });
 
   test('errors and exits when the named workspace name is invalid', async () => {
@@ -79,19 +80,17 @@ describe('runAddCommand — direct arg', () => {
     expect(appended).toBe(false);
   });
 
-  test('errors with "No workspaces configured" when none exist', async () => {
-    let exitCode: number | undefined;
+  test('throws CliError(NOT_FOUND) with "no workspaces configured" when none exist', async () => {
     let appended = false;
-    const errs: string[] = [];
     const deps = createDeps({
       listWorkspaces: () => [],
       appendProjectToWorkspace: () => { appended = true; },
-      error: (...a: unknown[]) => errs.push(a.join(' ')),
-      exit: (code) => { exitCode = code; throw new Error('exit'); },
     });
-    await expect(runAddCommand('ghost', deps)).rejects.toThrow('exit');
-    expect(exitCode).toBe(1);
-    expect(errs.join('\n')).toContain('No workspaces configured');
+    const err = await runAddCommand('ghost', deps).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.exitCode).toBe(EXIT.NOT_FOUND);
+    expect(err.message).toContain('no workspaces configured');
     expect(appended).toBe(false);
   });
 

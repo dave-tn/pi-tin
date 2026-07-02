@@ -12,6 +12,7 @@ import {
   invalidWorkspaceNameMessage,
 } from '../lib/workspaces.js';
 import { containerNameFor, getContainerState, type ContainerState } from '../lib/container.js';
+import { notFoundWorkspaceError } from '../lib/workspace-errors.js';
 import {
   addProjectToChosenWorkspace,
   addableWorkspaces,
@@ -88,13 +89,7 @@ export async function runAddCommand(
       }
       const target = all.find((m) => m.name === workspaceArg);
       if (target === undefined) {
-        const available = all.map((m) => m.name);
-        const message = available.length > 0
-          ? `Workspace '${workspaceArg}' not found. Available: ${available.join(', ')}`
-          : `Workspace '${workspaceArg}' not found. No workspaces configured.`;
-        deps.error(chalk.red(message));
-        deps.exit(1);
-        return;
+        throw notFoundWorkspaceError(workspaceArg, all.map((m) => m.name));
       }
       if (alreadyCovering.some((m) => m.name === workspaceArg)) {
         deps.error(chalk.red(`This directory is already in workspace '${workspaceArg}'.`));

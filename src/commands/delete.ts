@@ -3,7 +3,8 @@ import chalk from 'chalk';
 import { confirmDestructive } from '../lib/confirmation.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { getBuildHashPath } from '../lib/paths.js';
-import { workspaceExists, deleteWorkspace, assertValidWorkspaceName } from '../lib/workspaces.js';
+import { workspaceExists, deleteWorkspace, listWorkspaces, assertValidWorkspaceName } from '../lib/workspaces.js';
+import { notFoundWorkspaceError } from '../lib/workspace-errors.js';
 import {
   containerNameFor,
   imageTagFor,
@@ -35,12 +36,7 @@ export function registerDeleteCommand(
       assertValidWorkspaceName(name);
 
       if (!workspaceExists(name)) {
-        console.error(
-          chalk.red(
-            `Workspace '${name}' not found.\nRun 'pi-tin list' to see available workspaces.`,
-          ),
-        );
-        process.exit(1);
+        throw notFoundWorkspaceError(name, listWorkspaces().map((w) => w.name));
       }
 
       await withExitHandling(async () => {

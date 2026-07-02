@@ -9,6 +9,7 @@ import { ensureInitialised } from './init-guard.js';
 import { loadConfig } from './config.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
+import { notFoundWorkspaceError } from './workspace-errors.js';
 import { generateDockerfile } from './dockerfile.js';
 import {
   containerNameFor,
@@ -130,12 +131,7 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
     if (!isValidWorkspaceName(wsName) || workspaceExists(wsName)) {
       throw error;
     }
-    const available = listWorkspaces();
-    if (available.length > 0) {
-      const names = available.map((entry) => entry.name).join(', ');
-      throw new Error(`Workspace '${wsName}' not found. Available: ${names}`);
-    }
-    throw new Error(`Workspace '${wsName}' not found. No workspaces configured.`);
+    throw notFoundWorkspaceError(wsName, listWorkspaces().map((entry) => entry.name));
   }
 
   const containerProfile = loadContainerProfile(workspace.profile);

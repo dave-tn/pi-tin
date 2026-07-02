@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
 import { openWorkspace, countSharedDirectories } from './open.js';
+import { CliError, EXIT } from './cli-errors.js';
 
 describe('openWorkspace workspace loading errors', () => {
   let tmpDir: string;
@@ -67,9 +68,12 @@ describe('openWorkspace workspace loading errors', () => {
     expect(error.message).not.toContain('not found');
   });
 
-  test('reports "not found" when no workspaces are configured', async () => {
+  test('reports "not found" as CliError(NOT_FOUND) when no workspaces are configured', async () => {
     const error = await captureRejection(openWorkspace('ghost', {}));
-    expect(error.message).toBe("Workspace 'ghost' not found. No workspaces configured.");
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error('unreachable');
+    expect(error.exitCode).toBe(EXIT.NOT_FOUND);
+    expect(error.message).toBe("Workspace 'ghost' not found — no workspaces configured.");
   });
 
   test('reports "not found" with available workspaces when others exist', async () => {
@@ -79,6 +83,9 @@ describe('openWorkspace workspace loading errors', () => {
     );
 
     const error = await captureRejection(openWorkspace('ghost', {}));
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error('unreachable');
+    expect(error.exitCode).toBe(EXIT.NOT_FOUND);
     expect(error.message).toBe("Workspace 'ghost' not found. Available: good");
   });
 });

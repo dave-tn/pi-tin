@@ -8,6 +8,7 @@ import {
 } from '../lib/workspaces.js';
 import { printJson } from '../lib/cli-output.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
+import { notFoundWorkspaceError } from '../lib/workspace-errors.js';
 
 export function registerWorkspaceShowCommand(
   program: import('commander').Command,
@@ -28,15 +29,7 @@ export function registerWorkspaceShowCommand(
       }
 
       if (!workspaceExists(name)) {
-        const available = listWorkspaces().map((w) => w.name);
-        throw new CliError(
-          available.length > 0
-            ? `Workspace '${name}' not found. Available: ${available.join(', ')}`
-            : `Workspace '${name}' not found — no workspaces configured.`,
-          EXIT.NOT_FOUND,
-          { code: 'not_found', badInput: name, validValues: available,
-            remediation: 'Run `pi-tin list` to see available workspaces.' },
-        );
+        throw notFoundWorkspaceError(name, listWorkspaces().map((w) => w.name));
       }
 
       // A workspace has no separate human rendering, so output is JSON
