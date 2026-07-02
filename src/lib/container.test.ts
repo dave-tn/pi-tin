@@ -9,6 +9,8 @@ import {
   partitionEnvForFile,
   parseContainerListOutput,
   parseImageListOutput,
+  listContainers,
+  getContainerState,
 } from './container.js';
 
 describe('workspace naming helpers', () => {
@@ -80,6 +82,52 @@ describe('partitionEnvForFile', () => {
 
   test('returns empty partitions for empty input', () => {
     expect(partitionEnvForFile({})).toEqual({ safe: {}, skipped: [] });
+  });
+});
+
+describe('listContainers failure signalling', () => {
+  function withCapturedWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
+    const warnings: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]): void => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      return { result: fn(), warnings };
+    } finally {
+      console.error = original;
+    }
+  }
+
+  test('returns null and warns when the container CLI fails', () => {
+    const { result, warnings } = withCapturedWarnings(() =>
+      listContainers(() => {
+        throw new Error('connection refused');
+      }));
+    expect(result).toBeNull();
+    expect(warnings.join('\n')).toContain('failed to list containers');
+    expect(warnings.join('\n')).toContain('connection refused');
+  });
+
+  test('returns null and warns when list output is not valid JSON', () => {
+    const { result, warnings } = withCapturedWarnings(() =>
+      listContainers(() => 'not-json'));
+    expect(result).toBeNull();
+    expect(warnings.join('\n')).toContain('failed to parse container list output');
+  });
+
+  test('getContainerState reports unknown when containers cannot be listed', () => {
+    const { result } = withCapturedWarnings(() =>
+      getContainerState('pi-tin-demo', () => {
+        throw new Error('boom');
+      }));
+    expect(result).toBe('unknown');
+  });
+
+  test('getContainerState still resolves real states from list output', () => {
+    const listJson = JSON.stringify([{ id: 'pi-tin-demo', status: { state: 'running' } }]);
+    expect(getContainerState('pi-tin-demo', () => listJson)).toBe('running');
+    expect(getContainerState('pi-tin-ghost', () => listJson)).toBe('not-found');
   });
 });
 

@@ -40,6 +40,10 @@ export function registerStopCommand(
             force: opts.force === true,
           });
 
+          if (plan.action === 'refuse') {
+            throw new Error(plan.message);
+          }
+
           if (plan.action === 'noop') {
             await stopAndRemoveContainer(containerName);
             clearWorkspaceRuntimeState(name);

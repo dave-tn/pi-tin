@@ -39,6 +39,10 @@ export type StopWorkspacePlan =
     action: 'noop';
   }
   | {
+    action: 'refuse';
+    message: string;
+  }
+  | {
     action: 'confirm';
     message: string;
   }
@@ -57,6 +61,16 @@ export type DeleteWorkspacePlan =
     stopRunningContainer: boolean;
   };
 
+// An 'unknown' container state means `container list` itself failed. That is
+// never a safe basis for starting, stopping, or destroying anything — every
+// planner refuses and asks the user to retry once listing works again.
+function unknownContainerStateMessage(workspaceName: string): string {
+  return [
+    `Could not determine the state of workspace '${workspaceName}' — listing containers failed.`,
+    "Check the container system is running ('container system start'), then retry.",
+  ].join('\n');
+}
+
 function runtimeInconsistencyMessage(workspaceName: string): string {
   return [
     `Workspace '${workspaceName}' is running, but its runtime state could not be read.`,
@@ -69,6 +83,13 @@ function runtimeInconsistencyMessage(workspaceName: string): string {
 export function planWorkspaceOpen(
   options: PlanWorkspaceOpenOptions,
 ): WorkspaceOpenPlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return {
       action: 'start',
@@ -123,6 +144,13 @@ export function planStopWorkspace(options: {
   activeSessions: number;
   force: boolean;
 }): StopWorkspacePlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return { action: 'noop' };
   }
@@ -146,6 +174,13 @@ export function planDeleteWorkspace(options: {
   runtimeState: RuntimeStateStatus;
   activeSessions: number;
 }): DeleteWorkspacePlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return {
       action: 'delete',
@@ -228,6 +263,13 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
     return {
       action: 'reject',
       message: sharedDirectoryLimitMessage(options.workspaceName, options.projectedSharedDirectoryCount),
+    };
+  }
+
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'reject',
+      message: unknownContainerStateMessage(options.workspaceName),
     };
   }
 

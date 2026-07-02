@@ -36,6 +36,8 @@ export async function runAutoStopHelper(
     const containerName = containerNameFor(workspaceName);
     const state = getContainerState(containerName);
 
+    // 'unknown' also lands here: when listing containers fails, do nothing —
+    // never stop or clear state based on an unverified container state.
     if (state !== 'running') {
       return;
     }
@@ -69,7 +71,9 @@ export async function runAutoStopHelper(
       }
     }
 
-    if (postState !== 'running') {
+    // Clear only on a confirmed non-running state — an 'unknown' post-state
+    // must leave the runtime records for the next invocation to reconcile.
+    if (postState === 'stopped' || postState === 'not-found') {
       clearWorkspaceRuntimeState(workspaceName);
     }
   });

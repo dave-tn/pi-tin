@@ -12,8 +12,9 @@ import { formatRemainingDuration, remainingDurationMs } from '../lib/duration.js
 import { printJson, shouldEmitJson } from '../lib/cli-output.js';
 
 // Runtime activity for a workspace row: 'inactive' when the container is not
-// running, 'unreadable' when it is running but its runtime state could not be
-// read, 'active' with the parsed numbers otherwise.
+// running, 'unreadable' when its sessions cannot be known (runtime state
+// could not be read, or the container state itself is unknown), 'active'
+// with the parsed numbers otherwise.
 type RowActivity =
   | { kind: 'inactive' }
   | { kind: 'unreadable' }
@@ -107,6 +108,8 @@ function renderStatus(value: string, state: ContainerState): string {
       return chalk.yellow(value);
     case 'not-found':
       return chalk.dim(value);
+    case 'unknown':
+      return chalk.yellow(value);
   }
 }
 
@@ -132,9 +135,11 @@ export function registerListCommand(
         return;
       }
 
+      // A null list means the containers could not be listed at all — report
+      // every workspace as 'unknown' rather than falsely as not running.
       const containers = listContainers();
       const stateMap = new Map<string, ContainerState>();
-      for (const container of containers) {
+      for (const container of containers ?? []) {
         stateMap.set(container.id, container.status === 'running' ? 'running' : 'stopped');
       }
 
@@ -143,9 +148,13 @@ export function registerListCommand(
 
       for (const { name, workspace } of workspaces) {
         const containerName = containerNameFor(name);
-        const containerState = stateMap.get(containerName) ?? 'not-found';
+        const containerState: ContainerState = containers === null
+          ? 'unknown'
+          : stateMap.get(containerName) ?? 'not-found';
 
-        let activity: RowActivity = { kind: 'inactive' };
+        let activity: RowActivity = containerState === 'unknown'
+          ? { kind: 'unreadable' }
+          : { kind: 'inactive' };
 
         if (containerState === 'running') {
           const runtime = await tryWithWorkspaceLock(name, () => reconcileWorkspaceRuntimeState(name))

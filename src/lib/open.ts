@@ -514,6 +514,14 @@ async function finishWorkspaceSession(
     unregisterSession(context.wsName, sessionId);
 
     const containerState = getContainerState(context.containerName);
+    // 'unknown' must never clear runtime state: it may just be a transient
+    // `container list` failure while other sessions are still live. Leave
+    // everything in place for the next successful invocation to reconcile.
+    if (containerState === 'unknown') {
+      console.warn(chalk.yellow(`Warning: could not determine the state of workspace '${context.wsName}' — leaving its runtime state in place.`));
+      return 'Session closed.';
+    }
+
     if (containerState !== 'running') {
       clearWorkspaceRuntimeState(context.wsName);
       return 'Session closed.';

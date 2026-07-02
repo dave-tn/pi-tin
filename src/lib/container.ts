@@ -39,7 +39,7 @@ export interface ExecResult {
   signal: NodeJS.Signals | null;
 }
 
-export type ContainerState = 'running' | 'stopped' | 'not-found';
+export type ContainerState = 'running' | 'stopped' | 'not-found' | 'unknown';
 
 // All pi-tin containers and images share this name prefix so they can be
 // recognised among unrelated resources on the host.
@@ -112,23 +112,37 @@ export function parseImageListOutput(output: string): string[] {
   return v.parse(ImageListSchema, JSON.parse(output)).map(stripLatestTag);
 }
 
-export function listContainers(): ListedContainer[] {
+type ContainerListExec = () => string;
+
+const execContainerList: ContainerListExec = () =>
+  execFileSync(
+    'container',
+    ['list', '--all', '--format', 'json'],
+    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+
+/**
+ * All containers on the host, or null when they could not be listed (exec or
+ * parse failure). Null is not "no containers": callers deciding anything
+ * destructive must treat it as unknown state, never as an empty host.
+ */
+export function listContainers(
+  exec: ContainerListExec = execContainerList,
+): ListedContainer[] | null {
   let output: string;
   try {
-    output = execFileSync(
-      'container',
-      ['list', '--all', '--format', 'json'],
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-  } catch {
-    return [];
+    output = exec();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to list containers: ${message}`);
+    return null;
   }
 
   try {
     return parseContainerListOutput(output);
   } catch {
     console.error('Warning: failed to parse container list output');
-    return [];
+    return null;
   }
 }
 
@@ -156,8 +170,16 @@ export function buildImage(tag: string, contextDir: string): void {
   }
 }
 
-export function getContainerState(name: string): ContainerState {
-  const match = listContainers().find((container) => container.id === name);
+/** State of the named container, or 'unknown' when containers could not be listed. */
+export function getContainerState(
+  name: string,
+  exec: ContainerListExec = execContainerList,
+): ContainerState {
+  const containers = listContainers(exec);
+  if (containers === null) {
+    return 'unknown';
+  }
+  const match = containers.find((container) => container.id === name);
   if (!match) {
     return 'not-found';
   }

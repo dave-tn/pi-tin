@@ -153,6 +153,24 @@ describe('planWorkspaceOpen', () => {
     });
   });
 
+  test('refuses when the container state is unknown', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'unknown',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 1,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'refuse',
+      message: [
+        "Could not determine the state of workspace 'demo' — listing containers failed.",
+        "Check the container system is running ('container system start'), then retry.",
+      ].join('\n'),
+    });
+  });
+
   test('refuses when the container is running but runtime state is unreadable', () => {
     expect(planWorkspaceOpen({
       workspaceName: 'demo',
@@ -258,6 +276,14 @@ describe('planAddProject', () => {
     expect(plan.message).toContain("'work'");
     expect(plan.message).toContain('restart');
     expect(plan.message).not.toContain('pi-tin stop');
+  });
+
+  test('rejects when the container state is unknown', () => {
+    const plan = planAddProject({ ...base, containerState: 'unknown' });
+    expect(plan.action).toBe('reject');
+    if (plan.action !== 'reject') throw new Error('wrong action');
+    expect(plan.message).toContain('Could not determine');
+    expect(plan.message).toContain("'work'");
   });
 
   test('rejects when the project is already present', () => {

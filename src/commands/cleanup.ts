@@ -108,7 +108,14 @@ export async function confirmCleanup(input: {
 }
 
 function getPiTinContainers(): { running: string[]; stopped: string[] } {
-  const piTin = listContainers().filter((c) => isPiTinContainerId(c.id));
+  const containers = listContainers();
+  if (containers === null) {
+    throw new Error(
+      'Could not list containers, so cleanup cannot tell which workspaces are running.\n'
+      + "Check the container system is running ('container system start'), then retry.",
+    );
+  }
+  const piTin = containers.filter((c) => isPiTinContainerId(c.id));
   return {
     running: piTin
       .filter((c) => c.status === 'running')

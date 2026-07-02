@@ -472,8 +472,10 @@ export function createRuntimeStateApi(
 
   /**
    * Runtime-state inputs the stop/delete planners decide on. When the container
-   * is not running the runtime state is irrelevant — report it as missing
-   * without touching (and reaping) the state files.
+   * is not confirmed running ('stopped', 'not-found', or 'unknown') the runtime
+   * state is irrelevant — the planners no-op or refuse on the container state
+   * alone — so report it as missing without touching (and reaping) the state
+   * files.
    */
   const readRuntimeDecisionState = (
     workspaceName: string,

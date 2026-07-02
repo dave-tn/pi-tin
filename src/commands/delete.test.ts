@@ -38,6 +38,21 @@ describe('planDeleteWorkspace', () => {
     });
   });
 
+  test('refuses delete when the container state is unknown', () => {
+    expect(planDeleteWorkspace({
+      workspaceName: 'demo',
+      containerState: 'unknown',
+      runtimeState: 'missing',
+      activeSessions: 0,
+    })).toEqual({
+      action: 'refuse',
+      message: [
+        "Could not determine the state of workspace 'demo' — listing containers failed.",
+        "Check the container system is running ('container system start'), then retry.",
+      ].join('\n'),
+    });
+  });
+
   test('allows delete after stopping an idle running workspace', () => {
     expect(planDeleteWorkspace({
       workspaceName: 'demo',

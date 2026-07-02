@@ -78,6 +78,33 @@ describe('container-lifecycle', () => {
     expect(harness.calls).toEqual([]);
   });
 
+  test('refuses to act when the initial container state is unknown', async () => {
+    const harness = createHarness({ state: 'unknown' });
+
+    await expect(harness.api.stopAndRemoveContainer('demo'))
+      .rejects.toThrow("Could not determine the state of container 'demo'.");
+
+    expect(harness.calls).toEqual([]);
+  });
+
+  test('throws without removing when the state becomes unknown after a stop', async () => {
+    const harness = createHarness({
+      state: 'running',
+      // Listing containers starts failing right after the stop is issued.
+      onPoll: (polls, setState) => {
+        if (polls >= 2) {
+          setState('unknown');
+        }
+      },
+    });
+
+    // Even when forced: an unverified state must never escalate to a kill.
+    await expect(harness.api.stopAndRemoveContainer('demo', { force: true }))
+      .rejects.toThrow("Could not determine the state of container 'demo'.");
+
+    expect(harness.calls).toEqual(['stop']);
+  });
+
   test('stops a running container and removes it once stopped', async () => {
     const harness = createHarness({
       state: 'running',
