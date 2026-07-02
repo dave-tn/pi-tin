@@ -1,9 +1,12 @@
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories } from './open.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan } from './open.js';
+import { validateConfig, validateContainerProfile, validateWorkspace } from './validators.js';
+import { resolveResources } from './resources.js';
+import { containerNameFor, imageTagFor } from './container.js';
 import { CliError, EXIT } from './cli-errors.js';
 
 describe('openWorkspace workspace loading errors', () => {
@@ -122,6 +125,75 @@ describe('countSharedDirectories', () => {
     const oneProject = countSharedDirectories('good', ['/tmp/proj-a']);
     const twoProjects = countSharedDirectories('good', ['/tmp/proj-a', '/tmp/proj-b']);
     expect(twoProjects).toBe(oneProject + 1);
+  });
+});
+
+describe('computeRuntimeStartPlan', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  // Joining an already-running workspace computes this plan purely for the
+  // drift hash — mount messages must be collected as notices, not printed.
+  test('collects mount notices instead of logging', () => {
+    const projectDir = path.join(tmpDir, 'proj-a');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const missingMount = path.join(tmpDir, 'missing');
+
+    const workspace = validateWorkspace({
+      profile: 'node-dev',
+      projects: [projectDir],
+      tmux: { mode: 'isolated' },
+      host: {
+        mounts: [{ host: missingMount, container: '/mnt/extra', readonly: false }],
+      },
+    });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+    });
+
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const runtimePlan = computeRuntimeStartPlan({
+        wsName: 'demo',
+        containerName: containerNameFor('demo'),
+        imageTag: imageTagFor('demo'),
+        workspace,
+        containerProfile,
+        config: validateConfig({ shell: 'zsh' }),
+        resources: resolveResources(containerProfile),
+      });
+
+      expect(log).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(runtimePlan.notices).toContainEqual({
+        kind: 'warning',
+        text: `Skipping host mount (path does not exist): ${missingMount}`,
+      });
+      expect(runtimePlan.notices.some(
+        (notice) => notice.kind === 'info' && notice.text.startsWith('tmux workspace config mounted from'),
+      )).toBe(true);
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
   });
 });
 
