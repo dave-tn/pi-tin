@@ -5,11 +5,10 @@ import {
   agentProfileExists,
   deleteAgentProfile,
   planAgentProfileDelete,
-  type AgentProfileDeleteImpact,
 } from '../lib/agent-profiles.js';
 import { listWorkspaces } from '../lib/workspaces.js';
 import { confirmDestructive } from '../lib/confirmation.js';
-import { printJson, shouldEmitJson } from '../lib/cli-output.js';
+import { printJson, printProfileDeleteDryRun, shouldEmitJson } from '../lib/cli-output.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
@@ -58,7 +57,7 @@ export function registerAgentProfileDeleteCommand(
         if (json) {
           printJson({ ...impact, dryRun: true });
         } else {
-          printDryRunHuman(impact);
+          printProfileDeleteDryRun('agent profile', impact);
         }
         return;
       }
@@ -89,11 +88,4 @@ export function registerAgentProfileDeleteCommand(
         }
       });
     });
-}
-
-function printDryRunHuman(impact: AgentProfileDeleteImpact): void {
-  console.log(`Would delete agent profile '${impact.profile}' (${impact.removes}).`);
-  if (impact.referencedBy.length > 0) {
-    console.log(chalk.yellow(`  Referenced by workspace(s): ${impact.referencedBy.join(', ')}`));
-  }
 }

@@ -5,11 +5,10 @@ import {
   containerProfileExists,
   deleteContainerProfile,
   planContainerProfileDelete,
-  type ContainerProfileDeleteImpact,
 } from '../lib/profiles.js';
 import { listWorkspaces } from '../lib/workspaces.js';
 import { confirmDestructive } from '../lib/confirmation.js';
-import { printJson, shouldEmitJson } from '../lib/cli-output.js';
+import { printJson, printProfileDeleteDryRun, shouldEmitJson } from '../lib/cli-output.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
@@ -58,7 +57,7 @@ export function registerContainerProfileDeleteCommand(
         if (json) {
           printJson({ ...impact, dryRun: true });
         } else {
-          printDryRunHuman(impact);
+          printProfileDeleteDryRun('container profile', impact);
         }
         return;
       }
@@ -89,11 +88,4 @@ export function registerContainerProfileDeleteCommand(
         }
       });
     });
-}
-
-function printDryRunHuman(impact: ContainerProfileDeleteImpact): void {
-  console.log(`Would delete container profile '${impact.profile}' (${impact.removes}).`);
-  if (impact.referencedBy.length > 0) {
-    console.log(chalk.yellow(`  Referenced by workspace(s): ${impact.referencedBy.join(', ')}`));
-  }
 }
