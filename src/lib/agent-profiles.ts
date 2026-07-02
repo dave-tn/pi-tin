@@ -171,7 +171,7 @@ export function validateAgentProfilesForWorkspace(
   for (const [mount, names] of mountMap) {
     if (names.length > 1) {
       throw new Error(
-        `Workspace has multiple profiles for ${mount}: ${names.join(', ')}. Only one profile per mount path is allowed.`,
+        `Workspace has multiple agent profiles for ${mount}: ${names.join(', ')}. Only one agent profile per mount path is allowed.`,
       );
     }
   }

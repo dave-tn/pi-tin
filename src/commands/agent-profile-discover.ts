@@ -23,7 +23,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
 
   if (foundAgents.length === 0) {
     console.log('No known agent configurations found on your system.');
-    console.log(`You can create profiles manually with ${chalk.cyan('pi-tin agent-profile add <name> --agent <agent>')}`);
+    console.log(`You can create agent profiles manually with ${chalk.cyan('pi-tin agent-profile add <name> --agent <agent>')}`);
     return;
   }
 
@@ -76,7 +76,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
       console.log(
         chalk.dim(
           `  ${agent.name} uses macOS Keychain for auth, which isn't available\n` +
-          `  in containers. Creating as isolated profile.`,
+          `  in containers. Creating as isolated agent profile.`,
         ),
       );
     }
@@ -109,7 +109,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
       console.log(chalk.green(`  \u2714 Created '${name.trim()}' (${mode}) at ${profileDir}`));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(chalk.red(`  Failed to create profile: ${message}`));
+      console.error(chalk.red(`  Failed to create agent profile: ${message}`));
     }
     console.log('');
   }
@@ -120,7 +120,7 @@ export function registerAgentProfileDiscoverCommand(
 ): void {
   agentProfileCmd
     .command('discover')
-    .description('Scan for agents on your system and create profiles')
+    .description('Scan for agents on your system and create agent profiles')
     .action(async () => {
       ensureInitialised();
       await withExitHandling(async () => {
