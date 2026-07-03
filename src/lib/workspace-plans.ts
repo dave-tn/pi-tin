@@ -41,6 +41,36 @@ export type WorkspaceOpenPlan =
     message: string;
   };
 
+export interface PlanImageBuildOptions {
+  // The user passed --build. Always rebuilds, but is not itself a config change.
+  forceBuild: boolean;
+  // The persisted runtime-meta build hash no longer matches the computed one.
+  driftDetected: boolean;
+  // Build hash recorded by the last successful build, or null if never built.
+  previousBuildHash: string | null;
+  newBuildHash: string;
+  imagePresent: boolean;
+}
+
+export interface ImageBuildPlan {
+  build: boolean;
+  // Whether to tell the user the rebuild was caused by a config change. Only
+  // set when an existing image is being rebuilt because config changed —
+  // never on a first build or a bare --build with no changes.
+  announceConfigChange: boolean;
+}
+
+export function planImageBuild(options: PlanImageBuildOptions): ImageBuildPlan {
+  const configChanged =
+    options.driftDetected
+    || (options.previousBuildHash !== null && options.previousBuildHash !== options.newBuildHash);
+
+  return {
+    build: options.forceBuild || !options.imagePresent || configChanged,
+    announceConfigChange: configChanged && options.imagePresent,
+  };
+}
+
 export type StopWorkspacePlan =
   | {
     action: 'noop';

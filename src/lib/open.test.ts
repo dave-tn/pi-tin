@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
+import { planWorkspaceOpen, planAddProject, planImageBuild } from './workspace-plans.js';
 import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan } from './open.js';
 import { validateConfig, validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
@@ -329,6 +329,58 @@ describe('planWorkspaceOpen', () => {
       action: 'join',
       activeSessionsAfterOpen: 1,
       warnAboutDeferredRestart: false,
+    });
+  });
+});
+
+describe('planImageBuild', () => {
+  const base = {
+    forceBuild: false,
+    driftDetected: false,
+    previousBuildHash: 'abc',
+    newBuildHash: 'abc',
+    imagePresent: true,
+  };
+
+  test('does not build when nothing changed and the image exists', () => {
+    expect(planImageBuild(base)).toEqual({ build: false, announceConfigChange: false });
+  });
+
+  test('builds without announcing when the image is missing (first build)', () => {
+    expect(planImageBuild({ ...base, imagePresent: false })).toEqual({
+      build: true,
+      announceConfigChange: false,
+    });
+  });
+
+  // Regression: a drift-triggered restart rebuilds the existing image, so the
+  // user must be told why. Previously drift was folded into forceBuild, which
+  // silenced this message.
+  test('announces the config change when drift rebuilds an existing image', () => {
+    expect(planImageBuild({ ...base, driftDetected: true })).toEqual({
+      build: true,
+      announceConfigChange: true,
+    });
+  });
+
+  test('announces when the recorded build hash differs from the new one', () => {
+    expect(planImageBuild({ ...base, newBuildHash: 'def' })).toEqual({
+      build: true,
+      announceConfigChange: true,
+    });
+  });
+
+  test('does not announce a bare --build with no config change', () => {
+    expect(planImageBuild({ ...base, forceBuild: true })).toEqual({
+      build: true,
+      announceConfigChange: false,
+    });
+  });
+
+  test('treats a never-built image (null previous hash) as not a config change', () => {
+    expect(planImageBuild({ ...base, previousBuildHash: null, imagePresent: false })).toEqual({
+      build: true,
+      announceConfigChange: false,
     });
   });
 });

@@ -54,7 +54,7 @@ import {
   sharedDirectoryLimitMessage,
   basenameCollisionMessage,
 } from './project-mounts.js';
-import { planWorkspaceOpen } from './workspace-plans.js';
+import { planWorkspaceOpen, planImageBuild } from './workspace-plans.js';
 
 const KEEPALIVE_COMMAND = [
   '/bin/sh',
@@ -437,21 +437,25 @@ function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): vo
 function ensureImageBuiltIfNeeded(
   context: WorkspaceContext,
   buildPlan: BuildPlan,
-  forceBuild: boolean,
+  reasons: { forceBuild: boolean; driftDetected: boolean },
 ): void {
-  const previousHash = readBuildHash(buildPlan.hashPath);
-  const configChanged = previousHash !== null && previousHash !== buildPlan.buildHash;
+  const plan = planImageBuild({
+    forceBuild: reasons.forceBuild,
+    driftDetected: reasons.driftDetected,
+    previousBuildHash: readBuildHash(buildPlan.hashPath),
+    newBuildHash: buildPlan.buildHash,
+    imagePresent: imageExists(context.imageTag),
+  });
 
-  let needsBuild = forceBuild || !imageExists(context.imageTag);
-  if (!needsBuild && configChanged) {
+  if (!plan.build) {
+    return;
+  }
+
+  if (plan.announceConfigChange) {
     console.log(chalk.yellow('⚠ Container profile or workspace config has changed since last build.'));
     console.log(chalk.yellow('  Rebuilding image to apply changes...'));
-    needsBuild = true;
   }
-
-  if (needsBuild) {
-    buildImageFromPlan(context, buildPlan);
-  }
+  buildImageFromPlan(context, buildPlan);
 }
 
 function startWorkspaceContainer(options: {
@@ -628,7 +632,10 @@ export async function openWorkspace(
           }
         }
 
-        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true);
+        ensureImageBuiltIfNeeded(context, buildPlan, {
+          forceBuild: opts.build === true,
+          driftDetected: hasBuildDrift,
+        });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
@@ -646,7 +653,10 @@ export async function openWorkspace(
         const runtimeEnv = resolveRuntimeEnv(context);
         await stopAndRemoveContainer(context.containerName);
         clearWorkspaceRuntimeState(context.wsName);
-        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true || hasBuildDrift);
+        ensureImageBuiltIfNeeded(context, buildPlan, {
+          forceBuild: opts.build === true,
+          driftDetected: hasBuildDrift,
+        });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
