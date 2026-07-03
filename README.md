@@ -122,7 +122,6 @@ Configs live at `~/.config/pi-tin/` (or `$XDG_CONFIG_HOME/pi-tin/`):
 
 ```
 ~/.config/pi-tin/
-  config.yaml          # Global settings (shell)
   profiles/
     node-dev.yaml      # Container image recipe (one of several bundled defaults)
   workspaces/
@@ -157,7 +156,7 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 | `base_image`      | yes      | OCI image ref (e.g. `node:trixie-slim`, `debian:trixie-slim`). The package manager is auto-detected from the name — see `package_manager`. |
 | `package_manager` | no       | Override auto-detection (`apt` / `apk` / `dnf`). Detection: name prefixes `debian`/`ubuntu`/`node`/`python`/`oven/bun`/`buildpack-deps` → `apt`; `alpine` anywhere in the name (e.g. `python:3.12-alpine`) → `apk`; `fedora`/`rockylinux`/`almalinux` prefixes or a `/rhel`/`/ubi` path segment (e.g. `redhat/ubi9` — bare `rhel:9` is not recognised) → `dnf`. **Required when the base image name isn't recognised** (e.g. `mcr.microsoft.com/...`); generation throws otherwise. |
 | `user`            | yes      | Non-root username for the container. Must match `^[a-z_][a-z0-9_-]*$`. |
-| `packages`        | no       | System packages installed via the package manager. Defaults to `[]`. If set, must include the configured login shell (default `zsh`) or the image won't build. |
+| `packages`        | no       | System packages installed via the package manager. Defaults to `[]`. pi-tin enters a workspace via the container user's login shell (falling back to `/bin/sh`); to use a specific shell, install it here and set it as the login shell in `post_install` (e.g. `chsh -s "$(command -v zsh)" "$USERNAME"`, as the managed profiles do for zsh). |
 | `extra_packages`  | no       | Concatenated with `packages` into the **same** install step — no behavioural or layering difference; the split is purely organisational. Defaults to `[]`. |
 | `global_tools`    | no       | Packages installed globally with **npm** (always npm, regardless of base image), before workspace tools. Defaults to `[]`. |
 | `post_install`    | no       | Root shell commands, run after system packages and before the user switch. Defaults to `[]`. |

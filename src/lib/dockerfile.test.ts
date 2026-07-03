@@ -18,18 +18,18 @@ const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, cla
 
 describe('generateDockerfile', () => {
   test('produces basic Dockerfile structure', () => {
-    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', [], noWraps);
+    const { dockerfile, extras } = generateDockerfile(baseProfile, [], noWraps);
 
     expect(dockerfile).toContain('FROM node:slim');
     expect(dockerfile).toContain('ARG USERNAME=dev');
     expect(dockerfile).toContain('WORKDIR /workspace');
-    expect(dockerfile).toContain('CMD ["bash"]');
+    expect(dockerfile).toContain('CMD ["/bin/sh"]');
     expect(dockerfile).toContain('USER dev');
     expect(extras).toEqual([]);
   });
 
   test('includes apt packages', () => {
-    const { dockerfile } = generateDockerfile(baseProfile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 
     expect(dockerfile).toContain('apt-get install');
     expect(dockerfile).toContain('git');
@@ -41,7 +41,7 @@ describe('generateDockerfile', () => {
       ...baseProfile,
       env: { NODE_ENV: 'production', PATH_EXTRA: '/usr/local/bin' },
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('ENV NODE_ENV="production"');
     expect(dockerfile).toContain('ENV PATH_EXTRA="/usr/local/bin"');
@@ -57,7 +57,7 @@ describe('generateDockerfile', () => {
         COMBINED: 'mix"$x\\end',
       },
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     // Double quote escaped as \"
     expect(dockerfile).toContain('ENV WITH_QUOTE="foo\\"bar"');
@@ -74,7 +74,7 @@ describe('generateDockerfile', () => {
       ...baseProfile,
       global_tools: ['typescript@latest', '@playwright/cli@latest'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     // Single RUN combines all global tools so npm parallelises fetches.
     expect(dockerfile).toContain('RUN npm install -g typescript@latest @playwright/cli@latest');
@@ -85,7 +85,7 @@ describe('generateDockerfile', () => {
       ...baseProfile,
       post_install: ['echo "done"'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('RUN echo "done"');
   });
@@ -96,7 +96,7 @@ describe('generateDockerfile', () => {
       global_tools: ['@playwright/cli@latest'],
       post_setup: ['playwright-cli install-browser chromium'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     const userLine = dockerfile.indexOf('USER dev');
     const globalToolLine = dockerfile.indexOf('RUN npm install -g @playwright/cli@latest');
@@ -113,7 +113,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', packages, noWraps);
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
 
     expect(dockerfile).toContain('# Workspace packages');
     expect(dockerfile).not.toContain('USER root');
@@ -138,7 +138,7 @@ describe('generateDockerfile', () => {
         enabled: false,
       },
     }, null, 2);
-    const { extras, dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { extras, dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
@@ -155,7 +155,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const { extras } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
       claudeManagedSettings: null,
@@ -170,7 +170,7 @@ describe('generateDockerfile', () => {
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Pinned Tool', package: 'typescript@5.9.3' },
     ];
-    const { extras } = generateDockerfile(baseProfile, 'bash', packages, noWraps);
+    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
 
     expect(extras[0]!.content).toContain('npm install -g --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest" "typescript@5.9.3"');
     expect(extras[0]!.content).not.toContain('npm update -g');
@@ -180,7 +180,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    const { extras } = generateDockerfile(baseProfile, 'bash', packages, noWraps);
+    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
 
     expect(extras[0]!.content).not.toContain('--dangerously-skip-permissions');
     expect(extras[0]!.content).toContain('then\n    :\n  else');
@@ -197,7 +197,7 @@ describe('generateDockerfile', () => {
         defaultMode: 'bypassPermissions',
       },
     }, null, 2);
-    const { extras, dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { extras, dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
         { binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' },
         { binary: 'gemini', flag: '--approval-mode=yolo' },
@@ -223,7 +223,7 @@ describe('generateDockerfile', () => {
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
     ];
-    const { dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
         { binary: 'gemini', flag: '--approval-mode=yolo' },
       ],
@@ -240,7 +240,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const { dockerfile } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
         { binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' },
       ],
@@ -258,22 +258,23 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Pi', package: '@earendil-works/pi-coding-agent@latest' },
     ];
-    const { extras } = generateDockerfile(baseProfile, 'bash', packages, noWraps);
+    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
 
     const entrypoint = extras[0]!.content;
     expect(entrypoint).not.toContain('-real');
   });
 
   test('returns no extras when no packages', () => {
-    const { extras } = generateDockerfile(baseProfile, 'bash', [], noWraps);
+    const { extras } = generateDockerfile(baseProfile, [], noWraps);
     expect(extras).toEqual([]);
   });
 
-  test('uses zsh shell', () => {
-    const { dockerfile } = generateDockerfile(baseProfile, 'zsh', [], noWraps);
+  test('sets no login shell in useradd; profile owns the shell', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 
-    expect(dockerfile).toContain('$(which zsh)');
-    expect(dockerfile).toContain('CMD ["zsh"]');
+    expect(dockerfile).not.toContain('--shell');
+    expect(dockerfile).not.toContain('$(which');
+    expect(dockerfile).toContain('CMD ["/bin/sh"]');
   });
 
   test('copies the seeded ~/.claude.json into the user home when provided', () => {
@@ -290,7 +291,7 @@ describe('generateDockerfile', () => {
         },
       },
     }, null, 2);
-    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [],
       agentEnv: {},
       claudeManagedSettings: null,
@@ -314,7 +315,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', packages, {
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
       claudeManagedSettings: null,
@@ -330,7 +331,7 @@ describe('generateDockerfile', () => {
       ...baseProfile,
       user: 'root',
     };
-    const { dockerfile } = generateDockerfile(rootProfile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(rootProfile, [], noWraps);
 
     expect(dockerfile).toContain('ARG HOME_DIR=/root');
     expect(dockerfile).not.toContain('/home/root');
@@ -342,7 +343,7 @@ describe('generateDockerfile', () => {
       base_image: 'node:alpine',
       packages: ['git', 'curl'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'sh', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('apk add --no-cache');
     expect(dockerfile).not.toContain('apt-get');
@@ -357,7 +358,7 @@ describe('generateDockerfile', () => {
       base_image: 'fedora:latest',
       packages: ['git', 'curl'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('dnf install -y');
     expect(dockerfile).toContain('dnf clean all');
@@ -373,7 +374,7 @@ describe('generateDockerfile', () => {
       package_manager: 'apk',
       packages: ['git'],
     };
-    const { dockerfile } = generateDockerfile(profile, 'sh', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('apk add --no-cache');
     expect(dockerfile).not.toContain('apt-get');
@@ -386,19 +387,19 @@ describe('generateDockerfile', () => {
       packages: ['git'],
     };
 
-    expect(() => generateDockerfile(profile, 'bash', [], noWraps))
+    expect(() => generateDockerfile(profile, [], noWraps))
       .toThrow(/Cannot detect package manager.*package_manager/);
   });
 
   test('runs apt install non-interactively', () => {
-    const { dockerfile } = generateDockerfile(baseProfile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 
     expect(dockerfile).toContain('DEBIAN_FRONTEND=noninteractive apt-get install');
   });
 
   test('includes tzdata when listed as a package', () => {
     const profile: ContainerProfile = { ...baseProfile, packages: ['git', 'tzdata'] };
-    const { dockerfile } = generateDockerfile(profile, 'bash', [], noWraps);
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
 
     expect(dockerfile).toContain('tzdata');
   });
@@ -407,8 +408,8 @@ describe('generateDockerfile', () => {
     const python: ContainerProfile = { ...baseProfile, base_image: 'python:3.12-slim' };
     const bun: ContainerProfile = { ...baseProfile, base_image: 'oven/bun:slim' };
 
-    expect(generateDockerfile(python, 'bash', [], noWraps).dockerfile).toContain('apt-get install');
-    expect(generateDockerfile(bun, 'bash', [], noWraps).dockerfile).toContain('apt-get install');
+    expect(generateDockerfile(python, [], noWraps).dockerfile).toContain('apt-get install');
+    expect(generateDockerfile(bun, [], noWraps).dockerfile).toContain('apt-get install');
   });
 });
 

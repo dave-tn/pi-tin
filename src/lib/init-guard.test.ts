@@ -118,17 +118,17 @@ describe('syncDefaultContainerProfiles', () => {
     const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null };
     for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
       const profile = validateContainerProfile(YAML.parse(content));
-      expect(() => generateDockerfile(profile, 'zsh', [], noWraps)).not.toThrow();
+      expect(() => generateDockerfile(profile, [], noWraps)).not.toThrow();
     }
   });
 
-  test('every default profile installs the zsh login shell', () => {
+  test('every default profile installs zsh and sets it as the login shell', () => {
     for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
       const profile = validateContainerProfile(YAML.parse(content));
-      // createUserLines runs `useradd --shell $(which zsh)`, so without zsh in
-      // packages the image fails to build. (Package-manager resolution is
-      // covered by the "generate a Dockerfile without throwing" test above.)
+      // pi-tin enters via the user's login shell, so each managed profile must
+      // install zsh and chsh to it in post_install for the baseline to apply.
       expect(profile.packages).toContain('zsh');
+      expect(profile.post_install).toContain('chsh -s "$(command -v zsh)" "$USERNAME"');
     }
   });
 
@@ -191,23 +191,21 @@ describe('ensureInitialised', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test('creates config dir, subdirs, and config.yaml on first run', () => {
+  test('creates config dir and subdirs on first run', () => {
     const { firstRun } = ensureInitialised();
 
     expect(firstRun).toBe(true);
     for (const subdir of ['profiles', 'workspaces', 'agent-profiles', 'tmux']) {
       expect(fs.existsSync(path.join(configDir, subdir))).toBe(true);
     }
-    expect(fs.readFileSync(path.join(configDir, 'config.yaml'), 'utf-8')).toContain('shell: zsh');
   });
 
-  test('repairs missing config.yaml when config dir already exists', () => {
+  test('reports firstRun false when the config dir already exists', () => {
     fs.mkdirSync(configDir, { recursive: true });
 
     const { firstRun } = ensureInitialised();
 
     expect(firstRun).toBe(false);
-    expect(fs.readFileSync(path.join(configDir, 'config.yaml'), 'utf-8')).toContain('shell: zsh');
   });
 
   test('recreates missing subdirectories on subsequent runs', () => {
@@ -220,15 +218,5 @@ describe('ensureInitialised', () => {
     expect(firstRun).toBe(false);
     expect(fs.existsSync(path.join(configDir, 'workspaces'))).toBe(true);
     expect(fs.existsSync(path.join(configDir, 'tmux'))).toBe(true);
-  });
-
-  test('does not overwrite an existing config.yaml', () => {
-    ensureInitialised();
-    const configPath = path.join(configDir, 'config.yaml');
-    fs.writeFileSync(configPath, 'shell: bash\n', 'utf-8');
-
-    ensureInitialised();
-
-    expect(fs.readFileSync(configPath, 'utf-8')).toBe('shell: bash\n');
   });
 });

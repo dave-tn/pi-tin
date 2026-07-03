@@ -5,15 +5,10 @@ import {
   getConfigDir,
   getContainerProfilesDir,
   getWorkspacesDir,
-  getConfigPath,
   getAgentProfilesDir,
   getTmuxConfigsDir,
 } from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
-
-const DEFAULT_CONFIG = `# pi-tin global configuration
-shell: zsh
-`;
 
 const MANAGED_HEADER = '# This profile is managed by pi-tin and will be overwritten on update.';
 
@@ -70,9 +65,11 @@ const PLAYWRIGHT_PACKAGES = `  - libglib2.0-0
 // tooling with npm, so every profile needs a current Node.
 const NODESOURCE_INSTALL = `  - 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && apt-get install -y --no-install-recommends nodejs && apt-get clean && rm -rf /var/lib/apt/lists/*'`;
 
-// Shell baseline shared by every profile: Oh My Zsh, zoxide, fd/bat aliases
-// (Debian renames the binaries to fdfind/batcat), tmux defaults, GitHub CLI.
-const BASELINE_POST_INSTALL = `  - 'HOME=$HOME_DIR sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" -- --unattended'
+// Shell baseline shared by every profile: `chsh` to zsh (pi-tin enters via the
+// login shell), then Oh My Zsh, zoxide, fd/bat aliases (Debian renames the
+// binaries to fdfind/batcat), tmux defaults, GitHub CLI.
+const BASELINE_POST_INSTALL = `  - 'chsh -s "$(command -v zsh)" "$USERNAME"'
+  - 'HOME=$HOME_DIR sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" -- --unattended'
   - 'curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh'
   - 'echo "export PATH=\\"/root/.local/bin:$HOME_DIR/.local/bin:\\$PATH\\"" >> $HOME_DIR/.zshrc'
   - 'echo "eval \\"\\$(zoxide init zsh --cmd cd)\\"" >> $HOME_DIR/.zshrc'
@@ -260,9 +257,6 @@ export function ensureInitialised(): { firstRun: boolean } {
   fs.mkdirSync(getWorkspacesDir(), { recursive: true });
   fs.mkdirSync(getAgentProfilesDir(), { recursive: true });
   fs.mkdirSync(getTmuxConfigsDir(), { recursive: true });
-  if (!fs.existsSync(getConfigPath())) {
-    fs.writeFileSync(getConfigPath(), DEFAULT_CONFIG, 'utf-8');
-  }
 
   const messages = syncDefaultContainerProfiles(getContainerProfilesDir());
   for (const msg of messages) {

@@ -1,11 +1,5 @@
 import * as v from 'valibot';
 
-const shellPattern = /^[a-z][a-z0-9_-]*$/;
-
-export const ConfigSchema = v.strictObject({
-  shell: v.pipe(v.string(), v.regex(shellPattern)),
-});
-
 // Validation patterns for Dockerfile-interpolated fields
 const imageRefPattern = /^[a-zA-Z0-9][a-zA-Z0-9._\/-]*(:[a-zA-Z0-9._-]+)?$/;
 const posixUserPattern = /^[a-z_][a-z0-9_-]*$/;
@@ -169,7 +163,6 @@ export const GitHubReleaseSchema = v.object({
   assets: v.array(GitHubAssetSchema),
 });
 
-export type Config = v.InferOutput<typeof ConfigSchema>;
 export type ContainerProfile = v.InferOutput<typeof ContainerProfileSchema>;
 export type HostMount = v.InferOutput<typeof HostMountSchema>;
 export type Tool = v.InferOutput<typeof ToolSchema>;
@@ -203,10 +196,6 @@ function parseWithContext<T>(
     }
     throw error;
   }
-}
-
-export function validateConfig(raw: unknown): Config {
-  return parseWithContext('config', ConfigSchema, raw);
 }
 
 export function validateContainerProfile(raw: unknown): ContainerProfile {

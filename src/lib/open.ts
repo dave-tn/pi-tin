@@ -6,7 +6,6 @@ import { execFileSync, spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir } from './paths.js';
 import { ensureInitialised } from './init-guard.js';
-import { loadConfig } from './config.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
 import { notFoundWorkspaceError } from './workspace-errors.js';
@@ -35,7 +34,7 @@ import {
   getHostTmuxConfigDir,
   getHostTmuxPluginsDir,
 } from './tmux.js';
-import type { Config, ContainerProfile, Workspace } from './validators.js';
+import type { ContainerProfile, Workspace } from './validators.js';
 import {
   withWorkspaceLock,
   reconcileWorkspaceRuntimeState,
@@ -62,13 +61,23 @@ const KEEPALIVE_COMMAND = [
   'trap "exit 0" TERM INT; while :; do sleep 86400; done',
 ];
 
+// `container exec` runs a literal command and never consults the login shell,
+// so resolve it here (field 7 of /etc/passwd), falling back to /bin/sh. `user`
+// is posixUserPattern-validated, so it is safe to interpolate.
+export function loginShellCommand(user: string): string[] {
+  return [
+    '/bin/sh',
+    '-c',
+    `s=$(grep "^${user}:" /etc/passwd | cut -d: -f7); [ -x "$s" ] || s=/bin/sh; exec "$s"`,
+  ];
+}
+
 interface WorkspaceContext {
   wsName: string;
   containerName: string;
   imageTag: string;
   workspace: Workspace;
   containerProfile: ContainerProfile;
-  config: Config;
   resources: ResolvedResources;
 }
 
@@ -124,8 +133,6 @@ function writeBuildHash(hashPath: string, buildHash: string): void {
 function loadWorkspaceContext(wsName: string): WorkspaceContext {
   ensureInitialised();
 
-  const config = loadConfig();
-
   let workspace: Workspace;
   try {
     workspace = loadWorkspace(wsName);
@@ -148,7 +155,6 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
     imageTag: imageTagFor(wsName),
     workspace,
     containerProfile,
-    config,
     resources,
   };
 }
@@ -161,7 +167,7 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
   const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
   const claudeConfig = claudeConfigJson(tools, projectContainerPaths);
-  const { dockerfile, extras } = generateDockerfile(context.containerProfile, context.config.shell, tools, {
+  const { dockerfile, extras } = generateDockerfile(context.containerProfile, tools, {
     agentWraps,
     agentEnv,
     claudeManagedSettings,
@@ -676,7 +682,7 @@ export async function openWorkspace(
   try {
     execResult = execContainer({
       name: context.containerName,
-      command: [context.config.shell],
+      command: loginShellCommand(context.containerProfile.user),
       workdir: opts.workdir,
       user: context.containerProfile.user,
     });

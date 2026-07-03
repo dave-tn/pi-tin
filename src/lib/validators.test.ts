@@ -7,7 +7,6 @@ import {
   NpmDistTagsSchema,
   UpdateCheckCacheSchema,
   validateWorkspace,
-  validateConfig,
   validateContainerProfile,
 } from './validators.js';
 
@@ -71,10 +70,6 @@ describe('container CLI JSON schemas', () => {
 });
 
 describe('unknown-key rejection (typo detection)', () => {
-  test('rejects unknown top-level config keys', () => {
-    expect(() => validateConfig({ shell: 'bash', shel: 'zsh' })).toThrow();
-  });
-
   test('rejects unknown top-level profile keys', () => {
     expect(() => validateContainerProfile({ ...baseProfile, packges: [] })).toThrow();
   });
@@ -99,10 +94,6 @@ describe('root-level validation errors', () => {
 
   test('non-object workspace input produces a message naming the problem', () => {
     expect(() => validateWorkspace('hello')).toThrow(/Expected Object but received "hello"/);
-  });
-
-  test('null config input produces a message naming the problem', () => {
-    expect(() => validateConfig(null)).toThrow(/Expected Object but received null/);
   });
 });
 
@@ -422,31 +413,6 @@ describe('WorkspaceSchema stopAfterLastSession', () => {
   });
 });
 
-describe('ConfigSchema shell', () => {
-  test('accepts valid shell names', () => {
-    expect(() => validateConfig({ shell: 'bash' })).not.toThrow();
-    expect(() => validateConfig({ shell: 'zsh' })).not.toThrow();
-    expect(() => validateConfig({ shell: 'fish' })).not.toThrow();
-    expect(() => validateConfig({ shell: 'sh' })).not.toThrow();
-    expect(() => validateConfig({ shell: 'dash' })).not.toThrow();
-  });
-
-  test('rejects shell with newline (injection)', () => {
-    expect(() => validateConfig({ shell: 'bash\nRUN malicious' })).toThrow();
-  });
-
-  test('rejects shell with spaces', () => {
-    expect(() => validateConfig({ shell: 'ba sh' })).toThrow();
-  });
-
-  test('rejects shell with slashes', () => {
-    expect(() => validateConfig({ shell: '/bin/bash' })).toThrow();
-  });
-
-  test('rejects empty string', () => {
-    expect(() => validateConfig({ shell: '' })).toThrow();
-  });
-});
 
 describe('NpmDistTagsSchema', () => {
   test('accepts a dist-tags payload and ignores extra tags', () => {

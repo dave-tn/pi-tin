@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { planWorkspaceOpen, planAddProject, planImageBuild } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan } from './open.js';
-import { validateConfig, validateContainerProfile, validateWorkspace } from './validators.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand } from './open.js';
+import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
 import { CliError, EXIT } from './cli-errors.js';
@@ -177,7 +177,6 @@ describe('computeRuntimeStartPlan', () => {
         imageTag: imageTagFor('demo'),
         workspace,
         containerProfile,
-        config: validateConfig({ shell: 'zsh' }),
         resources: resolveResources(containerProfile),
       });
 
@@ -440,5 +439,20 @@ describe('planAddProject', () => {
     expect(plan.action).toBe('reject');
     if (plan.action !== 'reject') throw new Error('wrong action');
     expect(plan.message).toContain('up to 22');
+  });
+});
+
+describe('loginShellCommand', () => {
+  test('resolves the user login shell and falls back to /bin/sh', () => {
+    const command = loginShellCommand('dev');
+    expect(command[0]).toBe('/bin/sh');
+    expect(command[1]).toBe('-c');
+    expect(command[2]).toContain('grep "^dev:" /etc/passwd');
+    expect(command[2]).toContain('[ -x "$s" ] || s=/bin/sh');
+    expect(command[2]).toContain('exec "$s"');
+  });
+
+  test('interpolates the given username into the passwd lookup', () => {
+    expect(loginShellCommand('coder')[2]).toContain('grep "^coder:" /etc/passwd');
   });
 });
