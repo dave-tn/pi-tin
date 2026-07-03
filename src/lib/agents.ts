@@ -56,14 +56,15 @@ export function workspaceHasClaudeCode(packages: Tool[]): boolean {
 
 /**
  * Build the Claude Code managed-settings JSON baked into the container image,
- * or null when the workspace doesn't include Claude Code. Sandboxing is always
- * disabled — the container is the sandbox — while bypassPermissions is only
- * set when skip-permissions mode is enabled.
+ * or null when the workspace doesn't include Claude Code or skip-permissions
+ * mode is off. In skip-permissions mode the container is the sandbox, so
+ * bypassPermissions is set and Claude Code's own sandbox is disabled;
+ * otherwise no managed settings are baked and Claude Code's defaults apply.
  */
 export function claudeManagedSettingsJson(packages: Tool[], skipPermissions: boolean): string | null {
-  if (!workspaceHasClaudeCode(packages)) return null;
+  if (!workspaceHasClaudeCode(packages) || !skipPermissions) return null;
   return JSON.stringify({
-    ...(skipPermissions ? { permissions: { defaultMode: 'bypassPermissions' } } : {}),
+    permissions: { defaultMode: 'bypassPermissions' },
     sandbox: {
       enabled: false,
     },
