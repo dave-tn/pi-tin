@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { ensureInitialised } from '../lib/init-guard.js';
-import { createAgentProfile } from '../lib/agent-profiles.js';
+import { createAgentProfile, findCreatableAgent, unknownAgentMessage } from '../lib/agent-profiles.js';
 import { KNOWN_AGENTS } from '../lib/agents.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import { printJson, shouldEmitJson } from '../lib/cli-output.js';
@@ -29,12 +29,11 @@ export function registerAgentProfileAddCommand(
         );
       }
 
-      const knownAgentNames = KNOWN_AGENTS.map((a) => a.name);
-      if (!knownAgentNames.includes(opts.agent)) {
+      if (!findCreatableAgent(opts.agent)) {
         throw new CliError(
-          `Unknown agent: '${opts.agent}'. Known agents: ${knownAgentNames.join(', ')}`,
+          unknownAgentMessage(opts.agent),
           EXIT.VALIDATION,
-          { code: 'validation', badInput: opts.agent, validValues: knownAgentNames },
+          { code: 'validation', badInput: opts.agent, validValues: KNOWN_AGENTS.map((a) => a.name) },
         );
       }
 
