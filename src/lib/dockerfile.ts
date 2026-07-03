@@ -1,4 +1,3 @@
-import { workspaceHasClaudeCode } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -181,6 +180,7 @@ export function generateDockerfile(
     agentWraps: AgentWrap[];
     agentEnv: Record<string, string>;
     claudeManagedSettings: string | null;
+    claudeConfig: string | null;
   },
 ): DockerfileResult {
   const lines: string[] = [];
@@ -225,7 +225,7 @@ export function generateDockerfile(
 
   lines.push(`ENV HOME=$HOME_DIR`);
   lines.push(`ENV PATH=$HOME_DIR/.npm-global/bin:$PATH`);
-  const { agentWraps, agentEnv, claudeManagedSettings } = opts;
+  const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
   }
@@ -248,6 +248,14 @@ export function generateDockerfile(
     );
     lines.push('');
     extras.push({ name: 'claude-managed-settings.json', content: `${claudeManagedSettings}\n` });
+  }
+
+  // Seed ~/.claude.json (onboarding + per-project trust). Copied before the
+  // home-dir chown below so it ends up owned by the workspace user.
+  if (claudeConfig !== null) {
+    lines.push(`COPY claude-config.json ${homeDir}/.claude.json`);
+    lines.push('');
+    extras.push({ name: 'claude-config.json', content: `${claudeConfig}\n` });
   }
 
   // Entrypoint script (copied as root before user switch)
@@ -291,12 +299,6 @@ export function generateDockerfile(
   if (packages.length > 0) {
     lines.push('# Workspace packages');
     lines.push(`RUN npm install -g ${packageSpecs.join(' ')}`);
-    lines.push('');
-  }
-
-  // Skip Claude Code onboarding prompt (color profile, login) inside container
-  if (workspaceHasClaudeCode(packages)) {
-    lines.push('RUN echo \'{"hasCompletedOnboarding":true}\' > ~/.claude.json');
     lines.push('');
   }
 

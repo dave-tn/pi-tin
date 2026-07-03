@@ -71,6 +71,32 @@ export function claudeManagedSettingsJson(packages: Tool[], skipPermissions: boo
   }, null, 2);
 }
 
+/**
+ * Build the `~/.claude.json` seeded into the container image, or null when the
+ * workspace has no Claude Code. Marks first-run onboarding complete and fully
+ * trusts each mounted project: `hasTrustDialogAccepted` lets Claude Code load
+ * the repo's own `.claude/settings.json` (its `.mcp.json` MCP servers in
+ * particular), and `hasTrustDialogHooksAccepted` lets its hooks run. Since
+ * v2.1.53 (the CVE-2026-33068 fix) Claude Code gates these on workspace trust
+ * regardless of permission mode — bypass-permissions does not cover them — and
+ * trust can only be pre-granted per project path here; there is no env var or
+ * managed-settings equivalent.
+ */
+export function claudeConfigJson(packages: Tool[], projectContainerPaths: string[]): string | null {
+  if (!workspaceHasClaudeCode(packages)) return null;
+  const projects = Object.fromEntries(
+    projectContainerPaths.map((projectPath) => [
+      projectPath,
+      {
+        hasTrustDialogAccepted: true,
+        hasTrustDialogHooksAccepted: true,
+        hasCompletedProjectOnboarding: true,
+      },
+    ]),
+  );
+  return JSON.stringify({ hasCompletedOnboarding: true, projects }, null, 2);
+}
+
 /** Return container env vars needed by the workspace's agents. */
 export function agentContainerEnv(packages: Tool[]): Record<string, string> {
   const env: Record<string, string> = {};

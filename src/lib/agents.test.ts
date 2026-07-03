@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, defaultProfileNameFor, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
 
@@ -167,6 +167,43 @@ describe('claudeManagedSettingsJson', () => {
 
   test('returns null when skip-permissions is off so Claude Code defaults apply', () => {
     expect(claudeManagedSettingsJson(claudeCode, false)).toBeNull();
+  });
+});
+
+describe('claudeConfigJson', () => {
+  const claudeCode: Tool[] = [
+    { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+  ];
+
+  test('returns null when Claude Code is not installed', () => {
+    const packages: Tool[] = [
+      { name: 'Codex', package: '@openai/codex@latest' },
+    ];
+    expect(claudeConfigJson(packages, ['/workspace/pi-tin'])).toBeNull();
+  });
+
+  test('marks onboarding complete and each mounted project trusted', () => {
+    const config = JSON.parse(claudeConfigJson(claudeCode, ['/workspace/pi-tin', '/workspace/other'])!);
+    expect(config).toEqual({
+      hasCompletedOnboarding: true,
+      projects: {
+        '/workspace/pi-tin': {
+          hasTrustDialogAccepted: true,
+          hasTrustDialogHooksAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+        '/workspace/other': {
+          hasTrustDialogAccepted: true,
+          hasTrustDialogHooksAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    });
+  });
+
+  test('seeds onboarding with an empty trust map when no projects are mounted', () => {
+    const config = JSON.parse(claudeConfigJson(claudeCode, [])!);
+    expect(config).toEqual({ hasCompletedOnboarding: true, projects: {} });
   });
 });
 

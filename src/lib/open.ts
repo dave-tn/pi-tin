@@ -28,7 +28,7 @@ import { isRecord } from './guards.js';
 import { AUTO_STOP_COMMAND } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson } from './agents.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
   ensureWorkspaceTmuxDir,
@@ -159,10 +159,13 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools) : [];
   const agentEnv = agentContainerEnv(tools);
   const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
+  const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
+  const claudeConfig = claudeConfigJson(tools, projectContainerPaths);
   const { dockerfile, extras } = generateDockerfile(context.containerProfile, context.config.shell, tools, {
     agentWraps,
     agentEnv,
     claudeManagedSettings,
+    claudeConfig,
   });
 
   const hashInput = dockerfile + extras.map((file) => file.name + file.content).join('');

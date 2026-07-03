@@ -536,7 +536,7 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 
 ## Permissions
 
-When a workspace includes Claude Code, pi-tin sets `CLAUDE_CODE_SANDBOXED=1` in the container. This skips the "do you trust this project?" prompt — trust is implicit because each workspace runs inside its own VM-backed container boundary. The image also bakes a `~/.claude.json` marking onboarding complete, skipping first-run setup prompts. Workspaces without Claude Code are unaffected.
+When a workspace includes Claude Code, pi-tin bakes a `~/.claude.json` into the image marking first-run onboarding complete and fully trusting each mounted project (`projects["/workspace/<name>"]`: `hasTrustDialogAccepted` + `hasTrustDialogHooksAccepted`). Trust must be granted explicitly so Claude Code loads the repo's own `.claude/settings.json` — its `.mcp.json` MCP servers and its hooks in particular, which are gated on workspace trust independently of permission mode (bypass-permissions does not cover them). pi-tin also sets `CLAUDE_CODE_SANDBOXED=1` to signal the container sandbox. Workspaces without Claude Code are unaffected.
 
 Claude Code also runs in bypass-permissions mode by default inside containers, so it won't prompt to read files, run commands, or make edits. Your host installation is unaffected — pi-tin sets this via Claude Code managed settings baked into the image (which also disable Claude Code's inner sandbox — the container is the sandbox), so it survives Claude's self-updates inside the workspace.
 

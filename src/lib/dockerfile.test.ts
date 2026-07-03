@@ -14,7 +14,7 @@ const baseProfile: ContainerProfile = {
   env: {},
 };
 
-const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null };
+const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null };
 
 describe('generateDockerfile', () => {
   test('produces basic Dockerfile structure', () => {
@@ -142,6 +142,7 @@ describe('generateDockerfile', () => {
       agentWraps: [],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
+      claudeConfig: null,
     });
 
     const settingsFile = extras.find((extra) => extra.name === 'claude-managed-settings.json');
@@ -158,6 +159,7 @@ describe('generateDockerfile', () => {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
       claudeManagedSettings: null,
+      claudeConfig: null,
     });
 
     expect(extras[0]!.content).toContain('--dangerously-bypass-approvals-and-sandbox');
@@ -202,6 +204,7 @@ describe('generateDockerfile', () => {
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
+      claudeConfig: null,
     });
 
     const entrypoint = extras.find((extra) => extra.name === 'pi-tin-entrypoint')!.content;
@@ -226,6 +229,7 @@ describe('generateDockerfile', () => {
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' },
       claudeManagedSettings: null,
+      claudeConfig: null,
     });
 
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
@@ -242,6 +246,7 @@ describe('generateDockerfile', () => {
       ],
       agentEnv: {},
       claudeManagedSettings: null,
+      claudeConfig: null,
     });
 
     expect(dockerfile).not.toContain('CLAUDE_CODE_SANDBOXED');
@@ -271,18 +276,53 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain('CMD ["zsh"]');
   });
 
-  test('skips Claude onboarding only for the exact Claude Code package', () => {
-    const exact: Tool[] = [
+  test('copies the seeded ~/.claude.json into the user home when provided', () => {
+    const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    const { dockerfile: withClaude } = generateDockerfile(baseProfile, 'bash', exact, noWraps);
-    expect(withClaude).toContain('RUN echo \'{"hasCompletedOnboarding":true}\' > ~/.claude.json');
+    const claudeConfig = JSON.stringify({
+      hasCompletedOnboarding: true,
+      projects: {
+        '/workspace/pi-tin': {
+          hasTrustDialogAccepted: true,
+          hasTrustDialogHooksAccepted: true,
+          hasCompletedProjectOnboarding: true,
+        },
+      },
+    }, null, 2);
+    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', packages, {
+      agentWraps: [],
+      agentEnv: {},
+      claudeManagedSettings: null,
+      claudeConfig,
+    });
 
-    const prefixOnly: Tool[] = [
-      { name: 'Claude Code Extras', package: '@anthropic-ai/claude-code-extras@latest' },
+    // Copied before the home-dir chown so the file ends up owned by the user.
+    const copyLine = dockerfile.indexOf('COPY claude-config.json /home/dev/.claude.json');
+    const chownLine = dockerfile.indexOf('RUN chown -R dev:dev /home/dev');
+    expect(copyLine).toBeGreaterThan(-1);
+    expect(chownLine).toBeGreaterThan(copyLine);
+
+    const configFile = extras.find((extra) => extra.name === 'claude-config.json');
+    expect(configFile?.content).toContain('"hasCompletedOnboarding": true');
+    expect(configFile?.content).toContain('"/workspace/pi-tin"');
+    expect(configFile?.content).toContain('"hasTrustDialogAccepted": true');
+    expect(configFile?.content).toContain('"hasTrustDialogHooksAccepted": true');
+  });
+
+  test('omits the ~/.claude.json copy when no Claude config is provided', () => {
+    const packages: Tool[] = [
+      { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const { dockerfile: withoutClaude } = generateDockerfile(baseProfile, 'bash', prefixOnly, noWraps);
-    expect(withoutClaude).not.toContain('hasCompletedOnboarding');
+    const { dockerfile, extras } = generateDockerfile(baseProfile, 'bash', packages, {
+      agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
+      agentEnv: {},
+      claudeManagedSettings: null,
+      claudeConfig: null,
+    });
+
+    expect(dockerfile).not.toContain('.claude.json');
+    expect(extras.find((extra) => extra.name === 'claude-config.json')).toBeUndefined();
   });
 
   test('uses /root for root user home directory', () => {
