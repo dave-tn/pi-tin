@@ -79,8 +79,7 @@ async function fetchDistTagsBody(userAgent: string): Promise<unknown> {
 // Expected failures (network, malformed response, unwritable cache) are silent
 // no-ops — the cache stays stale and the next run retries. Anything else must
 // propagate: this process runs detached with stdio ignored, so a crash never
-// disturbs the user, whereas a blanket catch here once hid a shipped
-// ReferenceError for a full release. Keep the catches narrow.
+// disturbs the user. Keep the catches narrow.
 export async function runUpdateCheckHelper(): Promise<void> {
   const body = await fetchDistTagsBody(`pi-tin/${PKG_VERSION}`);
   const parsed = v.safeParse(NpmDistTagsSchema, body);
