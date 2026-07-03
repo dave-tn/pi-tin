@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isWithinDir } from './paths.js';
 
 export function computeContainerWorkdir(
   cwd: string,
@@ -8,15 +9,14 @@ export function computeContainerWorkdir(
 
   for (const projectPath of projects) {
     const resolvedProject = path.resolve(projectPath);
-
-    if (resolved === resolvedProject) {
-      return `/workspace/${path.basename(resolvedProject)}`;
+    if (!isWithinDir(resolved, resolvedProject)) {
+      continue;
     }
 
-    if (resolved.startsWith(resolvedProject + path.sep)) {
-      const relative = resolved.slice(resolvedProject.length + 1);
-      return `/workspace/${path.basename(resolvedProject)}/${relative}`;
-    }
+    const base = `/workspace/${path.basename(resolvedProject)}`;
+    return resolved === resolvedProject
+      ? base
+      : `${base}/${resolved.slice(resolvedProject.length + 1)}`;
   }
 
   return undefined;

@@ -9,6 +9,7 @@ import { ensureInitialised } from './init-guard.js';
 import { loadConfig } from './config.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
+import { notFoundWorkspaceError } from './workspace-errors.js';
 import { generateDockerfile } from './dockerfile.js';
 import {
   containerNameFor,
@@ -78,9 +79,14 @@ interface BuildPlan {
   hashPath: string;
 }
 
+interface MountNotice {
+  kind: 'info' | 'warning';
+  text: string;
+}
+
 interface RuntimeStartPlan {
   volumes: VolumeMount[];
-  env: Record<string, string>;
+  notices: MountNotice[];
   runtimeHash: string;
   ssh: boolean;
   command: string[];
@@ -130,19 +136,11 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
     if (!isValidWorkspaceName(wsName) || workspaceExists(wsName)) {
       throw error;
     }
-    const available = listWorkspaces();
-    if (available.length > 0) {
-      const names = available.map((entry) => entry.name).join(', ');
-      throw new Error(`Workspace '${wsName}' not found. Available: ${names}`);
-    }
-    throw new Error(`Workspace '${wsName}' not found. No workspaces configured.`);
+    throw notFoundWorkspaceError(wsName, listWorkspaces().map((entry) => entry.name));
   }
 
   const containerProfile = loadContainerProfile(workspace.profile);
-  const resources = resolveResources({
-    cpus: containerProfile.cpus,
-    memory: containerProfile.memory,
-  });
+  const resources = resolveResources(containerProfile);
 
   return {
     wsName,
@@ -200,18 +198,17 @@ function validateProjects(projects: string[]): void {
 
 function resolveWorkspaceVolumes(
   context: WorkspaceContext,
-  options: { quiet?: boolean } = {},
-): VolumeMount[] {
-  const quiet = options.quiet === true;
+): { volumes: VolumeMount[]; notices: MountNotice[] } {
   const { workspace, containerProfile, wsName } = context;
   const homeContainer = containerHomeDir(containerProfile.user);
   const volumes = resolveProjectVolumes(workspace.projects);
+  const notices: MountNotice[] = [];
 
   const hostMounts = workspace.host?.mounts ?? [];
   for (const mount of hostMounts) {
     const hostPath = expandTilde(mount.host);
     if (!fs.existsSync(hostPath)) {
-      if (!quiet) console.warn(chalk.yellow(`Skipping host mount (path does not exist): ${hostPath}`));
+      notices.push({ kind: 'warning', text: `Skipping host mount (path does not exist): ${hostPath}` });
       continue;
     }
     if (!fs.statSync(hostPath).isDirectory()) {
@@ -231,16 +228,18 @@ function resolveWorkspaceVolumes(
     const tmuxPluginsContainer = `${homeContainer}/.tmux`;
 
     const conflictingTmuxConfig = hostMounts.find((mount) => mount.container === tmuxConfigContainer);
-    if (conflictingTmuxConfig && !quiet) {
-      console.warn(
-        chalk.yellow(`Warning: workspace.tmux provides ${tmuxConfigContainer}, but host.mounts also mounts ${conflictingTmuxConfig.host} there. workspace.tmux will take precedence.`),
-      );
+    if (conflictingTmuxConfig) {
+      notices.push({
+        kind: 'warning',
+        text: `Warning: workspace.tmux provides ${tmuxConfigContainer}, but host.mounts also mounts ${conflictingTmuxConfig.host} there. workspace.tmux will take precedence.`,
+      });
     }
     const conflictingTmuxPlugins = hostMounts.find((mount) => mount.container === tmuxPluginsContainer);
-    if (conflictingTmuxPlugins && !quiet) {
-      console.warn(
-        chalk.yellow(`Warning: workspace.tmux provides ${tmuxPluginsContainer}, but host.mounts also mounts ${conflictingTmuxPlugins.host} there. workspace.tmux will take precedence.`),
-      );
+    if (conflictingTmuxPlugins) {
+      notices.push({
+        kind: 'warning',
+        text: `Warning: workspace.tmux provides ${tmuxPluginsContainer}, but host.mounts also mounts ${conflictingTmuxPlugins.host} there. workspace.tmux will take precedence.`,
+      });
     }
 
     if (workspace.tmux.mode === 'host') {
@@ -251,9 +250,9 @@ function resolveWorkspaceVolumes(
           container: tmuxConfigContainer,
           readonly: true,
         });
-        if (!quiet) console.log(chalk.dim(`tmux host config mounted as ${tmuxConfigContainer}`));
+        notices.push({ kind: 'info', text: `tmux host config mounted as ${tmuxConfigContainer}` });
       } else {
-        if (!quiet) console.warn(chalk.yellow(`Warning: tmux host mode is enabled but ${hostConfigDir} does not exist.`));
+        notices.push({ kind: 'warning', text: `Warning: tmux host mode is enabled but ${hostConfigDir} does not exist.` });
       }
 
       if (workspace.tmux.mountPlugins) {
@@ -264,9 +263,9 @@ function resolveWorkspaceVolumes(
             container: tmuxPluginsContainer,
             readonly: true,
           });
-          if (!quiet) console.log(chalk.dim(`tmux host plugins mounted as ${tmuxPluginsContainer}`));
+          notices.push({ kind: 'info', text: `tmux host plugins mounted as ${tmuxPluginsContainer}` });
         } else {
-          if (!quiet) console.warn(chalk.yellow(`Warning: tmux plugin mount is enabled but ${hostPluginsDir} does not exist.`));
+          notices.push({ kind: 'warning', text: `Warning: tmux plugin mount is enabled but ${hostPluginsDir} does not exist.` });
         }
       }
     } else {
@@ -279,7 +278,7 @@ function resolveWorkspaceVolumes(
         host: path.join(tmuxDir, '.tmux'),
         container: tmuxPluginsContainer,
       });
-      if (!quiet) console.log(chalk.dim(`tmux workspace config mounted from ${tmuxDir}`));
+      notices.push({ kind: 'info', text: `tmux workspace config mounted from ${tmuxDir}` });
     }
   }
 
@@ -288,17 +287,18 @@ function resolveWorkspaceVolumes(
     const resolvedProfiles = validateAgentProfilesForWorkspace(agentProfiles);
     for (const agentProfile of resolvedProfiles) {
       const conflicting = hostMounts.find((mount) => mount.container.endsWith(`/${agentProfile.mount}`));
-      if (conflicting && !quiet) {
-        console.warn(
-          chalk.yellow(`Warning: agent profile '${agentProfile.name}' provides ${agentProfile.mount}, but host.mounts also mounts ${conflicting.host} to ${conflicting.container}. The agent profile mount will take precedence.`),
-        );
+      if (conflicting) {
+        notices.push({
+          kind: 'warning',
+          text: `Warning: agent profile '${agentProfile.name}' provides ${agentProfile.mount}, but host.mounts also mounts ${conflicting.host} to ${conflicting.container}. The agent profile mount will take precedence.`,
+        });
       }
 
       volumes.push({
         host: agentProfile.hostPath,
         container: `${homeContainer}/${agentProfile.mount}`,
       });
-      if (!quiet) console.log(chalk.dim(`Agent profile '${agentProfile.name}' mounted as ~/${agentProfile.mount}`));
+      notices.push({ kind: 'info', text: `Agent profile '${agentProfile.name}' mounted as ~/${agentProfile.mount}` });
     }
   }
 
@@ -313,7 +313,7 @@ function resolveWorkspaceVolumes(
     }
   }
 
-  return volumes;
+  return { volumes, notices };
 }
 
 export function countSharedDirectories(wsName: string, projects: string[]): number {
@@ -322,7 +322,7 @@ export function countSharedDirectories(wsName: string, projects: string[]): numb
     ...context,
     workspace: { ...context.workspace, projects },
   };
-  return countUniqueVolumeSources(resolveWorkspaceVolumes(candidate, { quiet: true }));
+  return countUniqueVolumeSources(resolveWorkspaceVolumes(candidate).volumes);
 }
 
 function resolveRuntimeEnv(context: WorkspaceContext): Record<string, string> {
@@ -384,10 +384,13 @@ function computeRuntimeHash(
   }));
 }
 
-function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
+// Deliberately free of logging and subprocess calls: join/refuse paths need
+// only the runtime hash for drift detection. Mount notices are emitted — and
+// the gh token resolved — only when a start/restart actually uses the plan.
+export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
   validateProjects(context.workspace.projects);
 
-  const volumes = resolveWorkspaceVolumes(context);
+  const { volumes, notices } = resolveWorkspaceVolumes(context);
   const sharedDirectoryCount = countUniqueVolumeSources(volumes);
   if (sharedDirectoryCount > MAX_SHARED_DIRECTORIES) {
     throw new Error(sharedDirectoryLimitMessage(context.wsName, sharedDirectoryCount));
@@ -395,11 +398,21 @@ function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
 
   return {
     volumes,
-    env: resolveRuntimeEnv(context),
+    notices,
     runtimeHash: computeRuntimeHash(context, volumes),
     ssh: context.workspace.host?.sshAgent ?? true,
     command: KEEPALIVE_COMMAND,
   };
+}
+
+function emitMountNotices(notices: MountNotice[]): void {
+  for (const notice of notices) {
+    if (notice.kind === 'warning') {
+      console.warn(chalk.yellow(notice.text));
+    } else {
+      console.log(chalk.dim(notice.text));
+    }
+  }
 }
 
 function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): void {
@@ -438,11 +451,13 @@ function ensureImageBuiltIfNeeded(
   }
 }
 
-function startWorkspaceContainer(
-  context: WorkspaceContext,
-  runtimePlan: RuntimeStartPlan,
-  buildPlan: BuildPlan,
-): void {
+function startWorkspaceContainer(options: {
+  context: WorkspaceContext;
+  runtimePlan: RuntimeStartPlan;
+  buildPlan: BuildPlan;
+  runtimeEnv: Record<string, string>;
+}): void {
+  const { context, runtimePlan, buildPlan, runtimeEnv } = options;
   runContainerDetached({
     image: context.imageTag,
     volumes: runtimePlan.volumes,
@@ -450,7 +465,7 @@ function startWorkspaceContainer(
     cpus: context.resources.cpus,
     memory: context.resources.memory,
     ssh: runtimePlan.ssh,
-    env: runtimePlan.env,
+    env: runtimeEnv,
     command: runtimePlan.command,
   });
 
@@ -514,6 +529,14 @@ async function finishWorkspaceSession(
     unregisterSession(context.wsName, sessionId);
 
     const containerState = getContainerState(context.containerName);
+    // 'unknown' must never clear runtime state: it may just be a transient
+    // `container list` failure while other sessions are still live. Leave
+    // everything in place for the next successful invocation to reconcile.
+    if (containerState === 'unknown') {
+      console.warn(chalk.yellow(`Warning: could not determine the state of workspace '${context.wsName}' — leaving its runtime state in place.`));
+      return 'Session closed.';
+    }
+
     if (containerState !== 'running') {
       clearWorkspaceRuntimeState(context.wsName);
       return 'Session closed.';
@@ -587,7 +610,9 @@ export async function openWorkspace(
     switch (plan.action) {
       case 'refuse':
         throw new Error(plan.message);
-      case 'start':
+      case 'start': {
+        emitMountNotices(runtimePlan.notices);
+        const runtimeEnv = resolveRuntimeEnv(context);
         if (plan.clearStaleRuntimeState) {
           console.warn(chalk.yellow(`Warning: stale runtime state found for workspace '${context.wsName}'. Starting fresh.`));
           clearWorkspaceRuntimeState(context.wsName);
@@ -601,10 +626,11 @@ export async function openWorkspace(
         }
 
         ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true);
-        startWorkspaceContainer(context, runtimePlan, buildPlan);
+        startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+      }
       case 'join':
         if (plan.warnAboutDeferredRestart) {
           console.warn(chalk.yellow(`Warning: workspace changes will apply on the next restart of '${context.wsName}'.`));
@@ -612,14 +638,17 @@ export async function openWorkspace(
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'joined' as const, activeSessions: plan.activeSessionsAfterOpen };
-      case 'restart':
+      case 'restart': {
+        emitMountNotices(runtimePlan.notices);
+        const runtimeEnv = resolveRuntimeEnv(context);
         await stopAndRemoveContainer(context.containerName);
         clearWorkspaceRuntimeState(context.wsName);
         ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true || hasBuildDrift);
-        startWorkspaceContainer(context, runtimePlan, buildPlan);
+        startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+      }
     }
   });
 

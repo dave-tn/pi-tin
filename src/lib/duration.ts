@@ -64,9 +64,16 @@ export function formatDurationMs(ms: number): string {
   return `${seconds}s`;
 }
 
+export function remainingDurationMs(
+  deadlineMs: number,
+  nowMs = Date.now(),
+): number {
+  return Math.max(deadlineMs - nowMs, 0);
+}
+
 export function formatRemainingDuration(
   deadlineMs: number,
   nowMs = Date.now(),
 ): string {
-  return formatDurationMs(Math.max(deadlineMs - nowMs, 0));
+  return formatDurationMs(remainingDurationMs(deadlineMs, nowMs));
 }

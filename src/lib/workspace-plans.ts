@@ -1,5 +1,12 @@
 import path from 'node:path';
-import type { ContainerState } from './container.js';
+import {
+  isPiTinContainerId,
+  workspaceNameFromContainerId,
+  isPiTinImageTag,
+  workspaceNameFromImageTag,
+  type ContainerState,
+} from './container.js';
+import type { ListedContainer } from './validators.js';
 import type { RuntimeStateStatus } from './runtime-state.js';
 import { sharedDirectoryLimitMessage, basenameCollisionMessage } from './project-mounts.js';
 
@@ -39,6 +46,10 @@ export type StopWorkspacePlan =
     action: 'noop';
   }
   | {
+    action: 'refuse';
+    message: string;
+  }
+  | {
     action: 'confirm';
     message: string;
   }
@@ -57,6 +68,19 @@ export type DeleteWorkspacePlan =
     stopRunningContainer: boolean;
   };
 
+// An 'unknown' container state means `container list` itself failed. That is
+// never a safe basis for starting, stopping, or destroying anything — every
+// planner refuses and asks the user to retry once listing works again.
+const CONTAINER_SYSTEM_RETRY_HINT =
+  "Check the container system is running ('container system start'), then retry.";
+
+function unknownContainerStateMessage(workspaceName: string): string {
+  return [
+    `Could not determine the state of workspace '${workspaceName}' — listing containers failed.`,
+    CONTAINER_SYSTEM_RETRY_HINT,
+  ].join('\n');
+}
+
 function runtimeInconsistencyMessage(workspaceName: string): string {
   return [
     `Workspace '${workspaceName}' is running, but its runtime state could not be read.`,
@@ -69,6 +93,13 @@ function runtimeInconsistencyMessage(workspaceName: string): string {
 export function planWorkspaceOpen(
   options: PlanWorkspaceOpenOptions,
 ): WorkspaceOpenPlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return {
       action: 'start',
@@ -123,6 +154,13 @@ export function planStopWorkspace(options: {
   activeSessions: number;
   force: boolean;
 }): StopWorkspacePlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return { action: 'noop' };
   }
@@ -146,6 +184,13 @@ export function planDeleteWorkspace(options: {
   runtimeState: RuntimeStateStatus;
   activeSessions: number;
 }): DeleteWorkspacePlan {
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'refuse',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState !== 'running') {
     return {
       action: 'delete',
@@ -231,6 +276,13 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
     };
   }
 
+  if (options.containerState === 'unknown') {
+    return {
+      action: 'reject',
+      message: unknownContainerStateMessage(options.workspaceName),
+    };
+  }
+
   if (options.containerState === 'running') {
     return {
       action: 'add-and-message',
@@ -239,4 +291,50 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
   }
 
   return { action: 'add-and-open' };
+}
+
+export type CleanupPlan =
+  | {
+    action: 'refuse';
+    message: string;
+  }
+  | {
+    action: 'clean';
+    runningWorkspaces: string[];
+    stoppedWorkspaces: string[];
+  };
+
+// `containers` is null when `container list` itself failed — cleanup cannot
+// tell which workspaces are running, so nothing destructive may proceed.
+export function planCleanup(containers: ListedContainer[] | null): CleanupPlan {
+  if (containers === null) {
+    return {
+      action: 'refuse',
+      message:
+        'Could not list containers, so cleanup cannot tell which workspaces are running.\n'
+        + CONTAINER_SYSTEM_RETRY_HINT,
+    };
+  }
+  const piTinContainers = containers.filter((container) => isPiTinContainerId(container.id));
+  return {
+    action: 'clean',
+    runningWorkspaces: piTinContainers
+      .filter((container) => container.status === 'running')
+      .map((container) => workspaceNameFromContainerId(container.id)),
+    stoppedWorkspaces: piTinContainers
+      .filter((container) => container.status !== 'running')
+      .map((container) => workspaceNameFromContainerId(container.id)),
+  };
+}
+
+/** pi-tin image tags with no matching workspace — what cleanup may delete. */
+export function selectOrphanedImages(options: {
+  imageNames: string[];
+  workspaceNames: string[];
+}): string[] {
+  const knownWorkspaces = new Set(options.workspaceNames);
+  return options.imageNames.filter(
+    (imageName) =>
+      isPiTinImageTag(imageName) && !knownWorkspaces.has(workspaceNameFromImageTag(imageName)),
+  );
 }

@@ -48,6 +48,30 @@ describe('planStopWorkspace', () => {
     });
   });
 
+  test('refuses when the container state is unknown, even when forced', () => {
+    const expected = {
+      action: 'refuse' as const,
+      message: [
+        "Could not determine the state of workspace 'demo' — listing containers failed.",
+        "Check the container system is running ('container system start'), then retry.",
+      ].join('\n'),
+    };
+    expect(planStopWorkspace({
+      workspaceName: 'demo',
+      containerState: 'unknown',
+      runtimeState: 'missing',
+      activeSessions: 0,
+      force: false,
+    })).toEqual(expected);
+    expect(planStopWorkspace({
+      workspaceName: 'demo',
+      containerState: 'unknown',
+      runtimeState: 'missing',
+      activeSessions: 0,
+      force: true,
+    })).toEqual(expected);
+  });
+
   test('warns but still stops when runtime state is inconsistent', () => {
     expect(planStopWorkspace({
       workspaceName: 'demo',

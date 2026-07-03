@@ -19,6 +19,30 @@ describe('parseJsonInput', () => {
       }
     }
   });
+
+  test('includes the parser detail on a single line', () => {
+    const parserMessage = (() => {
+      try {
+        JSON.parse('{not json');
+        return '';
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    })();
+    try {
+      parseJsonInput('{not json');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      if (err instanceof CliError) {
+        expect(err.message).toBe(
+          `Input on stdin is not valid JSON: ${parserMessage.replace(/\s+/g, ' ')}.`,
+        );
+        expect(parserMessage.length).toBeGreaterThan(0);
+        expect(err.message).not.toContain('\n');
+      }
+    }
+  });
 });
 
 describe('toValidationError', () => {

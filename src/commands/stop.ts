@@ -5,6 +5,7 @@ import {
   getContainerState,
 } from '../lib/container.js';
 import { stopAndRemoveContainer } from '../lib/container-lifecycle.js';
+import { ensureInitialised } from '../lib/init-guard.js';
 import {
   withWorkspaceLock,
   readRuntimeDecisionState,
@@ -22,6 +23,8 @@ export function registerStopCommand(
     .description('Stop a running workspace')
     .option('-f, --force', 'Skip confirmation prompt and kill if needed')
     .action(async (name: string, opts: { force?: boolean }) => {
+      ensureInitialised();
+
       // stop never goes through loadWorkspace, so validate the raw argv name
       // before deriving container names and runtime-state paths from it.
       assertValidWorkspaceName(name);
@@ -39,6 +42,10 @@ export function registerStopCommand(
             activeSessions: runtime.activeSessions,
             force: opts.force === true,
           });
+
+          if (plan.action === 'refuse') {
+            throw new Error(plan.message);
+          }
 
           if (plan.action === 'noop') {
             await stopAndRemoveContainer(containerName);

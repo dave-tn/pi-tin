@@ -19,6 +19,16 @@ export function loadContainerProfile(name: string): ContainerProfile {
   return validateContainerProfile(raw);
 }
 
+// Existence probe for paths that don't need a parsed profile (e.g. delete):
+// checks the file only, so a corrupt or schema-invalid profile still counts
+// as existing rather than being rewritten into "not found".
+export function containerProfileExists(name: string): boolean {
+  if (!isSafePathSegment(name)) {
+    throw new Error(`Invalid container profile name '${name}'. ${SAFE_PATH_SEGMENT_RULE}`);
+  }
+  return fs.existsSync(path.join(getContainerProfilesDir(), `${name}.yaml`));
+}
+
 // Full-replace write of a container profile. No managed header is emitted, so
 // an applied profile is user-managed (pi-tin's default sync will not overwrite
 // it) — matching the documented "remove the managed header to customize" rule.
@@ -57,7 +67,9 @@ export function listContainerProfileSummaries(): ContainerProfileSummary[] {
     try {
       const profile = loadContainerProfile(name);
       return { name, description: profile.description, base_image: profile.base_image, valid: true };
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`Warning: invalid container profile '${name}': ${message}`);
       return { name, description: '(invalid)', base_image: '', valid: false };
     }
   });

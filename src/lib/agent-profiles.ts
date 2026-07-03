@@ -5,7 +5,7 @@ import YAML from 'yaml';
 import { getAgentProfilesDir, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { parseYaml } from './yaml.js';
-import { KNOWN_AGENTS } from './agents.js';
+import { KNOWN_AGENTS, type KnownAgent } from './agents.js';
 import { validateAgentProfileMeta, type AgentProfileMeta } from './validators.js';
 
 export type AgentProfileMode = AgentProfileMeta['mode'];
@@ -23,16 +23,25 @@ function getProfileDir(name: string): string {
   return path.join(getAgentProfilesDir(), name);
 }
 
+// Single source of truth for which agents a profile can be created for: the
+// agent must be known and have dot-dirs to mount. Shared with the add
+// command's up-front validation so the two checks cannot drift.
+export function findCreatableAgent(agentName: string): KnownAgent | undefined {
+  return KNOWN_AGENTS.find((agent) => agent.name === agentName && agent.dotDirs.length > 0);
+}
+
+export function unknownAgentMessage(agentName: string): string {
+  return `Unknown agent: '${agentName}'. Known agents: ${KNOWN_AGENTS.map((a) => a.name).join(', ')}`;
+}
+
 export function createAgentProfile(
   name: string,
   agentName: string,
   mode: AgentProfileMode = 'isolated',
 ): string {
-  const agent = KNOWN_AGENTS.find((a) => a.name === agentName);
-  if (!agent || agent.dotDirs.length === 0) {
-    throw new Error(
-      `Unknown agent: '${agentName}'. Known agents: ${KNOWN_AGENTS.map((a) => a.name).join(', ')}`,
-    );
+  const agent = findCreatableAgent(agentName);
+  if (!agent) {
+    throw new Error(unknownAgentMessage(agentName));
   }
 
   if (mode === 'host' && !agent.hostModeSupported) {
@@ -60,6 +69,13 @@ export function createAgentProfile(
   atomicWriteFile(path.join(profileDir, 'profile.yaml'), YAML.stringify(meta));
 
   return profileDir;
+}
+
+// Existence probe for paths that don't need a parsed profile (e.g. delete):
+// checks the directory only, so a profile with a corrupt profile.yaml still
+// counts as existing rather than being rewritten into "not found".
+export function agentProfileExists(name: string): boolean {
+  return fs.existsSync(getProfileDir(name));
 }
 
 export function loadAgentProfile(name: string): AgentProfileMeta & { path: string } {
@@ -164,7 +180,7 @@ export function validateAgentProfilesForWorkspace(
   for (const [mount, names] of mountMap) {
     if (names.length > 1) {
       throw new Error(
-        `Workspace has multiple profiles for ${mount}: ${names.join(', ')}. Only one profile per mount path is allowed.`,
+        `Workspace has multiple agent profiles for ${mount}: ${names.join(', ')}. Only one agent profile per mount path is allowed.`,
       );
     }
   }

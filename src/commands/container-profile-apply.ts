@@ -5,7 +5,7 @@ import { CliError, EXIT } from '../lib/cli-errors.js';
 import { validateContainerProfile } from '../lib/validators.js';
 import type { ContainerProfile } from '../lib/validators.js';
 import { readStdin } from '../lib/stdin.js';
-import { parseJsonInput, toValidationError } from '../lib/apply-input.js';
+import { loadApplyDiffBase, parseJsonInput, toValidationError } from '../lib/apply-input.js';
 import { diffJson } from '../lib/json-diff.js';
 import { printJson } from '../lib/cli-output.js';
 
@@ -36,7 +36,9 @@ export function registerContainerProfileApplyCommand(
       const profile = parseProfile(raw);
 
       const exists = listContainerProfiles().includes(name);
-      const before = exists ? loadContainerProfile(name) : {};
+      const before = exists
+        ? loadApplyDiffBase('container profile', name, () => loadContainerProfile(name))
+        : {};
       const changes = diffJson(before, profile);
 
       if (opts.dryRun === true) {

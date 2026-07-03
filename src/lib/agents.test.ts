@@ -157,7 +157,7 @@ describe('claudeManagedSettingsJson', () => {
     expect(claudeManagedSettingsJson(packages, true)).toBeNull();
   });
 
-  test('always disables sandboxing and bypasses permissions when skip-permissions is on', () => {
+  test('bypasses permissions and disables sandboxing when skip-permissions is on', () => {
     const settings = JSON.parse(claudeManagedSettingsJson(claudeCode, true)!);
     expect(settings).toEqual({
       permissions: { defaultMode: 'bypassPermissions' },
@@ -165,11 +165,8 @@ describe('claudeManagedSettingsJson', () => {
     });
   });
 
-  test('omits bypassPermissions when skip-permissions is off but still disables sandboxing', () => {
-    const settings = JSON.parse(claudeManagedSettingsJson(claudeCode, false)!);
-    expect(settings).toEqual({
-      sandbox: { enabled: false },
-    });
+  test('returns null when skip-permissions is off so Claude Code defaults apply', () => {
+    expect(claudeManagedSettingsJson(claudeCode, false)).toBeNull();
   });
 });
 

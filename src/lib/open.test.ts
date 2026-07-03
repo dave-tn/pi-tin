@@ -1,9 +1,13 @@
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories } from './open.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan } from './open.js';
+import { validateConfig, validateContainerProfile, validateWorkspace } from './validators.js';
+import { resolveResources } from './resources.js';
+import { containerNameFor, imageTagFor } from './container.js';
+import { CliError, EXIT } from './cli-errors.js';
 
 describe('openWorkspace workspace loading errors', () => {
   let tmpDir: string;
@@ -67,9 +71,12 @@ describe('openWorkspace workspace loading errors', () => {
     expect(error.message).not.toContain('not found');
   });
 
-  test('reports "not found" when no workspaces are configured', async () => {
+  test('reports "not found" as CliError(NOT_FOUND) when no workspaces are configured', async () => {
     const error = await captureRejection(openWorkspace('ghost', {}));
-    expect(error.message).toBe("Workspace 'ghost' not found. No workspaces configured.");
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error('unreachable');
+    expect(error.exitCode).toBe(EXIT.NOT_FOUND);
+    expect(error.message).toBe("Workspace 'ghost' not found — no workspaces configured.");
   });
 
   test('reports "not found" with available workspaces when others exist', async () => {
@@ -79,6 +86,9 @@ describe('openWorkspace workspace loading errors', () => {
     );
 
     const error = await captureRejection(openWorkspace('ghost', {}));
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error('unreachable');
+    expect(error.exitCode).toBe(EXIT.NOT_FOUND);
     expect(error.message).toBe("Workspace 'ghost' not found. Available: good");
   });
 });
@@ -118,6 +128,75 @@ describe('countSharedDirectories', () => {
   });
 });
 
+describe('computeRuntimeStartPlan', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  // Joining an already-running workspace computes this plan purely for the
+  // drift hash — mount messages must be collected as notices, not printed.
+  test('collects mount notices instead of logging', () => {
+    const projectDir = path.join(tmpDir, 'proj-a');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const missingMount = path.join(tmpDir, 'missing');
+
+    const workspace = validateWorkspace({
+      profile: 'node-dev',
+      projects: [projectDir],
+      tmux: { mode: 'isolated' },
+      host: {
+        mounts: [{ host: missingMount, container: '/mnt/extra', readonly: false }],
+      },
+    });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+    });
+
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const runtimePlan = computeRuntimeStartPlan({
+        wsName: 'demo',
+        containerName: containerNameFor('demo'),
+        imageTag: imageTagFor('demo'),
+        workspace,
+        containerProfile,
+        config: validateConfig({ shell: 'zsh' }),
+        resources: resolveResources(containerProfile),
+      });
+
+      expect(log).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(runtimePlan.notices).toContainEqual({
+        kind: 'warning',
+        text: `Skipping host mount (path does not exist): ${missingMount}`,
+      });
+      expect(runtimePlan.notices.some(
+        (notice) => notice.kind === 'info' && notice.text.startsWith('tmux workspace config mounted from'),
+      )).toBe(true);
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+});
+
 describe('planWorkspaceOpen', () => {
   test('starts fresh when the container is missing and stale runtime state exists', () => {
     expect(planWorkspaceOpen({
@@ -150,6 +229,24 @@ describe('planWorkspaceOpen', () => {
       activeSessionsAfterOpen: 1,
       clearStaleRuntimeState: false,
       deleteStoppedContainer: true,
+    });
+  });
+
+  test('refuses when the container state is unknown', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'unknown',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 1,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'refuse',
+      message: [
+        "Could not determine the state of workspace 'demo' — listing containers failed.",
+        "Check the container system is running ('container system start'), then retry.",
+      ].join('\n'),
     });
   });
 
@@ -258,6 +355,14 @@ describe('planAddProject', () => {
     expect(plan.message).toContain("'work'");
     expect(plan.message).toContain('restart');
     expect(plan.message).not.toContain('pi-tin stop');
+  });
+
+  test('rejects when the container state is unknown', () => {
+    const plan = planAddProject({ ...base, containerState: 'unknown' });
+    expect(plan.action).toBe('reject');
+    if (plan.action !== 'reject') throw new Error('wrong action');
+    expect(plan.message).toContain('Could not determine');
+    expect(plan.message).toContain("'work'");
   });
 
   test('rejects when the project is already present', () => {

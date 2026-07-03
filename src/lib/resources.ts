@@ -1,11 +1,7 @@
 import os from 'node:os';
+import type { ContainerProfile } from './validators.js';
 
 const DEFAULT_MEMORY = '8g';
-
-export interface ResourceOptions {
-  cpus?: number | undefined;
-  memory?: string | undefined;
-}
 
 export interface ResolvedResources {
   cpus: number;
@@ -16,9 +12,11 @@ function defaultCpus(): number {
   return Math.max(os.cpus().length - 2, 2);
 }
 
-export function resolveResources(profile: ResourceOptions): ResolvedResources {
+export function resolveResources(
+  containerProfile: Pick<ContainerProfile, 'cpus' | 'memory'>,
+): ResolvedResources {
   return {
-    cpus: profile.cpus ?? defaultCpus(),
-    memory: profile.memory ?? DEFAULT_MEMORY,
+    cpus: containerProfile.cpus ?? defaultCpus(),
+    memory: containerProfile.memory ?? DEFAULT_MEMORY,
   };
 }

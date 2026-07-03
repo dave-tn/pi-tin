@@ -24,7 +24,13 @@ export interface HelpCommand {
 
 export interface HelpSchema {
   tool: string;
-  contract: Record<string, string>;
+  contract: {
+    input: string;
+    output: string;
+    errors: string;
+    edit: string;
+    destructive: string;
+  };
   exitCodes: Record<string, string>;
   commands: HelpCommand[];
   uiGuide: { appliesWhen: string; guide: string };
@@ -94,7 +100,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       command: 'agent-profile add',
       summary: 'Create an agent profile',
       args: ['<name>'],
-      flags: ['--agent <agent>', '--host'],
+      flags: ['--agent <agent>', '--host', '--json'],
     },
     {
       command: 'agent-profile delete',
@@ -112,11 +118,11 @@ pi-tin manages macOS Apple-container dev workspaces. Drive it with the commands
 below instead of editing YAML config by hand.
 
 CONTRACT
-- ${AGENT_HELP_SCHEMA.contract['input']}
-- ${AGENT_HELP_SCHEMA.contract['output']}
-- ${AGENT_HELP_SCHEMA.contract['errors']}
-- ${AGENT_HELP_SCHEMA.contract['edit']}
-- ${AGENT_HELP_SCHEMA.contract['destructive']}
+- ${AGENT_HELP_SCHEMA.contract.input}
+- ${AGENT_HELP_SCHEMA.contract.output}
+- ${AGENT_HELP_SCHEMA.contract.errors}
+- ${AGENT_HELP_SCHEMA.contract.edit}
+- ${AGENT_HELP_SCHEMA.contract.destructive}
 
 TYPICAL FLOWS
 - New/edit workspace:

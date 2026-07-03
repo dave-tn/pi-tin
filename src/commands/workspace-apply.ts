@@ -10,7 +10,7 @@ import { CliError, EXIT } from '../lib/cli-errors.js';
 import { validateWorkspace } from '../lib/validators.js';
 import type { Workspace } from '../lib/validators.js';
 import { readStdin } from '../lib/stdin.js';
-import { parseJsonInput, toValidationError } from '../lib/apply-input.js';
+import { loadApplyDiffBase, parseJsonInput, toValidationError } from '../lib/apply-input.js';
 import { diffJson } from '../lib/json-diff.js';
 import { printJson } from '../lib/cli-output.js';
 
@@ -37,7 +37,7 @@ export function registerWorkspaceApplyCommand(
       const workspace = parseWorkspace(raw);
 
       const exists = workspaceExists(name);
-      const before = exists ? loadWorkspace(name) : {};
+      const before = exists ? loadApplyDiffBase('workspace', name, () => loadWorkspace(name)) : {};
       const changes = diffJson(before, workspace);
 
       if (opts.dryRun === true) {

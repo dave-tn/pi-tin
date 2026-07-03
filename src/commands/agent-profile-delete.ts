@@ -2,14 +2,13 @@ import chalk from 'chalk';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import {
+  agentProfileExists,
   deleteAgentProfile,
-  loadAgentProfile,
   planAgentProfileDelete,
-  type AgentProfileDeleteImpact,
 } from '../lib/agent-profiles.js';
 import { listWorkspaces } from '../lib/workspaces.js';
 import { confirmDestructive } from '../lib/confirmation.js';
-import { printJson, shouldEmitJson } from '../lib/cli-output.js';
+import { printJson, printProfileDeleteDryRun, shouldEmitJson } from '../lib/cli-output.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
@@ -36,9 +35,9 @@ export function registerAgentProfileDeleteCommand(
         );
       }
 
-      try {
-        loadAgentProfile(name);
-      } catch {
+      // Existence check only — parsing here would rewrite a corrupt
+      // profile.yaml into "not found" and make the profile undeletable.
+      if (!agentProfileExists(name)) {
         throw new CliError(`Agent profile '${name}' not found.`, EXIT.NOT_FOUND, {
           code: 'not_found',
         });
@@ -58,7 +57,7 @@ export function registerAgentProfileDeleteCommand(
         if (json) {
           printJson({ ...impact, dryRun: true });
         } else {
-          printDryRunHuman(impact);
+          printProfileDeleteDryRun('agent profile', impact);
         }
         return;
       }
@@ -89,11 +88,4 @@ export function registerAgentProfileDeleteCommand(
         }
       });
     });
-}
-
-function printDryRunHuman(impact: AgentProfileDeleteImpact): void {
-  console.log(`Would delete agent profile '${impact.profile}' (${impact.removes}).`);
-  if (impact.referencedBy.length > 0) {
-    console.log(chalk.yellow(`  Referenced by workspace(s): ${impact.referencedBy.join(', ')}`));
-  }
 }

@@ -66,6 +66,15 @@ export function containerHomeDir(user: string): string {
   return user === 'root' ? '/root' : `/home/${user}`;
 }
 
+/**
+ * True when `childPath` equals `parentDir` or lies inside it. Both arguments
+ * must already be normalised (e.g. via `path.resolve`) — no trailing
+ * separators; the check is purely lexical, so `/a/bc` is not within `/a/b`.
+ */
+export function isWithinDir(childPath: string, parentDir: string): boolean {
+  return childPath === parentDir || childPath.startsWith(parentDir + path.sep);
+}
+
 export function expandTilde(p: string): string {
   if (p.startsWith('~/')) {
     return path.join(os.homedir(), p.slice(2));

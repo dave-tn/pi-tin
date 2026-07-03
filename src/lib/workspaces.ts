@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { getWorkspacesDir } from './paths.js';
+import { getWorkspacesDir, isWithinDir } from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { parseYaml } from './yaml.js';
 import { validateWorkspace } from './validators.js';
@@ -107,9 +107,6 @@ export function findWorkspacesForDirectory(
 ): Array<{ name: string; workspace: Workspace }> {
   const resolved = path.resolve(directory);
   return listWorkspaces().filter(({ workspace }) =>
-    workspace.projects.some((projectPath) => {
-      const resolvedProject = path.resolve(projectPath);
-      return resolved === resolvedProject || resolved.startsWith(resolvedProject + path.sep);
-    }),
+    workspace.projects.some((projectPath) => isWithinDir(resolved, path.resolve(projectPath))),
   );
 }

@@ -252,14 +252,15 @@ export function syncDefaultContainerProfiles(profilesDir: string): string[] {
 }
 
 export function ensureInitialised(): { firstRun: boolean } {
-  const configDir = getConfigDir();
-  const isFirstRun = !fs.existsSync(configDir);
+  const isFirstRun = !fs.existsSync(getConfigDir());
 
-  if (isFirstRun) {
-    fs.mkdirSync(getContainerProfilesDir(), { recursive: true });
-    fs.mkdirSync(getWorkspacesDir(), { recursive: true });
-    fs.mkdirSync(getAgentProfilesDir(), { recursive: true });
-    fs.mkdirSync(getTmuxConfigsDir(), { recursive: true });
+  // Idempotent per-path so a partially-deleted config dir is repaired, not
+  // just detected on a pristine first run.
+  fs.mkdirSync(getContainerProfilesDir(), { recursive: true });
+  fs.mkdirSync(getWorkspacesDir(), { recursive: true });
+  fs.mkdirSync(getAgentProfilesDir(), { recursive: true });
+  fs.mkdirSync(getTmuxConfigsDir(), { recursive: true });
+  if (!fs.existsSync(getConfigPath())) {
     fs.writeFileSync(getConfigPath(), DEFAULT_CONFIG, 'utf-8');
   }
 

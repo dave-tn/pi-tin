@@ -28,7 +28,7 @@ Daily-driven on Pi and Claude Code; Amp, OpenCode, and more are supported but li
 
 The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where your agents can be unleashed.
 
-_**Status:** Early (v0.1) — the core create/open/share flow is solid, but expect rough edges on less-common agents and setups. Issue reports are welcome._
+_**Status:** Early (pre-1.0) — the core create/open/share flow is solid, but expect rough edges on less-common agents and setups. Issue reports are welcome._
 
 > [!IMPORTANT]
 > What you put in the sandbox is what the agent can access. Everything outside the sandbox is off-limits. The agent cannot see your host machine or your files, unless you explicitly make them available.
@@ -99,7 +99,7 @@ cd ~/dev/my-app && pt
 - **Several include it** → you pick which to open, or create a new one.
 - **None include it** → `pt` offers to create a workspace for it, launching the interactive setup; if you already have other workspaces, it also offers to add this directory to one of them instead.
 
-On first run, `pt` will offer to install the `container` CLI if it's missing, and to install a default container profile (e.g. `node-dev`) if none exist. It also offers to create a default agent profile for you.
+On first run, `pt` will offer to install the `container` CLI if it's missing; the default container profiles (`node-dev`, `python-dev`, …) are installed automatically and kept up to date (see [Container profiles](#container-profiles)). It also offers to create a default agent profile for you.
 
 > [!NOTE]
 > First run can involve downloading container images and package installs (potentially a few GB), so it may take a few minutes. Subsequent runs are fast; entering a workspace is sub-second.
@@ -147,7 +147,7 @@ A container profile defines the container image: base image, packages, global to
 
 Defaults ship with pi-tin and are updated automatically when pi-tin is upgraded. To customise one, remove the `# This profile is managed by pi-tin...` comment at the top — pi-tin will then leave the file untouched on future updates — or copy it to a new name and modify the copy.
 
-The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), installs `@playwright/cli` plus Chromium, sets `PLAYWRIGHT_MCP_BROWSER=chromium` so `playwright-cli` defaults to Chromium rather than the Chrome channel, and sets `LANG`/`LC_ALL` to `C.UTF-8`.
+The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), installs `@playwright/cli` plus Chromium, and sets `PLAYWRIGHT_MCP_BROWSER=chromium` so `playwright-cli` defaults to Chromium rather than the Chrome channel. All five managed profiles set `LANG`/`LC_ALL` (`C.UTF-8`) and `NODE_EXTRA_CA_CERTS`; `dotnet-dev` also sets `DOTNET_CLI_TELEMETRY_OPTOUT` and `DOTNET_NOLOGO`.
 
 #### Container profile schema
 
@@ -155,13 +155,13 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 | ----------------- | -------- | ----------- |
 | `description`     | yes      | Human-readable label. |
 | `base_image`      | yes      | OCI image ref (e.g. `node:trixie-slim`, `debian:trixie-slim`). The package manager is auto-detected from the name — see `package_manager`. |
-| `package_manager` | no       | Override auto-detection (`apt` / `apk` / `dnf`). Known prefixes (`debian`, `ubuntu`, `node`, `python`, `oven/bun`, `buildpack-deps`, `alpine`, `fedora`/`rockylinux`/`almalinux`, `rhel`/`ubi`) are detected automatically. **Required when the base image name isn't recognised** (e.g. `mcr.microsoft.com/...`); generation throws otherwise. |
+| `package_manager` | no       | Override auto-detection (`apt` / `apk` / `dnf`). Detection: name prefixes `debian`/`ubuntu`/`node`/`python`/`oven/bun`/`buildpack-deps` → `apt`; `alpine` anywhere in the name (e.g. `python:3.12-alpine`) → `apk`; `fedora`/`rockylinux`/`almalinux` prefixes or a `/rhel`/`/ubi` path segment (e.g. `redhat/ubi9` — bare `rhel:9` is not recognised) → `dnf`. **Required when the base image name isn't recognised** (e.g. `mcr.microsoft.com/...`); generation throws otherwise. |
 | `user`            | yes      | Non-root username for the container. Must match `^[a-z_][a-z0-9_-]*$`. |
 | `packages`        | no       | System packages installed via the package manager. Defaults to `[]`. If set, must include the configured login shell (default `zsh`) or the image won't build. |
 | `extra_packages`  | no       | Concatenated with `packages` into the **same** install step — no behavioural or layering difference; the split is purely organisational. Defaults to `[]`. |
 | `global_tools`    | no       | Packages installed globally with **npm** (always npm, regardless of base image), before workspace tools. Defaults to `[]`. |
 | `post_install`    | no       | Root shell commands, run after system packages and before the user switch. Defaults to `[]`. |
-| `post_setup`      | no       | User-level shell commands, run as `user` after global + workspace tool installs. Defaults to `[]`. Use this for anything that installs into the user's `$HOME` (e.g. `rustup`). |
+| `post_setup`      | no       | User-level shell commands, run as `user` after global tool installs and before workspace packages. Defaults to `[]`. Use this for anything that installs into the user's `$HOME` (e.g. `rustup`). |
 | `env`             | no       | Environment variables. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings (quote numbers, e.g. `"1"`) and are auto-quoted/escaped for the Dockerfile. Defaults to `{}`. |
 | `cpus`            | no       | CPU limit, positive integer. Default: host cores − 2 (min 2). |
 | `memory`          | no       | Memory limit string, e.g. `"16g"`. K/M/G/T/P suffix (optional trailing `b`). Default: `8g`. |
@@ -231,14 +231,14 @@ host:
 
 Notes:
 - `projects` must be absolute paths (set automatically by `pi-tin create`)
-- `tools` are installed globally via `npm install -g` during the first `pi-tin open`. The interactive `create` command writes only `name` and `package`. For known agents, pi-tin re-derives internal metadata from `package` at runtime. Manual tool entries should also use only `name` and `package`; extra keys are rejected.
+- `tools` are installed globally via `npm install -g` during the first `pi-tin open`, then re-installed in the background on every container start (agent binaries are re-wrapped after a successful update; a failed update prints a notice and keeps the existing versions). The interactive `create` command writes only `name` and `package`. For known agents, pi-tin re-derives internal metadata from `package` at runtime. Manual tool entries should also use only `name` and `package`; extra keys are rejected.
 - `agent.profiles` names of agent profiles to mount (see Agent Profiles section below). Each profile provides isolated, persistent auth for an agent.
 - `agent.skipPermissions` (default `true`) configures supported agents to skip interactive permission prompts (see [Permissions](#permissions)).
 - `host.sshAgent` (default `true`) forwards your SSH agent for git auth with any provider.
 - `host.githubCLI` (default `false`) enables GitHub CLI integration — automatically mounts `~/.config/gh` and resolves a `GH_TOKEN`.
-- `host.mounts` allows additional host directories to be mounted. Must be **directories** — single file mounts are not supported.
-- `host.env` values are passed to the container at runtime. Use `${VAR}` syntax to forward a host environment variable without hardcoding secrets in the YAML — if the host variable is unset, the entry is silently skipped.
-- `stopAfterLastSession` controls how long pi-tin keeps a workspace running after the last host-side session exits. Default: `30s`.
+- `host.mounts` allows additional host directories to be mounted. Each entry is `{ host, container, readonly }`, all three required (e.g. `{ host: ~/data, container: /data, readonly: true }`). `host` supports `~` expansion; a mount whose host path doesn't exist is skipped with a warning. Must be **directories** — single file mounts are not supported.
+- `host.env` values are passed to the container at runtime. Use `${VAR}` syntax to forward a host environment variable without hardcoding secrets in the YAML — if the host variable is unset, the entry is silently skipped. Only values that are exactly `${VAR}` are resolved; a `${…}` inside a longer string passes through literally, with a warning.
+- `stopAfterLastSession` controls how long pi-tin keeps a workspace running after the last host-side session exits. Format: an integer with a single `s`/`m`/`h` unit (e.g. `90s`, `5m`, `1h`) — no combinations. Default: `30s`.
 - A workspace start may mount at most **22 distinct host directories** — a conservative limit to avoid Apple `container` startup failures with large mount sets. Projects, `host.mounts`, agent profiles, and GitHub CLI mounts each count toward it.
 - `pi-tin create` forwards `COLORTERM` from the host by default (`COLORTERM: ${COLORTERM}`) so tools inside the workspace can detect truecolor support when your terminal provides it.
 - `pi-tin create` detects your Mac's timezone (from `/etc/localtime`) and writes it as a literal `host.env.TZ` (e.g. `TZ: America/New_York`) so the container shares your local time by default. Edit the value to use a different zone, or remove the line to fall back to UTC. The value is a snapshot taken at create time — it does not track later host changes. Existing workspaces are unaffected; add `TZ` by hand to opt in. The managed `node-dev` container profile bundles `tzdata` so IANA zone names resolve; **custom container profiles must include a zoneinfo source (e.g. the `tzdata` package)** or `TZ` will silently fall back to UTC.
@@ -270,27 +270,30 @@ of the following to a non-empty value:
 
 | Command | Description |
 |---------|-------------|
-| `pi-tin create <name>` | Create a new workspace (interactive) |
-| `pi-tin [--build]` | Auto-open the workspace matching the current directory, or offer to create a new workspace or add the directory to an existing one when none match; `--build` forces a rebuild when a match is found |
+| `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted) |
+| `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found |
 | `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly |
 | `pi-tin open <name> [--build]` | Start or join a workspace |
-| `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output with `sessions`/`shutdownMs`/`projects` counts; JSON is the default when output is piped) |
+| `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
 | `pi-tin detect-host` | Print host facts as JSON (output is always JSON) — `{ gitIdentity, tz, colorterm, apiKeys, agents }` — for an agent to compose into a workspace `apply` payload |
-| `pi-tin stop <name> [--force]` | Stop a running workspace (`--force` skips the confirmation prompt; non-interactive callers must pass it or get exit code 4) |
+| `pi-tin agent-guide [--json]` | Print the agent usage guide (`--json` for a machine-readable schema of commands, flags, and exit codes) — see [Driving pi-tin from an agent](#driving-pi-tin-from-an-agent) |
+| `pi-tin stop <name> [--force]` | Stop a running workspace (prompts only when live sessions would be killed; non-interactive callers must then pass `--force` or get exit code 4; `--force` also escalates to `container kill` if a graceful stop exceeds 5s) |
 | `pi-tin delete <name> [--force]` | Delete a workspace and its image (`--force` skips the confirmation prompt; non-interactive callers must pass it or get exit code 4) |
-| `pi-tin cleanup [--all] [--force]` | Remove stopped containers, dangling images, and unused volumes; `--all` does a full wipe (all pi-tin images, config, and data); `--force` skips the confirmation prompt |
+| `pi-tin cleanup [--all] [--force]` | Remove stopped containers, dangling images, unused volumes, and pi-tin images whose workspace no longer exists; `--all` does a full wipe (all pi-tin images, config, and data); `--force` skips the confirmation prompt |
 | `pi-tin container-profile list [--json]` | List all available container profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin container-profile show <name> [--json]` | Show details of a container profile (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin container-profile apply <name> [--dry-run]` | Create or update a container profile from a JSON object on stdin (see [Editing container profiles](#editing-container-profiles)) |
 | `pi-tin container-profile delete <name> [--force] [--dry-run] [--json]` | Delete a container profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
-| `pi-tin agent-profile add` | Create a new agent profile (the non-interactive creation path for agent profiles) |
+| `pi-tin agent-profile add <name> --agent <agent> [--host] [--json]` | Create a new agent profile (the non-interactive creation path for agent profiles; `--json` for machine-readable output, JSON is the default when output is piped) |
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles |
 | `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder |
+
+`pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.
 
 ## Machine-Readable Output
 
@@ -319,7 +322,7 @@ These commands form the JSON read-modify-write surface an agent uses to inspect 
 The contract is **JSON in, JSON out**:
 
 - Each `show` emits exactly the object its paired `apply` accepts on stdin, so the loop is: read with `show --json`, edit the object, write it back with `apply` (preview first with `--dry-run`). `detect-host` supplies host facts (`{ gitIdentity, tz, colorterm, apiKeys, agents }`) an agent composes into a workspace `apply` payload.
-- `apply` is a **full replace**, not a merge — the target file is rewritten from the JSON object, so any YAML comments are dropped. Always preview with `--dry-run` (it prints the diff and writes nothing) before a real write.
+- `apply` is a **full replace**, not a merge — the target file is rewritten from the JSON object, so any YAML comments are dropped. Always preview with `--dry-run` (it prints the diff and writes nothing) before a real write. An existing file that no longer parses doesn't block `apply`: the parse error becomes a warning on stderr and the diff treats the file as empty, so `apply` can repair a corrupt workspace or container profile.
 - Invalid input is rejected against the relevant schema before anything is written. Every command exits with a stable, semantic code (see the **Stable exit codes** table below) and, in JSON mode, a structured error envelope — so callers branch on `code`, never on prose.
 - `agent-profile add` is the non-interactive creation path; agent-profile credentials are populated by logging in on first workspace use, not via `apply`, so there is no `agent-profile apply`.
 
@@ -337,7 +340,7 @@ The subsections below — [Editing container profiles](#editing-container-profil
   | 3 | `NOT_FOUND` | Named workspace, container profile, or agent profile does not exist |
   | 4 | `CONFIRMATION_REQUIRED` | Destructive op without `--force` in non-interactive mode |
 
-- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal. Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed.
+- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed.
 - **Structured errors.** In JSON mode, errors are emitted as a structured envelope on stderr — `{ "error": { "message", "code", … } }` — so an agent can read the machine-stable `code` (and any `remediation`, `validValues`, or `badInput` fields) instead of grepping the message text.
 
 ### Editing container profiles
@@ -451,7 +454,7 @@ credential store that persists across sessions.
 
 ### Setup
 
-On first run, `pi-tin` scans for agents on your system and offers to create agent profiles:
+Scan your system for installed agents and create agent profiles for them:
 
 ```bash
 pi-tin agent-profile discover
@@ -524,7 +527,7 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 
 | Command | Description |
 |---------|-------------|
-| `pi-tin agent-profile add <name> --agent <agent> [--host]` | Create a new agent profile (the non-interactive creation path for agent profiles). `--host` mounts your host config directly instead of an isolated copy — see [Host mode](#host-mode) |
+| `pi-tin agent-profile add <name> --agent <agent> [--host] [--json]` | Create a new agent profile (the non-interactive creation path for agent profiles). `--host` mounts your host config directly instead of an isolated copy — see [Host mode](#host-mode). `--json` for machine-readable output; JSON is the default when output is piped |
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
@@ -533,23 +536,25 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 
 ## Permissions
 
-When a workspace includes Claude Code, pi-tin sets `CLAUDE_CODE_SANDBOXED=1` in the container. This skips the "do you trust this project?" prompt — trust is implicit because each workspace runs inside its own VM-backed container boundary. Workspaces without Claude Code are unaffected.
+When a workspace includes Claude Code, pi-tin sets `CLAUDE_CODE_SANDBOXED=1` in the container. This skips the "do you trust this project?" prompt — trust is implicit because each workspace runs inside its own VM-backed container boundary. The image also bakes a `~/.claude.json` marking onboarding complete, skipping first-run setup prompts. Workspaces without Claude Code are unaffected.
 
-Claude Code also runs in bypass-permissions mode by default inside containers, so it won't prompt to read files, run commands, or make edits. Your host installation is unaffected — pi-tin sets this via Claude Code managed settings baked into the image, so it survives Claude's self-updates inside the workspace.
+Claude Code also runs in bypass-permissions mode by default inside containers, so it won't prompt to read files, run commands, or make edits. Your host installation is unaffected — pi-tin sets this via Claude Code managed settings baked into the image (which also disable Claude Code's inner sandbox — the container is the sandbox), so it survives Claude's self-updates inside the workspace.
 
-To require normal permission prompts instead, set `agent.skipPermissions: false`:
+To require normal permission prompts instead, set `agent.skipPermissions: false` — then no managed settings are baked and Claude Code's defaults apply:
 
 ```yaml
 agent:
   skipPermissions: false
 ```
 
+Gemini CLI workspaces get `NO_BROWSER=true`, so authentication never tries to launch a host browser.
+
 ## Uninstalling
 
 Before uninstalling, you can clean up all container resources:
 
 ```bash
-pi-tin cleanup           # Remove stopped containers, dangling images, and unused volumes
+pi-tin cleanup           # Remove stopped containers, dangling images, unused volumes, and orphaned pi-tin images
 rm -rf ~/.config/pi-tin  # Remove pi-tin config
 ```
 

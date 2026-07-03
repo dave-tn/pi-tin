@@ -92,6 +92,20 @@ describe('unknown-key rejection (typo detection)', () => {
   });
 });
 
+describe('root-level validation errors', () => {
+  test('null workspace input produces a message naming the problem', () => {
+    expect(() => validateWorkspace(null)).toThrow(/Expected Object but received null/);
+  });
+
+  test('non-object workspace input produces a message naming the problem', () => {
+    expect(() => validateWorkspace('hello')).toThrow(/Expected Object but received "hello"/);
+  });
+
+  test('null config input produces a message naming the problem', () => {
+    expect(() => validateConfig(null)).toThrow(/Expected Object but received null/);
+  });
+});
+
 describe('ContainerProfileSchema optional collection fields', () => {
   const minimal = {
     description: 'minimal',

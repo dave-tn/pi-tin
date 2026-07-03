@@ -1,7 +1,14 @@
 import { ensureInitialised } from '../lib/init-guard.js';
-import { loadWorkspace, listWorkspaces, workspaceExists } from '../lib/workspaces.js';
+import {
+  loadWorkspace,
+  listWorkspaces,
+  workspaceExists,
+  isValidWorkspaceName,
+  invalidWorkspaceNameMessage,
+} from '../lib/workspaces.js';
 import { printJson } from '../lib/cli-output.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
+import { notFoundWorkspaceError } from '../lib/workspace-errors.js';
 
 export function registerWorkspaceShowCommand(
   program: import('commander').Command,
@@ -13,16 +20,16 @@ export function registerWorkspaceShowCommand(
     .action((name: string, _opts: { json?: boolean }) => {
       ensureInitialised();
 
+      if (!isValidWorkspaceName(name)) {
+        throw new CliError(invalidWorkspaceNameMessage(name), EXIT.VALIDATION, {
+          code: 'validation',
+          badInput: name,
+          remediation: 'Run `pi-tin list` to see available workspaces.',
+        });
+      }
+
       if (!workspaceExists(name)) {
-        const available = listWorkspaces().map((w) => w.name);
-        throw new CliError(
-          available.length > 0
-            ? `Workspace '${name}' not found. Available: ${available.join(', ')}`
-            : `Workspace '${name}' not found — no workspaces configured.`,
-          EXIT.NOT_FOUND,
-          { code: 'not_found', badInput: name, validValues: available,
-            remediation: 'Run `pi-tin list` to see available workspaces.' },
-        );
+        throw notFoundWorkspaceError(name, listWorkspaces().map((w) => w.name));
       }
 
       // A workspace has no separate human rendering, so output is JSON

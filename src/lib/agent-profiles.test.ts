@@ -162,7 +162,7 @@ describe('agent-profiles', () => {
     test('throws for conflicting dot-dirs', () => {
       createAgentProfile('claude1', 'Claude Code');
       createAgentProfile('claude2', 'Claude Code');
-      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple');
+      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple agent profiles');
     });
 
     test('passes with empty list', () => {
@@ -243,7 +243,7 @@ describe('agent-profiles', () => {
     test('throws for conflicting mounts across profiles', () => {
       createAgentProfile('claude1', 'Claude Code', 'isolated');
       createAgentProfile('claude2', 'Claude Code', 'isolated');
-      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple');
+      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple agent profiles');
     });
   });
 });

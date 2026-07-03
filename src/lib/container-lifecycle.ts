@@ -11,6 +11,10 @@ const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 100;
 const KILL_WAIT_TIMEOUT_MS = 2000;
 
+function couldNotDetermineStateMessage(containerName: string): string {
+  return `Could not determine the state of container '${containerName}'.`;
+}
+
 export interface ContainerLifecycleDeps {
   getContainerState: (name: string) => ContainerState;
   stopContainer: (name: string) => void;
@@ -80,6 +84,10 @@ export function createContainerLifecycle(
       return;
     }
 
+    if (initialState === 'unknown') {
+      throw new Error(couldNotDetermineStateMessage(containerName));
+    }
+
     if (initialState === 'running') {
       try {
         deps.stopContainer(containerName);
@@ -100,6 +108,12 @@ export function createContainerLifecycle(
 
     if (state === 'running') {
       throw new Error(`Failed to stop workspace container '${containerName}'.`);
+    }
+
+    // Listing containers failed mid-stop: the container may still be running,
+    // so surface the failure rather than report a stop that never happened.
+    if (state === 'unknown') {
+      throw new Error(couldNotDetermineStateMessage(containerName));
     }
 
     if (state === 'stopped') {

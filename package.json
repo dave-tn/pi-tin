@@ -61,7 +61,6 @@
   },
   "scripts": {
     "build": "bun build src/cli.ts --outdir dist --target node --define \"PKG_VERSION='$(node -p \"require('./package.json').version\")'\" --define \"PKG_HOMEPAGE='$(node -p \"require('./package.json').homepage.split('#')[0]\")'\"",
-    "dev": "bun run src/cli.ts",
     "test": "bun test",
     "prepublishOnly": "tsc --noEmit && bun test && bun run build"
   },

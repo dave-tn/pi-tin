@@ -8,16 +8,24 @@ import {
   readRuntimeSnapshot,
   type RuntimeStateSnapshot,
 } from '../lib/runtime-state.js';
-import { formatRemainingDuration } from '../lib/duration.js';
+import { formatRemainingDuration, remainingDurationMs } from '../lib/duration.js';
 import { printJson, shouldEmitJson } from '../lib/cli-output.js';
+
+// Runtime activity for a workspace row: 'inactive' when the container is not
+// running, 'unreadable' when its sessions cannot be known (runtime state
+// could not be read, or the container state itself is unknown), 'active'
+// with the parsed numbers otherwise.
+type RowActivity =
+  | { kind: 'inactive' }
+  | { kind: 'unreadable' }
+  | { kind: 'active'; sessions: number; shutdownDeadlineMs: number | null };
 
 type Row = {
   workspace: string;
   profile: string;
   status: ContainerState;
-  sessions: string;
-  shutdown: string;
-  projects: string;
+  activity: RowActivity;
+  projects: number;
 };
 
 export interface WorkspaceListEntry {
@@ -29,18 +37,19 @@ export interface WorkspaceListEntry {
   projects: number;
 }
 
-// Project the display Row (which uses '–'/'?' sentinels) into a clean JSON
-// shape: numeric counts, null where a value is unknown or not applicable.
-// Row.shutdown is a formatted duration string, so shutdownMs reports null
-// rather than emitting a lossy value.
-export function toWorkspaceListJson(rows: Row[]): WorkspaceListEntry[] {
+// Project rows into the JSON shape: numeric counts, null where a value is
+// unknown or not applicable. shutdownMs carries the same quantity as the
+// table's SHUTDOWN countdown — milliseconds remaining, clamped at 0.
+export function toWorkspaceListJson(rows: Row[], nowMs = Date.now()): WorkspaceListEntry[] {
   return rows.map((row) => ({
     workspace: row.workspace,
     profile: row.profile,
     status: row.status,
-    sessions: /^\d+$/.test(row.sessions) ? Number(row.sessions) : null,
-    shutdownMs: null,
-    projects: Number(row.projects),
+    sessions: row.activity.kind === 'active' ? row.activity.sessions : null,
+    shutdownMs: row.activity.kind === 'active' && row.activity.shutdownDeadlineMs !== null
+      ? remainingDurationMs(row.activity.shutdownDeadlineMs, nowMs)
+      : null,
+    projects: row.projects,
   }));
 }
 
@@ -67,6 +76,30 @@ function statusLabel(state: ContainerState): string {
   return state === 'not-found' ? '–' : state;
 }
 
+function sessionsLabel(activity: RowActivity): string {
+  switch (activity.kind) {
+    case 'inactive':
+      return '–';
+    case 'unreadable':
+      return '?';
+    case 'active':
+      return String(activity.sessions);
+  }
+}
+
+function shutdownLabel(activity: RowActivity): string {
+  switch (activity.kind) {
+    case 'inactive':
+      return '–';
+    case 'unreadable':
+      return '?';
+    case 'active':
+      return activity.shutdownDeadlineMs === null
+        ? '–'
+        : formatRemainingDuration(activity.shutdownDeadlineMs);
+  }
+}
+
 function renderStatus(value: string, state: ContainerState): string {
   switch (state) {
     case 'running':
@@ -75,6 +108,8 @@ function renderStatus(value: string, state: ContainerState): string {
       return chalk.yellow(value);
     case 'not-found':
       return chalk.dim(value);
+    case 'unknown':
+      return chalk.yellow(value);
   }
 }
 
@@ -100,9 +135,11 @@ export function registerListCommand(
         return;
       }
 
+      // A null list means the containers could not be listed at all — report
+      // every workspace as 'unknown' rather than falsely as not running.
       const containers = listContainers();
       const stateMap = new Map<string, ContainerState>();
-      for (const container of containers) {
+      for (const container of containers ?? []) {
         stateMap.set(container.id, container.status === 'running' ? 'running' : 'stopped');
       }
 
@@ -111,23 +148,26 @@ export function registerListCommand(
 
       for (const { name, workspace } of workspaces) {
         const containerName = containerNameFor(name);
-        const containerState = stateMap.get(containerName) ?? 'not-found';
+        const containerState: ContainerState = containers === null
+          ? 'unknown'
+          : stateMap.get(containerName) ?? 'not-found';
 
-        let sessions = '–';
-        let shutdown = '–';
+        let activity: RowActivity = containerState === 'unknown'
+          ? { kind: 'unreadable' }
+          : { kind: 'inactive' };
 
         if (containerState === 'running') {
           const runtime = await tryWithWorkspaceLock(name, () => reconcileWorkspaceRuntimeState(name))
             ?? readRuntimeSnapshot(name);
 
           if (runtime.runtimeState === 'ok') {
-            sessions = String(runtime.activeSessions.length);
-            shutdown = runtime.shutdown
-              ? formatRemainingDuration(runtime.shutdown.deadlineMs)
-              : '–';
+            activity = {
+              kind: 'active',
+              sessions: runtime.activeSessions.length,
+              shutdownDeadlineMs: runtime.shutdown ? runtime.shutdown.deadlineMs : null,
+            };
           } else {
-            sessions = '?';
-            shutdown = '?';
+            activity = { kind: 'unreadable' };
             warnings.push(formatRuntimeStateWarning(name, runtime));
           }
         }
@@ -136,9 +176,8 @@ export function registerListCommand(
           workspace: name,
           profile: workspace.profile,
           status: containerState,
-          sessions,
-          shutdown,
-          projects: String(workspace.projects.length),
+          activity,
+          projects: workspace.projects.length,
         });
       }
 
@@ -147,13 +186,22 @@ export function registerListCommand(
         return;
       }
 
+      const cells = rows.map((row) => ({
+        workspace: row.workspace,
+        profile: row.profile,
+        status: row.status,
+        sessions: sessionsLabel(row.activity),
+        shutdown: shutdownLabel(row.activity),
+        projects: String(row.projects),
+      }));
+
       const widths = {
-        workspace: Math.max('WORKSPACE'.length, ...rows.map((row) => row.workspace.length)),
-        profile: Math.max('PROFILE'.length, ...rows.map((row) => row.profile.length)),
-        status: Math.max('STATUS'.length, ...rows.map((row) => statusLabel(row.status).length)),
-        sessions: Math.max('SESSIONS'.length, ...rows.map((row) => row.sessions.length)),
-        shutdown: Math.max('SHUTDOWN'.length, ...rows.map((row) => row.shutdown.length)),
-        projects: Math.max('PROJECTS'.length, ...rows.map((row) => row.projects.length)),
+        workspace: Math.max('WORKSPACE'.length, ...cells.map((cell) => cell.workspace.length)),
+        profile: Math.max('PROFILE'.length, ...cells.map((cell) => cell.profile.length)),
+        status: Math.max('STATUS'.length, ...cells.map((cell) => statusLabel(cell.status).length)),
+        sessions: Math.max('SESSIONS'.length, ...cells.map((cell) => cell.sessions.length)),
+        shutdown: Math.max('SHUTDOWN'.length, ...cells.map((cell) => cell.shutdown.length)),
+        projects: Math.max('PROJECTS'.length, ...cells.map((cell) => cell.projects.length)),
       };
 
       const header = [
@@ -167,14 +215,14 @@ export function registerListCommand(
 
       console.log(chalk.bold(header));
 
-      for (const row of rows) {
+      for (const cell of cells) {
         console.log([
-          row.workspace.padEnd(widths.workspace),
-          row.profile.padEnd(widths.profile),
-          renderStatus(statusLabel(row.status).padEnd(widths.status), row.status),
-          row.sessions.padEnd(widths.sessions),
-          row.shutdown.padEnd(widths.shutdown),
-          row.projects.padEnd(widths.projects),
+          cell.workspace.padEnd(widths.workspace),
+          cell.profile.padEnd(widths.profile),
+          renderStatus(statusLabel(cell.status).padEnd(widths.status), cell.status),
+          cell.sessions.padEnd(widths.sessions),
+          cell.shutdown.padEnd(widths.shutdown),
+          cell.projects.padEnd(widths.projects),
         ].join('  '));
       }
 

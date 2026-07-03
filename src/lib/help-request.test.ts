@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyHelpRequest } from './help-request.js';
+import { classifyHelpRequest, isHelpOrVersionRequest } from './help-request.js';
 
 describe('classifyHelpRequest', () => {
   test('no help token → none', () => {
@@ -26,5 +26,39 @@ describe('classifyHelpRequest', () => {
   test('subcommand help falls through to commander', () => {
     expect(classifyHelpRequest(['create', '--help'], false)).toBe('normal');
     expect(classifyHelpRequest(['container-profile', 'apply', '--help'], false)).toBe('normal');
+  });
+
+  test('help <cmd> falls through to commander (regardless of TTY)', () => {
+    expect(classifyHelpRequest(['help', 'show'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help', 'show'], false)).toBe('normal');
+  });
+
+  test('bare help stays top-level', () => {
+    expect(classifyHelpRequest(['help'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help'], false)).toBe('guide');
+  });
+});
+
+describe('isHelpOrVersionRequest', () => {
+  test('registered version flags are recognised', () => {
+    expect(isHelpOrVersionRequest(['-v'])).toBe(true);
+    expect(isHelpOrVersionRequest(['--version'])).toBe(true);
+  });
+
+  test('help flags and leading help are recognised', () => {
+    expect(isHelpOrVersionRequest(['-h'])).toBe(true);
+    expect(isHelpOrVersionRequest(['--help'])).toBe(true);
+    expect(isHelpOrVersionRequest(['help'])).toBe(true);
+    expect(isHelpOrVersionRequest(['create', '--help'])).toBe(true);
+  });
+
+  test('unregistered -V is not recognised', () => {
+    expect(isHelpOrVersionRequest(['-V'])).toBe(false);
+  });
+
+  test('ordinary commands are not help/version', () => {
+    expect(isHelpOrVersionRequest([])).toBe(false);
+    expect(isHelpOrVersionRequest(['list'])).toBe(false);
+    expect(isHelpOrVersionRequest(['open', 'my-workspace'])).toBe(false);
   });
 });
