@@ -71,10 +71,13 @@ export type DeleteWorkspacePlan =
 // An 'unknown' container state means `container list` itself failed. That is
 // never a safe basis for starting, stopping, or destroying anything — every
 // planner refuses and asks the user to retry once listing works again.
+const CONTAINER_SYSTEM_RETRY_HINT =
+  "Check the container system is running ('container system start'), then retry.";
+
 function unknownContainerStateMessage(workspaceName: string): string {
   return [
     `Could not determine the state of workspace '${workspaceName}' — listing containers failed.`,
-    "Check the container system is running ('container system start'), then retry.",
+    CONTAINER_SYSTEM_RETRY_HINT,
   ].join('\n');
 }
 
@@ -309,7 +312,7 @@ export function planCleanup(containers: ListedContainer[] | null): CleanupPlan {
       action: 'refuse',
       message:
         'Could not list containers, so cleanup cannot tell which workspaces are running.\n'
-        + "Check the container system is running ('container system start'), then retry.",
+        + CONTAINER_SYSTEM_RETRY_HINT,
     };
   }
   const piTinContainers = containers.filter((container) => isPiTinContainerId(container.id));
