@@ -14,9 +14,9 @@ _Pie tins hold pies. `pi-tin` holds your agent dev environments._
 cd ~/dev/my-app && pt        # opens a VM-isolated workspace, agent ready
 ```
 
-The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOLO modes), without the danger. pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so your agents can run with permission prompts bypassed, free to move fast _inside the box_, while your Mac, your keys, and your other projects and data stay outside it.
+The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOLO modes), without the danger. pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so agents can run with permission prompts bypassed, free to move fast _inside the box_, while your Mac, your keys, and your other projects and data stay outside it.
 
-**Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Gemini, and OpenCode are launched in bypass mode for you. (Prefer prompts? Set `agent.skipPermissions: false`.)
+**Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Gemini, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
 
 **Runs on your Mac.** No cloud VMs, no remote dev environment to rent or trust — the sandboxes are local, backed by Apple's native virtualization.
 
@@ -26,7 +26,7 @@ The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOL
 
 Daily-driven on Pi and Claude Code; Amp, OpenCode, and more are supported but lightly tested. Customisable to support any agent.
 
-The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where your agents can be unleashed.
+The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where agents can be unleashed.
 
 _**Status:** Early (pre-1.0) — the core create/open/share flow is solid, but expect rough edges on less-common agents and setups. Issue reports are welcome._
 
@@ -99,7 +99,7 @@ cd ~/dev/my-app && pt
 - **Several include it** → you pick which to open, or create a new one.
 - **None include it** → `pt` offers to create a workspace for it, launching the interactive setup; if you already have other workspaces, it also offers to add this directory to one of them instead.
 
-On first run, `pt` will offer to install the `container` CLI if it's missing; the default container profiles (`node-dev`, `python-dev`, …) are installed automatically and kept up to date (see [Container profiles](#container-profiles)). It also offers to create a default agent profile for you.
+On first run, `pt` will offer to install the `container` CLI if it's missing; the default container profiles (`node-dev`, `python-dev`, …) are installed automatically and kept up to date (see [Container profiles](#container-profiles)). It also offers to create a default agent profile.
 
 > [!NOTE]
 > First run can involve downloading container images and package installs (potentially a few GB), so it may take a few minutes. Subsequent runs are fast; entering a workspace is sub-second.
@@ -340,7 +340,7 @@ The contract is **JSON in, JSON out**:
 The subsections below — [Editing container profiles](#editing-container-profiles) and [Editing workspaces](#editing-workspaces) — give the per-command detail.
 
 - **JSON output.** Data-returning commands (`list`, `show`, `container-profile list`, `container-profile show`, `agent-profile list`, `agent-profile show`) accept `--json`. They also emit JSON **by default when stdout is not a TTY** — i.e. when the output is piped or captured — so a script never has to remember the flag. Pass `--json` explicitly to force JSON even in an interactive terminal.
-- **Channels.** Results go to **stdout** (the data channel); diagnostics, prompts, and errors go to **stderr**. Capturing stdout alone gives you clean parseable output.
+- **Channels.** Results go to **stdout** (the data channel); diagnostics, prompts, and errors go to **stderr**. Capturing stdout alone gives clean parseable output.
 - **Stable exit codes.** Every command exits with a semantic code so callers can branch on the outcome without parsing prose:
 
   | Code | Name | Meaning |
