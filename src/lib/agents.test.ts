@@ -51,6 +51,11 @@ describe('KNOWN_AGENTS', () => {
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
     expect(gemini?.containerEnv).toEqual({ NO_BROWSER: 'true' });
+
+    const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
+    expect(opencode?.containerEnv).toEqual({
+      OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
+    });
   });
 
   test('pi has no skip-permissions flag (always in skip mode)', () => {
@@ -67,6 +72,15 @@ describe('agentContainerEnv', () => {
     ];
     const env = agentContainerEnv(packages);
     expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' });
+  });
+
+  test('includes the OpenCode external_directory sandbox config', () => {
+    const packages: Tool[] = [
+      { name: 'OpenCode', package: 'opencode-ai@latest' },
+    ];
+    expect(agentContainerEnv(packages)).toEqual({
+      OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
+    });
   });
 
   test('returns empty object for agents without containerEnv', () => {
