@@ -84,6 +84,12 @@ const COMMON_ENV = `  NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt
   LANG: C.UTF-8
   LC_ALL: C.UTF-8`;
 
+// Container-internal state pi-tin snapshots across container lives (see
+// workspace-state.ts). Tied to the shared shell baseline above: zoxide's
+// frecency DB and zsh history. Custom profiles can extend this per their tools.
+const COMMON_WORKSPACE_STATE = `  - .local/share/zoxide
+  - .zsh_history`;
+
 export const DEFAULT_CONTAINER_PROFILES: Record<string, string> = {
   'node-dev': `${PROFILE_HEADER}
 
@@ -111,6 +117,9 @@ post_setup:
 env:
   PLAYWRIGHT_MCP_BROWSER: chromium
 ${COMMON_ENV}
+
+workspace_state:
+${COMMON_WORKSPACE_STATE}
 
 `,
   'bun-dev': `${PROFILE_HEADER}
@@ -140,6 +149,9 @@ env:
   PLAYWRIGHT_MCP_BROWSER: chromium
 ${COMMON_ENV}
 
+workspace_state:
+${COMMON_WORKSPACE_STATE}
+
 `,
   'python-dev': `${PROFILE_HEADER}
 
@@ -165,6 +177,9 @@ post_setup: []
 
 env:
 ${COMMON_ENV}
+
+workspace_state:
+${COMMON_WORKSPACE_STATE}
 
 `,
   'rust-dev': `${PROFILE_HEADER}
@@ -194,6 +209,9 @@ post_setup:
 env:
 ${COMMON_ENV}
 
+workspace_state:
+${COMMON_WORKSPACE_STATE}
+
 `,
   'dotnet-dev': `${PROFILE_HEADER}
 
@@ -219,6 +237,9 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   DOTNET_NOLOGO: "1"
 ${COMMON_ENV}
+
+workspace_state:
+${COMMON_WORKSPACE_STATE}
 
 `,
 };

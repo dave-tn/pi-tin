@@ -16,6 +16,25 @@ const PositiveIntegerSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
 
 const BaseImageSchema = v.pipe(v.string(), v.regex(imageRefPattern));
 
+// Workspace-state entries are home-relative paths used as filesystem targets
+// for `container cp` and `container exec`. Config is trusted input, so these
+// constraints are robustness, not security: reject a leading '/' or any
+// '.'/'..' segment so a path cannot escape the home dir, and keep the charset
+// to simple path characters.
+const workspaceStatePathSegmentPattern = /^[A-Za-z0-9._-]+$/;
+function isWorkspaceStatePath(value: string): boolean {
+  return value
+    .split('/')
+    .every((segment) => segment !== '.' && segment !== '..' && workspaceStatePathSegmentPattern.test(segment));
+}
+const WorkspaceStatePathSchema = v.pipe(
+  v.string(),
+  v.check(
+    isWorkspaceStatePath,
+    'Workspace state paths must be home-relative (e.g. ".zsh_history" or ".local/share/zoxide"): no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".',
+  ),
+);
+
 export const ContainerProfileSchema = v.strictObject({
   description: v.string(),
   base_image: BaseImageSchema,
@@ -29,6 +48,7 @@ export const ContainerProfileSchema = v.strictObject({
   env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
   cpus: v.optional(PositiveIntegerSchema),
   memory: v.optional(v.pipe(v.string(), v.regex(memoryPattern))),
+  workspace_state: v.optional(v.array(WorkspaceStatePathSchema), []),
 });
 
 const HostMountSchema = v.strictObject({

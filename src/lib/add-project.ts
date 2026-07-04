@@ -83,6 +83,10 @@ export async function addProjectToChosenWorkspace(
         await deps.openWorkspace(target.name, { build: false, workdir });
         return;
       }
+      default: {
+        const _exhaustive: never = plan;
+        throw new Error(`Unhandled add-project action: ${JSON.stringify(_exhaustive)}`);
+      }
     }
   } catch (err) {
     handleActionError(err, deps);
@@ -109,5 +113,9 @@ export async function handleWorkspaceSelection(
       // 'open' is produced only by default-action's multi-match menu, which
       // handles it inline; the add-style menus never offer it.
       return;
+    default: {
+      const _exhaustive: never = choice;
+      throw new Error(`Unhandled workspace selection: ${JSON.stringify(_exhaustive)}`);
+    }
   }
 }

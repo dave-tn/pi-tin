@@ -12,6 +12,7 @@ const baseProfile: ContainerProfile = {
   post_install: [],
   post_setup: [],
   env: {},
+  workspace_state: [],
 };
 
 const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null };

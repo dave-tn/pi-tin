@@ -118,6 +118,45 @@ describe('ContainerProfileSchema optional collection fields', () => {
     expect(() => validateContainerProfile({ ...minimal, packages: ['bad name'] })).toThrow();
     expect(() => validateContainerProfile({ ...minimal, env: { 'BAD-KEY': 'x' } })).toThrow();
   });
+
+  test('workspace_state defaults to empty when omitted', () => {
+    expect(validateContainerProfile(minimal).workspace_state).toEqual([]);
+  });
+});
+
+describe('ContainerProfileSchema workspace_state', () => {
+  test('accepts home-relative file and directory paths', () => {
+    const profile = validateContainerProfile({
+      ...baseProfile,
+      workspace_state: ['.zsh_history', '.local/share/zoxide'],
+    });
+    expect(profile.workspace_state).toEqual(['.zsh_history', '.local/share/zoxide']);
+  });
+
+  test('rejects absolute paths', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['/etc/passwd'] })).toThrow();
+  });
+
+  test('rejects paths that escape home via .. segments', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['../secrets'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.local/../../x'] })).toThrow();
+  });
+
+  test('rejects bare . or .. segments', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['..'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['a/./b'] })).toThrow();
+  });
+
+  test('rejects paths with shell metacharacters or whitespace', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/$(whoami)'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a b'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a\nb'] })).toThrow();
+  });
+
+  test('rejects an empty path', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: [''] })).toThrow();
+  });
 });
 
 describe('ContainerProfileSchema cpus', () => {

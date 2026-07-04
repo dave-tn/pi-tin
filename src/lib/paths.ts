@@ -28,6 +28,11 @@ export function getStateDir(): string {
   return path.join(getConfigDir(), 'state');
 }
 
+/** Per-workspace host directory mirroring the container's workspace state. */
+export function getWorkspaceStateDir(workspaceName: string): string {
+  return path.join(getConfigDir(), 'workspace-state', workspaceName);
+}
+
 export function getBuildHashPath(workspaceName: string): string {
   return path.join(getStateDir(), `${workspaceName}.hash`);
 }

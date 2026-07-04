@@ -121,6 +121,14 @@ export function agentsWithSkipPermissions(packages: Tool[]): Array<{ binary: str
   return results;
 }
 
+// OpenCode is permissive by default (edit/bash → "allow") but still prompts on
+// external_directory access. Inside a pi-tin workspace the container IS the
+// boundary, so we flip that to "allow" and let the agent range across all
+// mounted projects without prompting. Delivered via OPENCODE_CONFIG_CONTENT —
+// inline JSON that OpenCode merges above the project's own opencode.json. The
+// doom-loop runaway guard and .env-read denial are left at their defaults.
+const OPENCODE_SANDBOX_CONFIG = JSON.stringify({ permission: { external_directory: 'allow' } });
+
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
   {
     name: 'Claude Code',
@@ -155,6 +163,9 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     binary: 'opencode',
     dotDirs: ['.local/share/opencode', '.config/opencode'],
     hostModeSupported: true,
+    // No skip-permissions flag needed (edit/bash default to "allow"); see
+    // OPENCODE_SANDBOX_CONFIG above for the external_directory bypass.
+    containerEnv: { OPENCODE_CONFIG_CONTENT: OPENCODE_SANDBOX_CONFIG },
   },
   {
     name: 'Amp',
