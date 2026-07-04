@@ -71,6 +71,29 @@ export function planImageBuild(options: PlanImageBuildOptions): ImageBuildPlan {
   };
 }
 
+export interface PlanBuildFailureFallbackOptions {
+  // A previously built image survives a failed rebuild (`container build` only
+  // retags on success), so it can still run — with stale config.
+  imagePresent: boolean;
+  // A human is attached and can answer a prompt.
+  isInteractive: boolean;
+}
+
+export type BuildFailureFallbackPlan =
+  | { action: 'offer' }
+  | { action: 'abort'; reason: 'no-image' | 'non-interactive' };
+
+// After a rebuild fails, decide whether we can offer to run the previous image.
+// Only when one exists AND a human can answer — a non-interactive caller must
+// not silently run stale config, nor hang on a prompt it can never answer.
+export function planBuildFailureFallback(
+  options: PlanBuildFailureFallbackOptions,
+): BuildFailureFallbackPlan {
+  if (!options.imagePresent) return { action: 'abort', reason: 'no-image' };
+  if (!options.isInteractive) return { action: 'abort', reason: 'non-interactive' };
+  return { action: 'offer' };
+}
+
 export type StopWorkspacePlan =
   | {
     action: 'noop';

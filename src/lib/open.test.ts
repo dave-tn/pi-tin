@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { planWorkspaceOpen, planAddProject, planImageBuild } from './workspace-plans.js';
+import { planWorkspaceOpen, planAddProject, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
 import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand } from './open.js';
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
@@ -381,6 +381,28 @@ describe('planImageBuild', () => {
       build: true,
       announceConfigChange: false,
     });
+  });
+});
+
+describe('planBuildFailureFallback', () => {
+  test('offers the previous image when one exists and a human is attached', () => {
+    expect(planBuildFailureFallback({ imagePresent: true, isInteractive: true }))
+      .toEqual({ action: 'offer' });
+  });
+
+  test('aborts when there is no previous image to fall back to', () => {
+    expect(planBuildFailureFallback({ imagePresent: false, isInteractive: true }))
+      .toEqual({ action: 'abort', reason: 'no-image' });
+  });
+
+  test('aborts non-interactively rather than hang on a prompt no one can answer', () => {
+    expect(planBuildFailureFallback({ imagePresent: true, isInteractive: false }))
+      .toEqual({ action: 'abort', reason: 'non-interactive' });
+  });
+
+  test('a missing image aborts even when non-interactive (no-image takes precedence)', () => {
+    expect(planBuildFailureFallback({ imagePresent: false, isInteractive: false }))
+      .toEqual({ action: 'abort', reason: 'no-image' });
   });
 });
 

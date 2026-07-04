@@ -380,6 +380,7 @@ Workspaces are **shared-session containers**. `pi-tin open` starts the workspace
 - **`open`**: Starts the workspace if needed, otherwise joins it. On a fresh start, pi-tin automatically rebuilds the image if the container profile or workspace build config has changed.
 - **`open --build`**: Forces an image rebuild on the next fresh start. If the workspace already has active sessions, pi-tin refuses and asks you to stop it first.
 - **Bare `pi-tin --build`**: From inside a directory matched by exactly one workspace (or after selecting one from multiple matches), behaves the same as `pi-tin open <workspace> --build`.
+- **Rebuild failure**: If a required rebuild fails (for example the machine is offline and the base image or a build step cannot be fetched) and a previously built image exists, pi-tin reports the failure and offers to open the workspace using that older image — your config changes stay unapplied until the next successful rebuild. It aborts instead when there is no previous image to fall back to, or when the session is non-interactive.
 - **Last session exit**: When the last host-side `pi-tin open` session closes, pi-tin starts an auto-stop countdown using `stopAfterLastSession` (default `30s`). Reopening during that grace period cancels the pending stop unless a fresh restart is needed to apply config changes.
 - **`stop`**: Stops a running workspace immediately.
 - **`delete`**: Removes the workspace configuration and its image. It refuses while sessions are still active.

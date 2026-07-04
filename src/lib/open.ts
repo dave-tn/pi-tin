@@ -53,7 +53,9 @@ import {
   sharedDirectoryLimitMessage,
   basenameCollisionMessage,
 } from './project-mounts.js';
-import { planWorkspaceOpen, planImageBuild } from './workspace-plans.js';
+import { planWorkspaceOpen, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
+import { isInteractiveSession, promptConfirm } from './confirmation.js';
+import { CliError, EXIT } from './cli-errors.js';
 
 const KEEPALIVE_COMMAND = [
   '/bin/sh',
@@ -440,11 +442,43 @@ function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): vo
   }
 }
 
-function ensureImageBuiltIfNeeded(
+// A failed `container build` never retags, so any previous image survives and
+// can still run — just with stale config. The real build error already streamed
+// to the terminal (buildImage inherits stdio), so we point back to it rather
+// than swallow it and re-print a rewritten version.
+async function handleBuildFailure(context: WorkspaceContext): Promise<void> {
+  const fallback = planBuildFailureFallback({
+    imagePresent: imageExists(context.imageTag),
+    isInteractive: isInteractiveSession(),
+  });
+
+  if (fallback.action === 'abort') {
+    const remediation = fallback.reason === 'no-image'
+      ? 'There is no previous image to fall back to — fix the build error above and retry.'
+      : `Re-run 'pi-tin open ${context.wsName}' interactively to choose whether to use the previous image.`;
+    throw new CliError('Image build failed — see the build output above.', EXIT.GENERAL, {
+      code: 'build_failed',
+      remediation,
+    });
+  }
+
+  const useExisting = await promptConfirm(
+    `Image rebuild failed. Open '${context.wsName}' using the previous image instead?`,
+  );
+  if (!useExisting) {
+    throw new CliError('Image build failed — see the build output above.', EXIT.GENERAL, {
+      code: 'build_failed',
+    });
+  }
+
+  console.warn(chalk.yellow('Warning: running the previous image — your config changes are not applied until the next successful rebuild.'));
+}
+
+async function ensureImageBuiltIfNeeded(
   context: WorkspaceContext,
   buildPlan: BuildPlan,
   reasons: { forceBuild: boolean; driftDetected: boolean },
-): void {
+): Promise<void> {
   const plan = planImageBuild({
     forceBuild: reasons.forceBuild,
     driftDetected: reasons.driftDetected,
@@ -461,7 +495,12 @@ function ensureImageBuiltIfNeeded(
     console.log(chalk.yellow('⚠ Container profile or workspace config has changed since last build.'));
     console.log(chalk.yellow('  Rebuilding image to apply changes...'));
   }
-  buildImageFromPlan(context, buildPlan);
+
+  try {
+    buildImageFromPlan(context, buildPlan);
+  } catch {
+    await handleBuildFailure(context);
+  }
 }
 
 function startWorkspaceContainer(options: {
@@ -638,7 +677,7 @@ export async function openWorkspace(
           }
         }
 
-        ensureImageBuiltIfNeeded(context, buildPlan, {
+        await ensureImageBuiltIfNeeded(context, buildPlan, {
           forceBuild: opts.build === true,
           driftDetected: hasBuildDrift,
         });
@@ -659,7 +698,7 @@ export async function openWorkspace(
         const runtimeEnv = resolveRuntimeEnv(context);
         await stopAndRemoveContainer(context.containerName);
         clearWorkspaceRuntimeState(context.wsName);
-        ensureImageBuiltIfNeeded(context, buildPlan, {
+        await ensureImageBuiltIfNeeded(context, buildPlan, {
           forceBuild: opts.build === true,
           driftDetected: hasBuildDrift,
         });
