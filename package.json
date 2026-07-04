@@ -62,7 +62,9 @@
   "scripts": {
     "build": "bun build src/cli.ts --outdir dist --target node --define \"PKG_VERSION='$(node -p \"require('./package.json').version\")'\" --define \"PKG_HOMEPAGE='$(node -p \"require('./package.json').homepage.split('#')[0]\")'\"",
     "test": "bun test",
-    "prepublishOnly": "tsc --noEmit && bun test && bun run build"
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun test && bun run build",
+    "prepublishOnly": "bun run check"
   },
   "type": "module"
 }
