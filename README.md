@@ -146,7 +146,7 @@ A container profile defines the container image: base image, packages, global to
 
 Defaults ship with pi-tin and are updated automatically when pi-tin is upgraded. To customise one, remove the `# This profile is managed by pi-tin...` comment at the top — pi-tin will then leave the file untouched on future updates — or copy it to a new name and modify the copy.
 
-The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), installs `@playwright/cli` plus Chromium, and sets `PLAYWRIGHT_MCP_BROWSER=chromium` so `playwright-cli` defaults to Chromium rather than the Chrome channel. All five managed profiles set `LANG`/`LC_ALL` (`C.UTF-8`) and `NODE_EXTRA_CA_CERTS`; `dotnet-dev` also sets `DOTNET_CLI_TELEMETRY_OPTOUT` and `DOTNET_NOLOGO`.
+The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), installs `@playwright/cli` plus Chromium, and sets `PLAYWRIGHT_MCP_BROWSER=chromium` so `playwright-cli` defaults to Chromium rather than the Chrome channel. All managed profiles set `LANG`/`LC_ALL` (`C.UTF-8`) and `NODE_EXTRA_CA_CERTS`; `dotnet-dev` also sets `DOTNET_CLI_TELEMETRY_OPTOUT` and `DOTNET_NOLOGO`.
 
 #### Container profile schema
 
@@ -155,7 +155,7 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 | `description`     | yes      | Human-readable label. |
 | `base_image`      | yes      | OCI image ref (e.g. `node:trixie-slim`, `debian:trixie-slim`). The package manager is auto-detected from the name — see `package_manager`. |
 | `package_manager` | no       | Override auto-detection (`apt` / `apk` / `dnf`). Detection: name prefixes `debian`/`ubuntu`/`node`/`python`/`oven/bun`/`buildpack-deps` → `apt`; `alpine` anywhere in the name (e.g. `python:3.12-alpine`) → `apk`; `fedora`/`rockylinux`/`almalinux` prefixes or a `/rhel`/`/ubi` path segment (e.g. `redhat/ubi9` — bare `rhel:9` is not recognised) → `dnf`. **Required when the base image name isn't recognised** (e.g. `mcr.microsoft.com/...`); generation throws otherwise. |
-| `user`            | yes      | Non-root username for the container. Must match `^[a-z_][a-z0-9_-]*$`. pi-tin sets `HOME` to `/home/<user>` (`/root` for `root`) and anchors its mounts (agent profiles, tmux, gh config) there; this wins over any home a base image already assigns to a pre-existing user of that name. |
+| `user`            | yes      | Non-root username for the container. Must match `^[a-z_][a-z0-9_-]*$`. pi-tin sets `HOME` to `/home/<user>` (`/root` for `root`) and anchors the mounts it manages there; this wins over any home a base image already assigns to a pre-existing user of that name. |
 | `packages`        | no       | System packages installed via the package manager. Defaults to `[]`. pi-tin enters a workspace via the container user's login shell (falling back to `/bin/sh`); to use a specific shell, install it here and set it as the login shell in `post_install` (e.g. `chsh -s "$(command -v zsh)" "$USERNAME"`, as the managed profiles do for zsh). |
 | `extra_packages`  | no       | Concatenated with `packages` into the **same** install step — no behavioural or layering difference; the split is purely organisational. Defaults to `[]`. |
 | `global_tools`    | no       | Packages installed globally with **npm** (always npm, regardless of base image), before workspace tools. Defaults to `[]`. |
@@ -168,7 +168,7 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 
 #### Workspace state
 
-A workspace container is semi-ephemeral: project code and a few host bridges (agent profiles, tmux, gh) are mounted live, but the rest of the container's home is rebuilt from the image whenever the container is recreated (a restart, or the first open after an auto-stop). That normally discards small, useful container-internal state like the `zoxide` jump database and shell history.
+A workspace container is semi-ephemeral: your project code and a few live host mounts survive because they're bind-mounted from the host, but the rest of the container's home is rebuilt from the image whenever the container is recreated (a restart, or the first open after an auto-stop). That normally discards small, useful container-internal state like the `zoxide` jump database and shell history.
 
 `workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. It is a snapshot, not a live mount — no shared-directory budget is used, and there is no sync during the session (last writer wins). State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies.
 
@@ -401,7 +401,7 @@ When you run `pi-tin` from a directory that no workspace includes, what happens 
 - **No workspaces yet**: pi-tin offers to create one.
 - **One or more workspaces exist**: pi-tin offers to **create a new workspace** or **add the current directory to an existing one**.
 
-Adding appends the directory to that workspace's `projects` list, preserving your YAML comments and formatting. pi-tin refuses without writing if the directory's basename collides with another project or if adding it would exceed the 22-mount limit.
+Adding appends the directory to that workspace's `projects` list, preserving your YAML comments and formatting. pi-tin refuses without writing if the directory's basename collides with another project or if adding it would exceed the mount limit.
 
 After the directory is added, the outcome depends on the target workspace's state:
 
@@ -415,7 +415,7 @@ directory is not already in, plus *Create new workspace*. `pi-tin add <name>`
 adds it straight to that workspace. The same rules apply: comments are
 preserved, a stopped workspace opens with the project mounted, a running one
 prints a restart reminder, and an add that would collide on a project name or
-exceed the 22-mount limit is refused without writing.
+exceed the mount limit is refused without writing.
 
 ## SSH Agent Forwarding
 
