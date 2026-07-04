@@ -41,6 +41,59 @@ export type WorkspaceOpenPlan =
     message: string;
   };
 
+export interface PlanImageBuildOptions {
+  // The user passed --build. Always rebuilds, but is not itself a config change.
+  forceBuild: boolean;
+  // The persisted runtime-meta build hash no longer matches the computed one.
+  driftDetected: boolean;
+  // Build hash recorded by the last successful build, or null if never built.
+  previousBuildHash: string | null;
+  newBuildHash: string;
+  imagePresent: boolean;
+}
+
+export interface ImageBuildPlan {
+  build: boolean;
+  // Whether to tell the user the rebuild was caused by a config change. Only
+  // set when an existing image is being rebuilt because config changed —
+  // never on a first build or a bare --build with no changes.
+  announceConfigChange: boolean;
+}
+
+export function planImageBuild(options: PlanImageBuildOptions): ImageBuildPlan {
+  const configChanged =
+    options.driftDetected
+    || (options.previousBuildHash !== null && options.previousBuildHash !== options.newBuildHash);
+
+  return {
+    build: options.forceBuild || !options.imagePresent || configChanged,
+    announceConfigChange: configChanged && options.imagePresent,
+  };
+}
+
+export interface PlanBuildFailureFallbackOptions {
+  // A previously built image survives a failed rebuild (`container build` only
+  // retags on success), so it can still run — with stale config.
+  imagePresent: boolean;
+  // A human is attached and can answer a prompt.
+  isInteractive: boolean;
+}
+
+export type BuildFailureFallbackPlan =
+  | { action: 'offer' }
+  | { action: 'abort'; reason: 'no-image' | 'non-interactive' };
+
+// After a rebuild fails, decide whether we can offer to run the previous image.
+// Only when one exists AND a human can answer — a non-interactive caller must
+// not silently run stale config, nor hang on a prompt it can never answer.
+export function planBuildFailureFallback(
+  options: PlanBuildFailureFallbackOptions,
+): BuildFailureFallbackPlan {
+  if (!options.imagePresent) return { action: 'abort', reason: 'no-image' };
+  if (!options.isInteractive) return { action: 'abort', reason: 'non-interactive' };
+  return { action: 'offer' };
+}
+
 export type StopWorkspacePlan =
   | {
     action: 'noop';

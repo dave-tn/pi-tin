@@ -6,7 +6,6 @@ import { execFileSync, spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir } from './paths.js';
 import { ensureInitialised } from './init-guard.js';
-import { loadConfig } from './config.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
 import { notFoundWorkspaceError } from './workspace-errors.js';
@@ -35,7 +34,7 @@ import {
   getHostTmuxConfigDir,
   getHostTmuxPluginsDir,
 } from './tmux.js';
-import type { Config, ContainerProfile, Workspace } from './validators.js';
+import type { ContainerProfile, Workspace } from './validators.js';
 import {
   withWorkspaceLock,
   reconcileWorkspaceRuntimeState,
@@ -54,7 +53,9 @@ import {
   sharedDirectoryLimitMessage,
   basenameCollisionMessage,
 } from './project-mounts.js';
-import { planWorkspaceOpen } from './workspace-plans.js';
+import { planWorkspaceOpen, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
+import { isInteractiveSession, promptConfirm } from './confirmation.js';
+import { CliError, EXIT } from './cli-errors.js';
 
 const KEEPALIVE_COMMAND = [
   '/bin/sh',
@@ -62,13 +63,23 @@ const KEEPALIVE_COMMAND = [
   'trap "exit 0" TERM INT; while :; do sleep 86400; done',
 ];
 
+// `container exec` runs a literal command and never consults the login shell,
+// so resolve it here (field 7 of /etc/passwd), falling back to /bin/sh. `user`
+// is posixUserPattern-validated, so it is safe to interpolate.
+export function loginShellCommand(user: string): string[] {
+  return [
+    '/bin/sh',
+    '-c',
+    `s=$(grep "^${user}:" /etc/passwd | cut -d: -f7); [ -x "$s" ] || s=/bin/sh; exec "$s"`,
+  ];
+}
+
 interface WorkspaceContext {
   wsName: string;
   containerName: string;
   imageTag: string;
   workspace: Workspace;
   containerProfile: ContainerProfile;
-  config: Config;
   resources: ResolvedResources;
 }
 
@@ -124,8 +135,6 @@ function writeBuildHash(hashPath: string, buildHash: string): void {
 function loadWorkspaceContext(wsName: string): WorkspaceContext {
   ensureInitialised();
 
-  const config = loadConfig();
-
   let workspace: Workspace;
   try {
     workspace = loadWorkspace(wsName);
@@ -148,7 +157,6 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
     imageTag: imageTagFor(wsName),
     workspace,
     containerProfile,
-    config,
     resources,
   };
 }
@@ -161,7 +169,7 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
   const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
   const claudeConfig = claudeConfigJson(tools, projectContainerPaths);
-  const { dockerfile, extras } = generateDockerfile(context.containerProfile, context.config.shell, tools, {
+  const { dockerfile, extras } = generateDockerfile(context.containerProfile, tools, {
     agentWraps,
     agentEnv,
     claudeManagedSettings,
@@ -434,23 +442,64 @@ function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): vo
   }
 }
 
-function ensureImageBuiltIfNeeded(
-  context: WorkspaceContext,
-  buildPlan: BuildPlan,
-  forceBuild: boolean,
-): void {
-  const previousHash = readBuildHash(buildPlan.hashPath);
-  const configChanged = previousHash !== null && previousHash !== buildPlan.buildHash;
+// A failed `container build` never retags, so any previous image survives and
+// can still run — just with stale config. The real build error already streamed
+// to the terminal (buildImage inherits stdio), so we point back to it rather
+// than swallow it and re-print a rewritten version.
+async function handleBuildFailure(context: WorkspaceContext): Promise<void> {
+  const fallback = planBuildFailureFallback({
+    imagePresent: imageExists(context.imageTag),
+    isInteractive: isInteractiveSession(),
+  });
 
-  let needsBuild = forceBuild || !imageExists(context.imageTag);
-  if (!needsBuild && configChanged) {
-    console.log(chalk.yellow('⚠ Container profile or workspace config has changed since last build.'));
-    console.log(chalk.yellow('  Rebuilding image to apply changes...'));
-    needsBuild = true;
+  if (fallback.action === 'abort') {
+    const remediation = fallback.reason === 'no-image'
+      ? 'There is no previous image to fall back to — fix the build error above and retry.'
+      : `Re-run 'pi-tin open ${context.wsName}' interactively to choose whether to use the previous image.`;
+    throw new CliError('Image build failed — see the build output above.', EXIT.GENERAL, {
+      code: 'build_failed',
+      remediation,
+    });
   }
 
-  if (needsBuild) {
+  const useExisting = await promptConfirm(
+    `Image rebuild failed. Open '${context.wsName}' using the previous image instead?`,
+  );
+  if (!useExisting) {
+    throw new CliError('Image build failed — see the build output above.', EXIT.GENERAL, {
+      code: 'build_failed',
+    });
+  }
+
+  console.warn(chalk.yellow('Warning: running the previous image — your config changes are not applied until the next successful rebuild.'));
+}
+
+async function ensureImageBuiltIfNeeded(
+  context: WorkspaceContext,
+  buildPlan: BuildPlan,
+  reasons: { forceBuild: boolean; driftDetected: boolean },
+): Promise<void> {
+  const plan = planImageBuild({
+    forceBuild: reasons.forceBuild,
+    driftDetected: reasons.driftDetected,
+    previousBuildHash: readBuildHash(buildPlan.hashPath),
+    newBuildHash: buildPlan.buildHash,
+    imagePresent: imageExists(context.imageTag),
+  });
+
+  if (!plan.build) {
+    return;
+  }
+
+  if (plan.announceConfigChange) {
+    console.log(chalk.yellow('⚠ Container profile or workspace config has changed since last build.'));
+    console.log(chalk.yellow('  Rebuilding image to apply changes...'));
+  }
+
+  try {
     buildImageFromPlan(context, buildPlan);
+  } catch {
+    await handleBuildFailure(context);
   }
 }
 
@@ -628,7 +677,10 @@ export async function openWorkspace(
           }
         }
 
-        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true);
+        await ensureImageBuiltIfNeeded(context, buildPlan, {
+          forceBuild: opts.build === true,
+          driftDetected: hasBuildDrift,
+        });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
@@ -646,7 +698,10 @@ export async function openWorkspace(
         const runtimeEnv = resolveRuntimeEnv(context);
         await stopAndRemoveContainer(context.containerName);
         clearWorkspaceRuntimeState(context.wsName);
-        ensureImageBuiltIfNeeded(context, buildPlan, opts.build === true || hasBuildDrift);
+        await ensureImageBuiltIfNeeded(context, buildPlan, {
+          forceBuild: opts.build === true,
+          driftDetected: hasBuildDrift,
+        });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
@@ -666,7 +721,7 @@ export async function openWorkspace(
   try {
     execResult = execContainer({
       name: context.containerName,
-      command: [context.config.shell],
+      command: loginShellCommand(context.containerProfile.user),
       workdir: opts.workdir,
       user: context.containerProfile.user,
     });

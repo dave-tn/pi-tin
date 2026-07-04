@@ -15,8 +15,16 @@ export function planConfirmation(input: { force: boolean; isInteractive: boolean
   return { kind: 'prompt' };
 }
 
-function isInteractiveSession(): boolean {
+export function isInteractiveSession(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+// A neutral yes/no prompt for non-destructive recovery choices (e.g. offering a
+// fallback after a failed rebuild). Callers must confirm a human is attached
+// (isInteractiveSession) first — a non-interactive path must decide without
+// prompting, never hang here.
+export async function promptConfirm(message: string, promptDefault = false): Promise<boolean> {
+  return confirm({ message, default: promptDefault });
 }
 
 // Effectful gate for destructive commands. Returns whether to proceed.

@@ -2,9 +2,9 @@ import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { planWorkspaceOpen, planAddProject } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan } from './open.js';
-import { validateConfig, validateContainerProfile, validateWorkspace } from './validators.js';
+import { planWorkspaceOpen, planAddProject, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand } from './open.js';
+import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
 import { CliError, EXIT } from './cli-errors.js';
@@ -177,7 +177,6 @@ describe('computeRuntimeStartPlan', () => {
         imageTag: imageTagFor('demo'),
         workspace,
         containerProfile,
-        config: validateConfig({ shell: 'zsh' }),
         resources: resolveResources(containerProfile),
       });
 
@@ -333,6 +332,80 @@ describe('planWorkspaceOpen', () => {
   });
 });
 
+describe('planImageBuild', () => {
+  const base = {
+    forceBuild: false,
+    driftDetected: false,
+    previousBuildHash: 'abc',
+    newBuildHash: 'abc',
+    imagePresent: true,
+  };
+
+  test('does not build when nothing changed and the image exists', () => {
+    expect(planImageBuild(base)).toEqual({ build: false, announceConfigChange: false });
+  });
+
+  test('builds without announcing when the image is missing (first build)', () => {
+    expect(planImageBuild({ ...base, imagePresent: false })).toEqual({
+      build: true,
+      announceConfigChange: false,
+    });
+  });
+
+  // Regression: a drift-triggered restart rebuilds the existing image, so the
+  // user must be told why. Previously drift was folded into forceBuild, which
+  // silenced this message.
+  test('announces the config change when drift rebuilds an existing image', () => {
+    expect(planImageBuild({ ...base, driftDetected: true })).toEqual({
+      build: true,
+      announceConfigChange: true,
+    });
+  });
+
+  test('announces when the recorded build hash differs from the new one', () => {
+    expect(planImageBuild({ ...base, newBuildHash: 'def' })).toEqual({
+      build: true,
+      announceConfigChange: true,
+    });
+  });
+
+  test('does not announce a bare --build with no config change', () => {
+    expect(planImageBuild({ ...base, forceBuild: true })).toEqual({
+      build: true,
+      announceConfigChange: false,
+    });
+  });
+
+  test('treats a never-built image (null previous hash) as not a config change', () => {
+    expect(planImageBuild({ ...base, previousBuildHash: null, imagePresent: false })).toEqual({
+      build: true,
+      announceConfigChange: false,
+    });
+  });
+});
+
+describe('planBuildFailureFallback', () => {
+  test('offers the previous image when one exists and a human is attached', () => {
+    expect(planBuildFailureFallback({ imagePresent: true, isInteractive: true }))
+      .toEqual({ action: 'offer' });
+  });
+
+  test('aborts when there is no previous image to fall back to', () => {
+    expect(planBuildFailureFallback({ imagePresent: false, isInteractive: true }))
+      .toEqual({ action: 'abort', reason: 'no-image' });
+  });
+
+  test('aborts non-interactively rather than hang on a prompt no one can answer', () => {
+    expect(planBuildFailureFallback({ imagePresent: true, isInteractive: false }))
+      .toEqual({ action: 'abort', reason: 'non-interactive' });
+  });
+
+  test('a missing image aborts even when non-interactive (no-image takes precedence)', () => {
+    expect(planBuildFailureFallback({ imagePresent: false, isInteractive: false }))
+      .toEqual({ action: 'abort', reason: 'no-image' });
+  });
+});
+
 describe('planAddProject', () => {
   const base = {
     projectPath: '/Users/dave/Dev/new-app',
@@ -388,5 +461,20 @@ describe('planAddProject', () => {
     expect(plan.action).toBe('reject');
     if (plan.action !== 'reject') throw new Error('wrong action');
     expect(plan.message).toContain('up to 22');
+  });
+});
+
+describe('loginShellCommand', () => {
+  test('resolves the user login shell and falls back to /bin/sh', () => {
+    const command = loginShellCommand('dev');
+    expect(command[0]).toBe('/bin/sh');
+    expect(command[1]).toBe('-c');
+    expect(command[2]).toContain('grep "^dev:" /etc/passwd');
+    expect(command[2]).toContain('[ -x "$s" ] || s=/bin/sh');
+    expect(command[2]).toContain('exec "$s"');
+  });
+
+  test('interpolates the given username into the passwd lookup', () => {
+    expect(loginShellCommand('coder')[2]).toContain('grep "^coder:" /etc/passwd');
   });
 });

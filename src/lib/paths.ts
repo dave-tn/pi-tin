@@ -36,10 +36,6 @@ export function getUpdateCheckPath(): string {
   return path.join(getStateDir(), 'update-check.json');
 }
 
-export function getConfigPath(): string {
-  return path.join(getConfigDir(), 'config.yaml');
-}
-
 export function getHostGhConfigDir(): string {
   return path.join(os.homedir(), '.config', 'gh');
 }

@@ -60,18 +60,21 @@ function installPackagesLines(pm: PackageManager, packages: string[]): string[] 
   }
 }
 
-function createUserLines(pm: PackageManager, shell: string): string[] {
+// No --shell here: profiles own the login shell (managed ones `chsh` to zsh in
+// post_install), and omitting it avoids a build break when a profile ships no
+// shell binary.
+function createUserLines(pm: PackageManager): string[] {
   switch (pm) {
     case 'apt':
     case 'dnf':
       return [
         'RUN groupadd --force $USERNAME \\',
-        `    && (id -u $USERNAME >/dev/null 2>&1 || useradd --create-home --shell $(which ${shell}) --gid $USERNAME $USERNAME)`,
+        `    && (id -u $USERNAME >/dev/null 2>&1 || useradd --create-home --gid $USERNAME $USERNAME)`,
       ];
     case 'apk':
       return [
         `RUN addgroup -S $USERNAME 2>/dev/null || true \\`,
-        `    && (id -u $USERNAME >/dev/null 2>&1 || adduser -D -s $(which ${shell}) -G $USERNAME $USERNAME)`,
+        `    && (id -u $USERNAME >/dev/null 2>&1 || adduser -D -G $USERNAME $USERNAME)`,
       ];
   }
 }
@@ -174,7 +177,6 @@ function generateEntrypoint(packageSpecs: string[], agentWraps: AgentWrap[]): st
 
 export function generateDockerfile(
   profile: ContainerProfile,
-  shell: string,
   packages: Tool[],
   opts: {
     agentWraps: AgentWrap[];
@@ -202,7 +204,7 @@ export function generateDockerfile(
   const hasSudo = allPackages.includes('sudo');
   lines.push(`ARG USERNAME=${user}`);
   lines.push(`ARG HOME_DIR=${homeDir}`);
-  lines.push(...createUserLines(pm, shell));
+  lines.push(...createUserLines(pm));
   if (hasSudo) {
     lines.push(
       `RUN echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \\`,
@@ -302,7 +304,7 @@ export function generateDockerfile(
     lines.push('');
   }
 
-  lines.push(`CMD ["${shell}"]`);
+  lines.push('CMD ["/bin/sh"]');
 
   if (packages.length > 0) {
     lines.push('ENTRYPOINT ["/usr/local/bin/pi-tin-entrypoint"]');
