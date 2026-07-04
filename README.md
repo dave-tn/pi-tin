@@ -164,6 +164,15 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 | `env`             | no       | Environment variables. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings (quote numbers, e.g. `"1"`) and are auto-quoted/escaped for the Dockerfile. Defaults to `{}`. |
 | `cpus`            | no       | CPU limit, positive integer. Default: host cores − 2 (min 2). |
 | `memory`          | no       | Memory limit string, e.g. `"16g"`. K/M/G/T/P suffix (optional trailing `b`). Default: `8g`. |
+| `workspace_state` | no       | Home-relative paths carried across container restarts — see [Workspace state](#workspace-state). Each path must be home-relative (no leading `/`, no `.`/`..` segments). Defaults to `[]`. |
+
+#### Workspace state
+
+A workspace container is semi-ephemeral: project code and a few host bridges (agent profiles, tmux, gh) are mounted live, but the rest of the container's home is rebuilt from the image whenever the container is recreated (a restart, or the first open after an auto-stop). That normally discards small, useful container-internal state like the `zoxide` jump database and shell history.
+
+`workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. It is a snapshot, not a live mount — no shared-directory budget is used, and there is no sync during the session (last writer wins). State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies.
+
+Keep entries to small, inert, tool-owned data (databases, history) — not shell rc files or anything executed. Agent sessions are **not** covered here; they persist via [agent profiles](#agent-profiles) instead.
 
 #### Creating custom container profiles
 

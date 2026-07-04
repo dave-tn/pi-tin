@@ -28,6 +28,7 @@ import { AUTO_STOP_COMMAND } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
+import { syncWorkspaceState } from './workspace-state.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
   ensureWorkspaceTmuxDir,
@@ -594,6 +595,16 @@ async function finishWorkspaceSession(
       return 'Session closed.';
     }
 
+    // Container is still running: snapshot workspace state out now, before any
+    // stop/delete path (auto-stop, or the next fresh start) can tear it down.
+    syncWorkspaceState({
+      containerName: context.containerName,
+      workspaceName: context.wsName,
+      entries: context.containerProfile.workspace_state,
+      user: context.containerProfile.user,
+      direction: 'copy-out',
+    });
+
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
     if (runtime.runtimeState !== 'ok') {
       return 'Session closed.';
@@ -712,6 +723,15 @@ export async function openWorkspace(
 
   if (opened.mode === 'started') {
     console.log(chalk.green(`Started workspace '${context.wsName}'`));
+    // Fresh container: restore the previous life's workspace state before the
+    // interactive shell begins. Not on join — the running container already has it.
+    syncWorkspaceState({
+      containerName: context.containerName,
+      workspaceName: context.wsName,
+      entries: context.containerProfile.workspace_state,
+      user: context.containerProfile.user,
+      direction: 'copy-in',
+    });
   } else {
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
   }

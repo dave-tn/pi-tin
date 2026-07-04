@@ -310,6 +310,34 @@ export function execContainer(options: ExecOptions): ExecResult {
   };
 }
 
+// Copy a host path into the running container. Apple `container cp` addresses
+// the container side as `<id>:/absolute/path` and works only while running.
+export function copyToContainer(name: string, hostPath: string, containerPath: string): void {
+  execFileSync('container', ['cp', hostPath, `${name}:${containerPath}`], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+// Copy a path out of the running container onto the host.
+export function copyFromContainer(name: string, containerPath: string, hostPath: string): void {
+  execFileSync('container', ['cp', `${name}:${containerPath}`, hostPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
+
+// Run a non-interactive command in the running container (no TTY), optionally as
+// a specific user. Distinct from execContainer, which attaches an interactive
+// TTY for the login shell.
+export function execContainerCommand(options: { name: string; user?: string; command: string[] }): void {
+  const args = [
+    'exec',
+    ...(options.user ? ['--user', options.user] : []),
+    options.name,
+    ...options.command,
+  ];
+  execFileSync('container', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
 export function stopContainer(name: string): void {
   execFileSync('container', ['stop', name], {
     stdio: ['pipe', 'pipe', 'pipe'],
