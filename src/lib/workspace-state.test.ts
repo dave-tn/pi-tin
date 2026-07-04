@@ -72,9 +72,9 @@ describe('planWorkspaceStateSync ordering and edges', () => {
       direction: 'copy-in',
     });
 
-    const containerPaths = ops
-      .filter((op) => op.kind === 'copy-in')
-      .map((op) => op.containerPath);
+    const containerPaths = ops.flatMap((op) =>
+      op.kind === 'copy-in' ? [op.containerPath] : [],
+    );
     expect(containerPaths).toEqual(['/home/dev/.zsh_history', '/home/dev/.local/share/zoxide']);
   });
 
