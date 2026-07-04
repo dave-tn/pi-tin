@@ -269,6 +269,33 @@ describe('generateDockerfile', () => {
     expect(extras).toEqual([]);
   });
 
+  test('guards npm availability before installing workspace packages', () => {
+    const packages: Tool[] = [
+      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    ];
+    const { dockerfile } = generateDockerfile(baseProfile, packages, noWraps);
+
+    const guardLine = dockerfile.indexOf('command -v npm');
+    const installLine = dockerfile.indexOf('npm install -g @anthropic-ai/claude-code@latest');
+    expect(guardLine).toBeGreaterThan(-1);
+    expect(installLine).toBeGreaterThan(guardLine);
+  });
+
+  test('guards npm availability before installing global tools', () => {
+    const profile: ContainerProfile = { ...baseProfile, global_tools: ['typescript@latest'] };
+    const { dockerfile } = generateDockerfile(profile, [], noWraps);
+
+    const guardLine = dockerfile.indexOf('command -v npm');
+    const installLine = dockerfile.indexOf('npm install -g typescript@latest');
+    expect(guardLine).toBeGreaterThan(-1);
+    expect(installLine).toBeGreaterThan(guardLine);
+  });
+
+  test('omits the npm guard when the workspace installs nothing via npm', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
+    expect(dockerfile).not.toContain('command -v npm');
+  });
+
   test('sets no login shell in useradd; profile owns the shell', () => {
     const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 

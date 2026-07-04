@@ -86,6 +86,13 @@ export interface AgentWrap {
 
 const CLAUDE_MANAGED_SETTINGS_PATH = '/etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json';
 
+// pi-tin installs all agent tools and `global_tools` with npm, whatever the base
+// image. A custom profile that ships no Node.js would otherwise fail deep in the
+// build with npm's own "not found" error; this guard fails early with an
+// actionable message instead. Managed profiles install Node.js via NodeSource.
+const NPM_PREFLIGHT =
+  'RUN command -v npm >/dev/null 2>&1 || { echo "pi-tin: this workspace installs npm packages (agent tools and/or global_tools) but npm is not available in this image. Install Node.js in the container profile (e.g. a NodeSource step in post_install, as the managed profiles do) or remove the tools." >&2; exit 1; }';
+
 // Escape a value for safe use inside a Dockerfile `ENV KEY="..."` directive.
 // Protects against malformed Dockerfiles (stray `"`) and unintended build-time
 // variable expansion (`$VAR`). Backslashes must be escaped first.
@@ -280,6 +287,12 @@ export function generateDockerfile(
   lines.push(`USER ${user}`);
   lines.push('WORKDIR /workspace');
   lines.push('');
+
+  // Fail early and clearly if the image has no npm but the workspace needs it.
+  if (profile.global_tools.length > 0 || packages.length > 0) {
+    lines.push(NPM_PREFLIGHT);
+    lines.push('');
+  }
 
   // Global tool installs (as user, using npm prefix).
   // Single RUN so npm parallelises fetches and we pay npm's cold start once.
