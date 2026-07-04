@@ -170,9 +170,12 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 
 A workspace container is semi-ephemeral: your project code and a few live host mounts survive because they're bind-mounted from the host, but the rest of the container's home is rebuilt from the image whenever the container is recreated (a restart, or the first open after an auto-stop). That normally discards small, useful container-internal state like the `zoxide` jump database and shell history.
 
-`workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. It is a snapshot, not a live mount — no shared-directory budget is used, and there is no sync during the session (last writer wins). State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies.
+`workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies.
 
-Keep entries to small, inert, tool-owned data (databases, history) — not shell rc files or anything executed. Agent sessions are **not** covered here; they persist via [agent profiles](#agent-profiles) instead.
+> [!NOTE]
+> This is a **snapshot, not a live mount.** State is copied in at start and out at close — never synced live, and no shared-directory budget is used. If two sessions run against the same workspace, the last to close wins. It is not a substitute for host mounts.
+
+Keep `workspace_state` deliberately small and tightly coupled to the container's own tooling — inert, tool-owned data such as databases and history, not shell rc files or anything executed. It exists only to smooth over the container's ephemerality for a few specific dev tools; it is **not** a general state-sync or backup mechanism. Everything else should stay ephemeral, with your code and working files living on host mounts instead. Agent sessions are **not** covered here; they persist via [agent profiles](#agent-profiles) instead.
 
 #### Creating custom container profiles
 

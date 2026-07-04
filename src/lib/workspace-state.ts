@@ -19,7 +19,8 @@ export type WorkspaceStateOp =
   | { kind: 'chown-container-path'; containerPath: string; user: string }
   | { kind: 'ensure-host-parent'; hostPath: string }
   | { kind: 'remove-host-path'; hostPath: string }
-  | { kind: 'copy-out'; containerPath: string; hostPath: string };
+  | { kind: 'copy-out'; containerPath: string; hostPath: string }
+  | { kind: 'promote-temp'; tempPath: string; hostPath: string };
 
 export interface WorkspaceStatePlanInput {
   entries: string[];
@@ -31,9 +32,12 @@ export interface WorkspaceStatePlanInput {
 // Copy-in removes the destination first (avoids `container cp`'s
 // existing-directory nesting trap and stale contents), copies, then chowns:
 // copied-in files land root-owned and directories keep the host uid, neither
-// writable by the container user until fixed. Copy-out mirrors the file back to
-// the host, replacing any previous snapshot. Both are best-effort at execution
-// time — a missing source just yields nothing.
+// writable by the container user until fixed. Copy-out copies into a temp
+// sibling and only swaps it into place if the copy produced it, so a session
+// that never recreated the source (copy fails) leaves the previous snapshot
+// intact rather than destroying it. Copying to a fresh temp path also sidesteps
+// the nesting trap without a pre-emptive delete. Both directions are
+// best-effort at execution time — a missing source just yields nothing.
 export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): WorkspaceStateOp[] {
   const containerHome = containerHomeDir(input.user);
 
@@ -49,10 +53,12 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
       ];
     }
 
+    const tempPath = `${hostPath}.pi-tin-tmp`;
     return [
       { kind: 'ensure-host-parent', hostPath },
-      { kind: 'remove-host-path', hostPath },
-      { kind: 'copy-out', containerPath, hostPath },
+      { kind: 'remove-host-path', hostPath: tempPath },
+      { kind: 'copy-out', containerPath, hostPath: tempPath },
+      { kind: 'promote-temp', tempPath, hostPath },
     ];
   });
 }
@@ -86,6 +92,20 @@ function runOp(containerName: string, op: WorkspaceStateOp): void {
     case 'copy-out':
       copyFromContainer(containerName, op.containerPath, op.hostPath);
       return;
+    case 'promote-temp':
+      // Only swap when the copy actually produced the temp. If copy-out failed,
+      // the temp is absent and the previous snapshot is left untouched — a bad
+      // session never destroys good state.
+      if (!fs.existsSync(op.tempPath)) return;
+      fs.rmSync(op.hostPath, { recursive: true, force: true });
+      fs.renameSync(op.tempPath, op.hostPath);
+      return;
+    default: {
+      // A new WorkspaceStateOp kind must be handled above; this makes the
+      // omission a compile error rather than a silently dropped op.
+      const _exhaustive: never = op;
+      throw new Error(`Unhandled workspace-state op: ${JSON.stringify(_exhaustive)}`);
+    }
   }
 }
 

@@ -47,7 +47,7 @@ describe('planWorkspaceStateSync copy-in', () => {
 });
 
 describe('planWorkspaceStateSync copy-out', () => {
-  test('per entry: ensure host parent, remove stale host copy, then copy out', () => {
+  test('per entry: copy into a temp sibling, then swap it into place', () => {
     const ops = planWorkspaceStateSync({
       entries: ['.zsh_history'],
       user: 'dev',
@@ -57,9 +57,26 @@ describe('planWorkspaceStateSync copy-out', () => {
 
     expect(ops).toEqual([
       { kind: 'ensure-host-parent', hostPath: '/host/workspace-state/myws/.zsh_history' },
-      { kind: 'remove-host-path', hostPath: '/host/workspace-state/myws/.zsh_history' },
-      { kind: 'copy-out', containerPath: '/home/dev/.zsh_history', hostPath: '/host/workspace-state/myws/.zsh_history' },
+      { kind: 'remove-host-path', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
+      { kind: 'copy-out', containerPath: '/home/dev/.zsh_history', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
+      { kind: 'promote-temp', tempPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp', hostPath: '/host/workspace-state/myws/.zsh_history' },
     ]);
+  });
+
+  test('copies out before removing the previous snapshot, so a failed copy cannot destroy it', () => {
+    const ops = planWorkspaceStateSync({
+      entries: ['.zsh_history'],
+      user: 'dev',
+      hostStateDir,
+      direction: 'copy-out',
+    });
+
+    const copyOutIndex = ops.findIndex((op) => op.kind === 'copy-out');
+    const promoteIndex = ops.findIndex((op) => op.kind === 'promote-temp');
+    // The only op that touches the real snapshot path is promote-temp, and it
+    // runs after the copy — nothing deletes the live snapshot up front.
+    expect(copyOutIndex).toBeLessThan(promoteIndex);
+    expect(ops.some((op) => op.kind === 'remove-host-path' && op.hostPath === '/host/workspace-state/myws/.zsh_history')).toBe(false);
   });
 });
 
