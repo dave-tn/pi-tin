@@ -130,6 +130,24 @@ describe('container-lifecycle', () => {
     expect(harness.calls).toEqual(['stop']);
   });
 
+  test('surfaces a restart hint when container stop itself times out', async () => {
+    const harness = createHarness({
+      state: 'running',
+      onStop: () => {
+        const error = new Error('spawnSync container ETIMEDOUT');
+        Object.assign(error, { code: 'ETIMEDOUT' });
+        throw error;
+      },
+    });
+
+    await expect(harness.api.stopAndRemoveContainer('demo'))
+      .rejects.toThrow(
+        "Apple 'container stop' did not respond within 5s for container 'demo'. Restart the container system with 'container system stop' and then 'container system start'.",
+      );
+
+    expect(harness.calls).toEqual(['stop']);
+  });
+
   test('escalates to kill after the timeout when forced, then removes', async () => {
     const harness = createHarness({
       state: 'running',

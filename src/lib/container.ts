@@ -8,6 +8,7 @@ import {
   ImageListSchema,
   type ListedContainer,
 } from './validators.js';
+import { isRecord } from './guards.js';
 
 export interface VolumeMount {
   host: string;
@@ -32,6 +33,53 @@ export interface ExecOptions {
   workdir?: string | undefined;
   env?: Record<string, string> | undefined;
   user?: string | undefined;
+}
+
+export interface ContainerExecFileOptions {
+  encoding: 'utf-8';
+  stdio: ['pipe', 'pipe', 'pipe'];
+  timeout: number;
+  killSignal: 'SIGKILL';
+}
+
+export type ContainerSubprocessRunner = (
+  file: string,
+  args: string[],
+  options: ContainerExecFileOptions,
+) => void;
+
+interface CopyToContainerOptions {
+  name: string;
+  hostPath: string;
+  containerPath: string;
+  run?: ContainerSubprocessRunner | undefined;
+}
+
+interface CopyFromContainerOptions {
+  name: string;
+  containerPath: string;
+  hostPath: string;
+  run?: ContainerSubprocessRunner | undefined;
+}
+
+interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
+  run?: ContainerSubprocessRunner | undefined;
+}
+
+// Apple `container` subcommands can wedge indefinitely when the runtime is
+// poisoned, so every non-interactive invocation in this module carries a
+// deadline. The deliberate exceptions are the interactive attach
+// (execContainer) and the streaming `container build` — both are user-visible
+// and interruptible with Ctrl-C.
+export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
+
+// `container run` boots a VM for the container; give a cold start more
+// headroom than the flat deadline before declaring the runtime wedged.
+export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
+
+/** Recovery steps for a wedged container runtime, shared by every timeout message. */
+export function containerSystemRecoveryHint(): string {
+  return "Restart the container system with 'container system stop' and then 'container system start'. If those commands hang too, restart the launchd service with 'launchctl kickstart -k gui/$(id -u)/com.apple.container.apiserver', or log out and back in.";
 }
 
 export interface ExecResult {
@@ -118,7 +166,12 @@ const execContainerList: ContainerListExec = () =>
   execFileSync(
     'container',
     ['list', '--all', '--format', 'json'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CONTAINER_SUBPROCESS_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    },
   );
 
 /**
@@ -150,6 +203,8 @@ export function imageExists(tag: string): boolean {
   try {
     execFileSync('container', ['image', 'inspect', tag], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CONTAINER_SUBPROCESS_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
     return true;
   } catch {
@@ -158,12 +213,16 @@ export function imageExists(tag: string): boolean {
 }
 
 export function buildImage(tag: string, contextDir: string): void {
+  // Deliberately unbounded: builds legitimately run for minutes, stream to the
+  // terminal (stdio inherit), and are interruptible with Ctrl-C.
   execFileSync('container', ['build', '--tag', tag, contextDir], {
     stdio: 'inherit',
   });
   try {
     execFileSync('container', ['builder', 'stop'], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CONTAINER_SUBPROCESS_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
   } catch {
     console.warn('Warning: failed to stop builder VM after build — it may have already exited unexpectedly');
@@ -264,6 +323,8 @@ export function runContainerDetached(options: DetachedRunOptions): void {
     const result = spawnSync('container', args, {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: CONTAINER_RUN_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
 
     if (result.error) {
@@ -285,6 +346,9 @@ export function runContainerDetached(options: DetachedRunOptions): void {
 }
 
 export function execContainer(options: ExecOptions): ExecResult {
+  // Deliberately unbounded: this is the interactive attach — a shell session
+  // has no meaningful deadline. Callers probe exec-readiness with a bounded
+  // call first, so a wedged runtime fails fast instead of hanging here.
   const args = [
     'exec',
     '--interactive',
@@ -310,55 +374,74 @@ export function execContainer(options: ExecOptions): ExecResult {
   };
 }
 
+function containerExecFileOptions(timeoutMs: number): ContainerExecFileOptions {
+  // Node's sync child-process timeout defaults to SIGTERM; use SIGKILL so a
+  // wedged Apple `container` subcommand cannot intercept the signal and keep
+  // the caller blocked after the deadline.
+  return {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
+  };
+}
+
+const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options): void => {
+  execFileSync(file, args, options);
+};
+
+function runContainerSubprocess(
+  args: string[],
+  run: ContainerSubprocessRunner = execContainerSubprocess,
+): void {
+  run('container', args, containerExecFileOptions(CONTAINER_SUBPROCESS_TIMEOUT_MS));
+}
+
+export function isContainerSubprocessTimeout(error: unknown): boolean {
+  return isRecord(error) && error['code'] === 'ETIMEDOUT';
+}
+
 // Copy a host path into the running container. Apple `container cp` addresses
 // the container side as `<id>:/absolute/path` and works only while running.
-export function copyToContainer(name: string, hostPath: string, containerPath: string): void {
-  execFileSync('container', ['cp', hostPath, `${name}:${containerPath}`], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+export function copyToContainer(options: CopyToContainerOptions): void {
+  runContainerSubprocess(['cp', options.hostPath, `${options.name}:${options.containerPath}`], options.run);
 }
 
 // Copy a path out of the running container onto the host.
-export function copyFromContainer(name: string, containerPath: string, hostPath: string): void {
-  execFileSync('container', ['cp', `${name}:${containerPath}`, hostPath], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+export function copyFromContainer(options: CopyFromContainerOptions): void {
+  runContainerSubprocess(['cp', `${options.name}:${options.containerPath}`, options.hostPath], options.run);
 }
 
 // Run a non-interactive command in the running container (no TTY), optionally as
 // a specific user. Distinct from execContainer, which attaches an interactive
 // TTY for the login shell.
-export function execContainerCommand(options: { name: string; user?: string; command: string[] }): void {
+export function execContainerCommand(options: ExecContainerCommandOptions): void {
   const args = [
     'exec',
     ...(options.user ? ['--user', options.user] : []),
     options.name,
     ...options.command,
   ];
-  execFileSync('container', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+  runContainerSubprocess(args, options.run);
 }
 
-export function stopContainer(name: string): void {
-  execFileSync('container', ['stop', name], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+export function stopContainer(name: string, run?: ContainerSubprocessRunner): void {
+  runContainerSubprocess(['stop', name], run);
 }
 
-export function killContainer(name: string): void {
-  execFileSync('container', ['kill', name], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+export function killContainer(name: string, run?: ContainerSubprocessRunner): void {
+  runContainerSubprocess(['kill', name], run);
 }
 
-export function deleteContainer(name: string): void {
-  execFileSync('container', ['delete', '--force', name], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+export function deleteContainer(name: string, run?: ContainerSubprocessRunner): void {
+  runContainerSubprocess(['delete', '--force', name], run);
 }
 
 export function deleteImage(tag: string): void {
   execFileSync('container', ['image', 'delete', tag], {
     stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: CONTAINER_SUBPROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
 }
 
@@ -368,7 +451,12 @@ const execImageList: ImageListExec = () =>
   execFileSync(
     'container',
     ['image', 'list', '--format', 'json'],
-    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CONTAINER_SUBPROCESS_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    },
   );
 
 /**
