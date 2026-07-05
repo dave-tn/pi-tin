@@ -67,15 +67,15 @@ interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'comman
 }
 
 // Apple `container` subcommands can wedge indefinitely when the runtime is
-// poisoned (see the workspace-state exit-hang investigation), so every
-// non-interactive invocation in this module carries a deadline. The deliberate
-// exceptions are the interactive attach (execContainer) and the streaming
-// `container build` — both are user-visible and interruptible with Ctrl-C.
+// poisoned, so every non-interactive invocation in this module carries a
+// deadline. The deliberate exceptions are the interactive attach
+// (execContainer) and the streaming `container build` — both are user-visible
+// and interruptible with Ctrl-C.
 export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
 
 // `container run` boots a VM for the container; give a cold start more
 // headroom than the flat deadline before declaring the runtime wedged.
-export const CONTAINER_RUN_TIMEOUT_MS = 30_000;
+export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
 
 /** Recovery steps for a wedged container runtime, shared by every timeout message. */
 export function containerSystemRecoveryHint(): string {
@@ -347,9 +347,8 @@ export function runContainerDetached(options: DetachedRunOptions): void {
 
 export function execContainer(options: ExecOptions): ExecResult {
   // Deliberately unbounded: this is the interactive attach — a shell session
-  // has no meaningful deadline. openWorkspace probes exec-readiness with a
-  // bounded execContainerCommand first, so a wedged runtime fails fast there
-  // instead of hanging here.
+  // has no meaningful deadline. Callers probe exec-readiness with a bounded
+  // call first, so a wedged runtime fails fast instead of hanging here.
   const args = [
     'exec',
     '--interactive',

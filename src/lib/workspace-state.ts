@@ -200,13 +200,14 @@ function timeoutWarning(
   return `Warning: workspace_state ${direction} timed out after ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)} for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — skipping the rest of this sync.`;
 }
 
-// Run one entry's ops. Failures are best-effort per op, with two exceptions:
-// copy-out stops at the first error so promote-temp can never swap in the
-// partial temp a killed `container cp` may have left behind; copy-in keeps
-// going so a chown still fixes ownership of whatever a slow copy landed
-// before its deadline. Returns the first op that hit the subprocess deadline,
-// or null — a timeout means the runtime is likely wedged, so the caller skips
-// the remaining entries rather than queueing more doomed 5s waits.
+// Run one entry's ops. Non-timeout failures are best-effort per op, except
+// during copy-out, which stops at the first error so promote-temp can never
+// swap in the partial temp a killed `container cp` may have left behind. A
+// timeout means the runtime is likely wedged, so it ends the group (and the
+// caller skips the remaining entries) rather than queueing more doomed waits
+// — with one exception: after a timed-out copy-in, the chown still runs so
+// files a slow copy landed before its deadline never stay root-owned.
+// Returns the first op that hit the subprocess deadline, or null.
 function runOpGroup(
   containerName: string,
   group: WorkspaceStateOp[],
@@ -219,13 +220,16 @@ function runOpGroup(
     try {
       runOp(containerName, op, run);
     } catch (error) {
-      if (isContainerSubprocessTimeout(error) && timedOutOp === null) {
+      const timedOut = isContainerSubprocessTimeout(error);
+      if (timedOut && timedOutOp === null) {
         timedOutOp = op;
       }
       if (direction === 'copy-out') {
         return timedOutOp;
       }
-      // Best-effort only.
+      if (timedOut && op.kind !== 'copy-in') {
+        return timedOutOp;
+      }
     }
   }
 

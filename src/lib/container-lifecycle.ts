@@ -121,7 +121,7 @@ export function createContainerLifecycle(
     if (state === 'running') {
       if (timedOutAction !== null) {
         throw new Error(
-          `Apple 'container ${timedOutAction}' did not respond within ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)} for workspace '${containerName}'. ${containerSystemRecoveryHint()}`,
+          `Apple 'container ${timedOutAction}' did not respond within ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)} for container '${containerName}'. ${containerSystemRecoveryHint()}`,
         );
       }
 

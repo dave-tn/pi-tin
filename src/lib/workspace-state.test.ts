@@ -228,6 +228,47 @@ describe('syncWorkspaceState timeout handling', () => {
     ]);
   });
 
+  test('copy-in: a timed-out remove skips the rest of the entry and the sync', () => {
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.zsh_history'), 'snapshot');
+
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: ['.zsh_history', '.local/share/zoxide'],
+        user: 'dev',
+        direction: 'copy-in',
+      },
+      {
+        run: (_file, args): void => {
+          calls.push(args);
+          if (args.includes('rm')) {
+            const error = new Error('spawnSync container ETIMEDOUT');
+            Object.assign(error, { code: 'ETIMEDOUT' });
+            throw error;
+          }
+        },
+        warn: (message): void => {
+          warnings.push(message);
+        },
+      },
+    );
+
+    // The runtime is likely wedged, so neither the copy nor the chown is
+    // attempted — only a timed-out copy itself earns a follow-up chown.
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
+    ]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping the rest of this sync.",
+    ]);
+  });
+
   test('copy-out: a partial temp left by a timed-out copy is never promoted over the previous snapshot', () => {
     const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
     fs.mkdirSync(stateDir, { recursive: true });

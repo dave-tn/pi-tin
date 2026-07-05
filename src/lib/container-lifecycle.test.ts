@@ -142,7 +142,7 @@ describe('container-lifecycle', () => {
 
     await expect(harness.api.stopAndRemoveContainer('demo'))
       .rejects.toThrow(
-        "Apple 'container stop' did not respond within 5s for workspace 'demo'. Restart the container system with 'container system stop' and then 'container system start'.",
+        "Apple 'container stop' did not respond within 5s for container 'demo'. Restart the container system with 'container system stop' and then 'container system start'.",
       );
 
     expect(harness.calls).toEqual(['stop']);
