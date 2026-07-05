@@ -1,11 +1,15 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  CONTAINER_SUBPROCESS_TIMEOUT_MS,
+  containerSystemRecoveryHint,
   getContainerState,
   stopContainer,
   killContainer,
   deleteContainer,
+  isContainerSubprocessTimeout,
   type ContainerState,
 } from './container.js';
+import { formatDurationMs } from './duration.js';
 
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 100;
@@ -88,10 +92,15 @@ export function createContainerLifecycle(
       throw new Error(couldNotDetermineStateMessage(containerName));
     }
 
+    let timedOutAction: 'stop' | 'kill' | null = null;
+
     if (initialState === 'running') {
       try {
         deps.stopContainer(containerName);
-      } catch {
+      } catch (error) {
+        if (isContainerSubprocessTimeout(error)) {
+          timedOutAction = 'stop';
+        }
         // Check state below and optionally escalate.
       }
     }
@@ -100,13 +109,22 @@ export function createContainerLifecycle(
     if (state === 'running' && force) {
       try {
         deps.killContainer(containerName);
-      } catch {
+      } catch (error) {
+        if (isContainerSubprocessTimeout(error)) {
+          timedOutAction = 'kill';
+        }
         // Check final state below.
       }
       state = await waitForContainerToStop(containerName, KILL_WAIT_TIMEOUT_MS);
     }
 
     if (state === 'running') {
+      if (timedOutAction !== null) {
+        throw new Error(
+          `Apple 'container ${timedOutAction}' did not respond within ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)} for workspace '${containerName}'. ${containerSystemRecoveryHint()}`,
+        );
+      }
+
       throw new Error(`Failed to stop workspace container '${containerName}'.`);
     }
 

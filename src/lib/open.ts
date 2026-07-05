@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import chalk from 'chalk';
 import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir } from './paths.js';
 import { ensureInitialised } from './init-guard.js';
@@ -11,14 +12,19 @@ import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } 
 import { notFoundWorkspaceError } from './workspace-errors.js';
 import { generateDockerfile } from './dockerfile.js';
 import {
+  CONTAINER_RUN_TIMEOUT_MS,
+  CONTAINER_SUBPROCESS_TIMEOUT_MS,
   containerNameFor,
+  containerSystemRecoveryHint,
   imageTagFor,
   imageExists,
   buildImage,
   runContainerDetached,
   execContainer,
+  execContainerCommand,
   getContainerState,
   deleteContainer,
+  isContainerSubprocessTimeout,
   type VolumeMount,
   type ExecResult,
 } from './container.js';
@@ -63,6 +69,9 @@ const KEEPALIVE_COMMAND = [
   '-lc',
   'trap "exit 0" TERM INT; while :; do sleep 86400; done',
 ];
+
+const WORKSPACE_ATTACH_PROBE_ATTEMPTS = 3;
+const WORKSPACE_ATTACH_PROBE_RETRY_DELAY_MS = 1_000;
 
 // `container exec` runs a literal command and never consults the login shell,
 // so resolve it here (field 7 of /etc/passwd), falling back to /bin/sh. `user`
@@ -511,16 +520,25 @@ function startWorkspaceContainer(options: {
   runtimeEnv: Record<string, string>;
 }): void {
   const { context, runtimePlan, buildPlan, runtimeEnv } = options;
-  runContainerDetached({
-    image: context.imageTag,
-    volumes: runtimePlan.volumes,
-    name: context.containerName,
-    cpus: context.resources.cpus,
-    memory: context.resources.memory,
-    ssh: runtimePlan.ssh,
-    env: runtimeEnv,
-    command: runtimePlan.command,
-  });
+  try {
+    runContainerDetached({
+      image: context.imageTag,
+      volumes: runtimePlan.volumes,
+      name: context.containerName,
+      cpus: context.resources.cpus,
+      memory: context.resources.memory,
+      ssh: runtimePlan.ssh,
+      env: runtimeEnv,
+      command: runtimePlan.command,
+    });
+  } catch (error) {
+    if (isContainerSubprocessTimeout(error)) {
+      throw new Error(
+        `Apple 'container run' did not respond within ${formatDurationMs(CONTAINER_RUN_TIMEOUT_MS)} while starting workspace '${context.wsName}'. ${containerSystemRecoveryHint()}`,
+      );
+    }
+    throw error;
+  }
 
   writeRuntimeMeta(context.wsName, {
     startedAt: new Date().toISOString(),
@@ -559,6 +577,60 @@ function readStopTimeout(workspaceName: string, fallback: string): string {
     return loadWorkspace(workspaceName).stopAfterLastSession;
   } catch {
     return fallback;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// A container can need a moment after `container run --detach` before it
+// accepts exec, and a single failed probe can be a transient runtime hiccup —
+// retry before declaring the workspace unattachable.
+async function assertWorkspaceAttachReady(context: WorkspaceContext): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= WORKSPACE_ATTACH_PROBE_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) {
+      await sleep(WORKSPACE_ATTACH_PROBE_RETRY_DELAY_MS);
+    }
+    try {
+      execContainerCommand({
+        name: context.containerName,
+        user: context.containerProfile.user,
+        command: ['true'],
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (isContainerSubprocessTimeout(lastError)) {
+    throw new Error(
+      `Workspace '${context.wsName}' is running, but Apple 'container exec' did not respond within ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)}. Refusing to attach because the shell would likely hang. Try 'pi-tin stop ${context.wsName}' to recreate it; if stop also fails, ${containerSystemRecoveryHint()}`,
+    );
+  }
+
+  throw new Error(
+    `Workspace '${context.wsName}' is running, but commands cannot be started inside it: ${errorMessage(lastError)}`,
+  );
+}
+
+// A freshly started container that fails its attach probe must not be left
+// running: no session was registered and no auto-stop was armed, so nothing
+// would ever reclaim it. Tear it down (bounded), then surface the probe error.
+async function assertAttachReadyOrRemoveContainer(context: WorkspaceContext): Promise<void> {
+  try {
+    await assertWorkspaceAttachReady(context);
+  } catch (probeError) {
+    try {
+      await stopAndRemoveContainer(context.containerName, { force: true });
+      clearWorkspaceRuntimeState(context.wsName);
+    } catch {
+      console.warn(chalk.yellow(`Warning: could not clean up workspace container '${context.containerName}' — stop it with 'pi-tin stop ${context.wsName}'.`));
+    }
+    throw probeError;
   }
 }
 
@@ -693,6 +765,7 @@ export async function openWorkspace(
           driftDetected: hasBuildDrift,
         });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
+        await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
@@ -701,6 +774,9 @@ export async function openWorkspace(
         if (plan.warnAboutDeferredRestart) {
           console.warn(chalk.yellow(`Warning: workspace changes will apply on the next restart of '${context.wsName}'.`));
         }
+        // No teardown on failure here: other sessions may be attached to a
+        // joined container, so it is never reclaimed on a failed probe.
+        await assertWorkspaceAttachReady(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'joined' as const, activeSessions: plan.activeSessionsAfterOpen };
@@ -714,6 +790,7 @@ export async function openWorkspace(
           driftDetected: hasBuildDrift,
         });
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
+        await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
         return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };

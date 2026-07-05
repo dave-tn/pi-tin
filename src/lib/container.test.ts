@@ -12,6 +12,13 @@ import {
   listContainers,
   listImageNames,
   getContainerState,
+  copyToContainer,
+  copyFromContainer,
+  execContainerCommand,
+  stopContainer,
+  killContainer,
+  deleteContainer,
+  type ContainerSubprocessRunner,
 } from './container.js';
 
 function withCapturedWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
@@ -155,6 +162,109 @@ describe('listImageNames failure signalling', () => {
       { configuration: { name: 'pi-tin-demo:latest' } },
     ]);
     expect(listImageNames(() => listJson)).toEqual(['pi-tin-demo']);
+  });
+});
+
+describe('bounded container subprocess options', () => {
+  const boundedOptions = {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 5_000,
+    killSignal: 'SIGKILL',
+  };
+
+  interface CapturedCall {
+    file: string;
+    args: string[];
+    options: unknown;
+  }
+
+  function createRunCapture(): {
+    calls: CapturedCall[];
+    run: ContainerSubprocessRunner;
+  } {
+    const calls: CapturedCall[] = [];
+    return {
+      calls,
+      run: (file, args, options): void => {
+        calls.push({ file, args, options });
+      },
+    };
+  }
+
+  test('copyToContainer is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    copyToContainer({
+      name: 'pi-tin-demo',
+      hostPath: '/tmp/host-state',
+      containerPath: '/home/dev/.zsh_history',
+      run,
+    });
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['cp', '/tmp/host-state', 'pi-tin-demo:/home/dev/.zsh_history'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('copyFromContainer is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    copyFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.zsh_history',
+      hostPath: '/tmp/host-state',
+      run,
+    });
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['cp', 'pi-tin-demo:/home/dev/.zsh_history', '/tmp/host-state'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('execContainerCommand is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    execContainerCommand({
+      name: 'pi-tin-demo',
+      user: 'root',
+      command: ['rm', '-rf', '/home/dev/.zsh_history'],
+      run,
+    });
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('stopContainer is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    stopContainer('pi-tin-demo', run);
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['stop', 'pi-tin-demo'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('killContainer is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    killContainer('pi-tin-demo', run);
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['kill', 'pi-tin-demo'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('deleteContainer is bounded by default', () => {
+    const { calls, run } = createRunCapture();
+    deleteContainer('pi-tin-demo', run);
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['delete', '--force', 'pi-tin-demo'],
+      options: boundedOptions,
+    }]);
   });
 });
 
