@@ -11,6 +11,8 @@ export interface KnownAgent {
   hostModeWarning?: string;
   skipPermissionsFlag?: string;
   containerEnv?: Record<string, string>;
+  /** Files written into a freshly created isolated agent-profile dir, path relative to the profile dir. */
+  isolatedSeedFiles?: Array<{ path: string; content: string }>;
 }
 
 function packageName(packageSpec: string): string {
@@ -129,6 +131,15 @@ export function agentsWithSkipPermissions(packages: Tool[]): Array<{ binary: str
 // doom-loop runaway guard and .env-read denial are left at their defaults.
 const OPENCODE_SANDBOX_CONFIG = JSON.stringify({ permission: { external_directory: 'allow' } });
 
+// Pi gates loading of a project's own .pi config (settings, extensions,
+// skills) behind a per-directory trust prompt, persisted in
+// ~/.pi/agent/trust.json with nearest-ancestor matching — so one /workspace
+// entry pre-trusts every mounted project; the container is the boundary.
+// Seeded at isolated-profile creation only: an image-baked file would be
+// shadowed by the .pi mount, and host-mode profiles share the real ~/.pi,
+// where trust decisions stay the user's own.
+const PI_TRUST_SEED = `${JSON.stringify({ '/workspace': true }, null, 2)}\n`;
+
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
   {
     name: 'Claude Code',
@@ -146,6 +157,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     dotDirs: ['.pi'],
     hostModeSupported: true,
     // Pi always runs in skip-permissions mode — no flag needed
+    isolatedSeedFiles: [{ path: '.pi/agent/trust.json', content: PI_TRUST_SEED }],
   },
   {
     name: 'Codex',

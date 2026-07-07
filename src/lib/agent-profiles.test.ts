@@ -185,11 +185,20 @@ describe('agent-profiles', () => {
       createAgentProfile('pi-host', 'Pi', 'host');
       const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'pi-host');
       expect(fs.existsSync(path.join(profileDir, 'profile.yaml'))).toBe(true);
-      // Host profiles do NOT create dot-directories
+      // Host profiles do NOT create dot-directories or seed files (trust
+      // decisions in the shared host ~/.pi stay the user's own)
       expect(fs.existsSync(path.join(profileDir, '.pi'))).toBe(false);
 
       const yaml = fs.readFileSync(path.join(profileDir, 'profile.yaml'), 'utf-8');
       expect(yaml).toContain('mode: host');
+    });
+
+    test('isolated Pi profile seeds trust.json pre-trusting /workspace', () => {
+      createAgentProfile('pi-personal', 'Pi', 'isolated');
+      const trustPath = path.join(
+        tmpDir, 'pi-tin', 'agent-profiles', 'pi-personal', '.pi', 'agent', 'trust.json',
+      );
+      expect(JSON.parse(fs.readFileSync(trustPath, 'utf-8'))).toEqual({ '/workspace': true });
     });
 
     test('creates isolated profile with multiple mount directories', () => {

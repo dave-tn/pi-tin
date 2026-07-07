@@ -560,6 +560,8 @@ agent:
   skipPermissions: false
 ```
 
+Pi gates loading of a project's own `.pi` config (settings, extensions, skills) behind a per-directory trust prompt, saved in `~/.pi/agent/trust.json`. Isolated Pi agent profiles are created with that file pre-trusting `/workspace`, which covers every mounted project, so the prompt never appears. Host-mode profiles share the real `~/.pi` and are left untouched — answer the prompt once and Pi persists the decision.
+
 Gemini CLI workspaces get `NO_BROWSER=true`, so authentication never tries to launch a host browser.
 
 OpenCode workspaces get its `external_directory` permission set to `allow` (via `OPENCODE_CONFIG_CONTENT`, which overrides any project `opencode.json`), so the agent ranges across all mounted projects without prompting — the container is the boundary. OpenCode's other defaults are unchanged: its doom-loop guard and refusal to read `.env` files stay in force.

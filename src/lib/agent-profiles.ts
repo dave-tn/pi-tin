@@ -63,6 +63,11 @@ export function createAgentProfile(
     for (const mount of agent.dotDirs) {
       fs.mkdirSync(path.join(profileDir, mount), { recursive: true });
     }
+    for (const seedFile of agent.isolatedSeedFiles ?? []) {
+      const seedPath = path.join(profileDir, seedFile.path);
+      fs.mkdirSync(path.dirname(seedPath), { recursive: true });
+      fs.writeFileSync(seedPath, seedFile.content, 'utf-8');
+    }
   }
 
   const meta: AgentProfileMeta = { agent: agentName, mode, mounts: [...agent.dotDirs] };
