@@ -82,7 +82,11 @@ export function claudeManagedSettingsJson(packages: Tool[], skipPermissions: boo
  * v2.1.53 (the CVE-2026-33068 fix) Claude Code gates these on workspace trust
  * regardless of permission mode — bypass-permissions does not cover them — and
  * trust can only be pre-granted per project path here; there is no env var or
- * managed-settings equivalent.
+ * managed-settings equivalent. `hasClaudeMdExternalIncludesApproved` (with its
+ * warning-shown counterpart) pre-answers the dialog gating CLAUDE.md
+ * `@`-imports that resolve outside the project directory — same per-project
+ * persistence, no other pre-grant mechanism, and anything an import could
+ * reach is already inside the container.
  */
 export function claudeConfigJson(packages: Tool[], projectContainerPaths: string[]): string | null {
   if (!workspaceHasClaudeCode(packages)) return null;
@@ -93,6 +97,8 @@ export function claudeConfigJson(packages: Tool[], projectContainerPaths: string
         hasTrustDialogAccepted: true,
         hasTrustDialogHooksAccepted: true,
         hasCompletedProjectOnboarding: true,
+        hasClaudeMdExternalIncludesApproved: true,
+        hasClaudeMdExternalIncludesWarningShown: true,
       },
     ]),
   );

@@ -205,11 +205,15 @@ describe('claudeConfigJson', () => {
           hasTrustDialogAccepted: true,
           hasTrustDialogHooksAccepted: true,
           hasCompletedProjectOnboarding: true,
+          hasClaudeMdExternalIncludesApproved: true,
+          hasClaudeMdExternalIncludesWarningShown: true,
         },
         '/workspace/other': {
           hasTrustDialogAccepted: true,
           hasTrustDialogHooksAccepted: true,
           hasCompletedProjectOnboarding: true,
+          hasClaudeMdExternalIncludesApproved: true,
+          hasClaudeMdExternalIncludesWarningShown: true,
         },
       },
     });
