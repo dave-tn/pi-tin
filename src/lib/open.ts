@@ -10,7 +10,7 @@ import { ensureInitialised } from './init-guard.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
 import { notFoundWorkspaceError } from './workspace-errors.js';
-import { generateDockerfile } from './dockerfile.js';
+import { generateDockerfile, REFRESH_SCRIPT_PATH } from './dockerfile.js';
 import {
   CONTAINER_RUN_TIMEOUT_MS,
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
@@ -547,6 +547,32 @@ function startWorkspaceContainer(options: {
   });
 }
 
+// Agent packages refresh in the background on every open — joins included —
+// so long-lived workspaces keep picking up new releases, not just fresh
+// starts. Detached: the refresh outlives this CLI invocation and at worst
+// dies with the container. Best effort throughout — a missed refresh (script
+// absent in a pre-upgrade image, container gone) keeps existing versions.
+function spawnAgentRefresh(context: WorkspaceContext): void {
+  if ((context.workspace.tools ?? []).length === 0) {
+    return;
+  }
+  try {
+    const child = spawn('container', [
+      'exec',
+      '--user',
+      context.containerProfile.user,
+      context.containerName,
+      REFRESH_SCRIPT_PATH,
+    ], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    // Best effort only.
+  }
+}
+
 function spawnAutoStopHelper(workspaceName: string, deadlineMs: number): number | undefined {
   const scriptPath = process.argv[1];
   if (!scriptPath) {
@@ -813,6 +839,8 @@ export async function openWorkspace(
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
   }
   console.log(`Active sessions: ${opened.activeSessions}`);
+
+  spawnAgentRefresh(context);
 
   let execResult: ExecResult | null = null;
   try {

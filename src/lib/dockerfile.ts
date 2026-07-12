@@ -103,71 +103,54 @@ export function dockerfileEnvQuote(value: string): string {
     .replace(/\$/g, '\\$') + '"';
 }
 
-// Generate a helper shell function that applies agent binary wrappers.
-// Used both at startup (wrap existing binaries) and after background update
-// (re-wrap updated binaries). Emitting a function avoids duplicating the
-// wrapping logic in two places inside the entrypoint script.
-function generateWrapFunction(agentWraps: AgentWrap[]): string[] {
-  if (agentWraps.length === 0) return [];
+/** Container path of the agent-refresh script; `pi-tin open` execs it detached. */
+export const REFRESH_SCRIPT_PATH = '/usr/local/bin/pi-tin-refresh-agents';
 
-  const lines = ['_pitin_wrap_agents() {'];
-  for (const { binary, flag } of agentWraps) {
-    lines.push(
-      `  real="$(which ${binary} 2>/dev/null)"`,
-      '  if [ -n "$real" ]; then',
-      '    # Remove previous wrapper if present so we can re-wrap after update',
-      '    if [ -f "$real"-real ]; then',
-      '      mv -f "$real"-real "$real"',
-      '    fi',
-      '    mv "$real" "$real"-real',
-      `    printf '#!/bin/sh\\nexec "%s-real" ${flag} "$@"\\n' "$real" > "$real"`,
-      '    chmod +x "$real"',
-      '  fi',
-    );
-  }
-  lines.push('}');
-  return lines;
+const AGENT_WRAPPER_BIN_DIR = '/usr/local/pi-tin/bin';
+
+// Launcher baked at build time, first on PATH. Tries the refresh prefix, then
+// the image-baked prefix: background refreshes never touch the baked install,
+// so one of the two always resolves — even mid-install, when npm has removed
+// the refresh prefix's bin links (Arborist retires them before relinking).
+function generateAgentWrapper(wrap: AgentWrap): string {
+  return [
+    '#!/bin/sh',
+    'for prefix_bin in "$HOME/.npm-refresh/bin" "$HOME/.npm-global/bin"; do',
+    `  if [ -x "$prefix_bin/${wrap.binary}" ]; then`,
+    `    exec "$prefix_bin/${wrap.binary}" ${wrap.flag} "$@"`,
+    '  fi',
+    'done',
+    `echo "pi-tin: ${wrap.binary} not found in workspace npm prefixes" >&2`,
+    'exit 127',
+  ].join('\n');
 }
 
-function generateEntrypoint(packageSpecs: string[], agentWraps: AgentWrap[]): string {
-  const lines = ['#!/bin/sh'];
-
-  // Define the wrap function (if there are agents to wrap)
-  lines.push(...generateWrapFunction(agentWraps));
-
-  // Phase 1: Wrap existing agent binaries immediately so the user can start
-  // working right away with the versions baked into the image.
-  if (agentWraps.length > 0) {
-    lines.push(
-      '',
-      '# Wrap agent binaries immediately (pre-update)',
-      '_pitin_wrap_agents',
-    );
-  }
-
-  // Phase 2: Background npm refresh + re-wrap so the shell is not blocked.
-  // Reinstall the original package specs rather than using `npm update -g`.
-  // This preserves user intent for exact versions and dist-tags like `latest`.
+// Reinstall the original package specs rather than `npm update -g` — this
+// preserves user intent for exact versions and dist-tags like `latest`.
+// Installs land in a shadow prefix that PATH prefers once populated: npm
+// removes bin links mid-install, so reinstalling over the live prefix would
+// leave agents unavailable for the duration. The baked prefix is the
+// untouched fallback; a failed refresh simply keeps existing versions.
+function generateRefreshScript(packageSpecs: string[]): string {
   const quoted = packageSpecs.map((s) => `"${s}"`).join(' ');
-  const onUpdateSuccess = agentWraps.length > 0 ? ['    _pitin_wrap_agents'] : ['    :'];
-  lines.push(
+  return [
+    '#!/bin/sh',
+    '# One refresh at a time; a concurrent `pi-tin open` skips instead of colliding.',
+    'if ! mkdir /tmp/pi-tin-refresh.lock 2>/dev/null; then',
+    '  exit 0',
+    'fi',
+    "trap 'rmdir /tmp/pi-tin-refresh.lock' EXIT",
     '',
-    '# Background update — shell is available immediately',
-    '(',
-    `  _pitin_npm_err="$(mktemp 2>/dev/null || echo /tmp/pi-tin-npm-update.err)"`,
-    `  if npm install -g --fetch-timeout=60000 --fetch-retries=0 ${quoted} >/dev/null 2>"$_pitin_npm_err"; then`,
-    // Silent on success — the startup message already set expectations
-    ...onUpdateSuccess,
-    '  else',
-    '    echo "pi-tin: agent update failed, continuing with existing versions" >&2',
-    '  fi',
-    '  rm -f "$_pitin_npm_err"',
-    ') &',
-  );
+    `if ! npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 ${quoted} >/dev/null 2>&1; then`,
+    '  echo "pi-tin: agent refresh failed, continuing with existing versions" >&2',
+    'fi',
+  ].join('\n');
+}
 
+function generateEntrypoint(): string {
   // Configure gh as git credential helper if gh config is mounted
-  lines.push(
-    '',
+  return [
+    '#!/bin/sh',
     'if [ -d "$HOME/.config/gh" ]; then',
     '  if command -v gh >/dev/null 2>&1; then',
     '    git config --global credential.https://github.com.helper "!gh auth git-credential"',
@@ -176,10 +159,8 @@ function generateEntrypoint(packageSpecs: string[], agentWraps: AgentWrap[]): st
     '    echo "Warning: host.githubCLI is enabled but \'gh\' is not installed in this profile. HTTPS git auth will not work." >&2',
     '  fi',
     'fi',
-  );
-
-  lines.push('exec "$@"');
-  return lines.join('\n');
+    'exec "$@"',
+  ].join('\n');
 }
 
 export function generateDockerfile(
@@ -233,7 +214,9 @@ export function generateDockerfile(
   lines.push('');
 
   lines.push(`ENV HOME=$HOME_DIR`);
-  lines.push(`ENV PATH=$HOME_DIR/.npm-global/bin:$PATH`);
+  // Wrapper launchers first, then the refresh prefix, then the baked prefix —
+  // missing dirs are inert, so the line is unconditional.
+  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$PATH`);
   const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
@@ -267,16 +250,29 @@ export function generateDockerfile(
     extras.push({ name: 'claude-config.json', content: `${claudeConfig}\n` });
   }
 
-  // Entrypoint script (copied as root before user switch)
+  // Entrypoint, refresh script, and agent wrappers (copied as root before user switch)
   const packageSpecs = packages.map((pkg) => pkg.package);
   if (packages.length > 0) {
-    const entrypoint = generateEntrypoint(packageSpecs, agentWraps);
     lines.push(
       'COPY pi-tin-entrypoint /usr/local/bin/pi-tin-entrypoint',
       'RUN chmod +x /usr/local/bin/pi-tin-entrypoint',
+      `COPY pi-tin-refresh-agents ${REFRESH_SCRIPT_PATH}`,
+      `RUN chmod +x ${REFRESH_SCRIPT_PATH}`,
     );
+    extras.push({ name: 'pi-tin-entrypoint', content: generateEntrypoint() });
+    extras.push({ name: 'pi-tin-refresh-agents', content: generateRefreshScript(packageSpecs) });
+
+    if (agentWraps.length > 0) {
+      lines.push(`RUN mkdir -p ${AGENT_WRAPPER_BIN_DIR}`);
+      for (const wrap of agentWraps) {
+        lines.push(
+          `COPY pi-tin-wrapper-${wrap.binary} ${AGENT_WRAPPER_BIN_DIR}/${wrap.binary}`,
+          `RUN chmod +x ${AGENT_WRAPPER_BIN_DIR}/${wrap.binary}`,
+        );
+        extras.push({ name: `pi-tin-wrapper-${wrap.binary}`, content: generateAgentWrapper(wrap) });
+      }
+    }
     lines.push('');
-    extras.push({ name: 'pi-tin-entrypoint', content: entrypoint });
   }
 
   // Fix ownership of home directory after all root installs

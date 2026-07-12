@@ -121,10 +121,44 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain('RUN npm install -g @anthropic-ai/claude-code@latest');
     expect(dockerfile).toContain('COPY pi-tin-entrypoint');
     expect(dockerfile).toContain('ENTRYPOINT ["/usr/local/bin/pi-tin-entrypoint"]');
-    expect(extras).toHaveLength(1);
-    expect(extras[0]!.name).toBe('pi-tin-entrypoint');
-    expect(extras[0]!.content).toContain('#!/bin/sh');
-    expect(extras[0]!.content).toContain('npm install -g --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest"');
+    const entrypoint = extras.find((extra) => extra.name === 'pi-tin-entrypoint');
+    expect(entrypoint?.content).toContain('#!/bin/sh');
+    expect(entrypoint?.content).toContain('exec "$@"');
+  });
+
+  test('PATH prefers wrapper and refresh-prefix bins over the baked npm prefix', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
+
+    expect(dockerfile).toContain(
+      'ENV PATH=/usr/local/pi-tin/bin:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$PATH',
+    );
+  });
+
+  test('emits a refresh script installing into the shadow prefix', () => {
+    const packages: Tool[] = [
+      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    ];
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
+
+    const refresh = extras.find((extra) => extra.name === 'pi-tin-refresh-agents');
+    expect(refresh?.content).toContain('#!/bin/sh');
+    expect(refresh?.content).toContain('mkdir /tmp/pi-tin-refresh.lock');
+    expect(refresh?.content).toContain(
+      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest"',
+    );
+    expect(dockerfile).toContain('COPY pi-tin-refresh-agents /usr/local/bin/pi-tin-refresh-agents');
+    expect(dockerfile).toContain('RUN chmod +x /usr/local/bin/pi-tin-refresh-agents');
+  });
+
+  test('entrypoint does not install or update packages', () => {
+    const packages: Tool[] = [
+      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    ];
+    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
+
+    const entrypoint = extras.find((extra) => extra.name === 'pi-tin-entrypoint');
+    expect(entrypoint?.content).not.toContain('npm install');
+    expect(entrypoint?.content).toContain('gh auth git-credential');
   });
 
   test('copies Claude managed settings when provided', () => {
@@ -152,42 +186,43 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
   });
 
-  test('entrypoint wraps agents with skip-permissions flags', () => {
+  test('bakes a PATH-first wrapper for agents with skip-permissions flags', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const { extras } = generateDockerfile(baseProfile, packages, {
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
       claudeManagedSettings: null,
       claudeConfig: null,
     });
 
-    expect(extras[0]!.content).toContain('--dangerously-bypass-approvals-and-sandbox');
+    const wrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-codex');
+    expect(wrapper?.content).toContain('#!/bin/sh');
+    expect(wrapper?.content).toContain('"$HOME/.npm-refresh/bin"');
+    expect(wrapper?.content).toContain('"$HOME/.npm-global/bin"');
+    expect(wrapper?.content).toContain('--dangerously-bypass-approvals-and-sandbox "$@"');
+    expect(wrapper?.content).toContain('exit 127');
+    expect(dockerfile).toContain('COPY pi-tin-wrapper-codex /usr/local/pi-tin/bin/codex');
+    expect(dockerfile).toContain('RUN mkdir -p /usr/local/pi-tin/bin');
+    expect(dockerfile).toContain('RUN chmod +x /usr/local/pi-tin/bin/codex');
   });
 
-  test('entrypoint refresh preserves original package specs', () => {
+  test('refresh script preserves original package specs', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Pinned Tool', package: 'typescript@5.9.3' },
     ];
     const { extras } = generateDockerfile(baseProfile, packages, noWraps);
 
-    expect(extras[0]!.content).toContain('npm install -g --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest" "typescript@5.9.3"');
-    expect(extras[0]!.content).not.toContain('npm update -g');
+    const refresh = extras.find((extra) => extra.name === 'pi-tin-refresh-agents');
+    expect(refresh?.content).toContain(
+      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest" "typescript@5.9.3"',
+    );
+    expect(refresh?.content).not.toContain('npm update -g');
   });
 
-  test('entrypoint does not wrap agents when agentWraps is empty', () => {
-    const packages: Tool[] = [
-      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
-    ];
-    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
-
-    expect(extras[0]!.content).not.toContain('--dangerously-skip-permissions');
-    expect(extras[0]!.content).toContain('then\n    :\n  else');
-  });
-
-  test('entrypoint wraps non-Claude agents while Claude uses managed settings', () => {
+  test('bakes wrappers for non-Claude agents while Claude uses managed settings', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
@@ -208,13 +243,12 @@ describe('generateDockerfile', () => {
       claudeConfig: null,
     });
 
-    const entrypoint = extras.find((extra) => extra.name === 'pi-tin-entrypoint')!.content;
-    expect(entrypoint).not.toContain('which claude');
-    expect(entrypoint).not.toContain('--dangerously-skip-permissions');
-    expect(entrypoint).toContain('which codex');
-    expect(entrypoint).toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(entrypoint).toContain('which gemini');
-    expect(entrypoint).toContain('--approval-mode=yolo');
+    expect(extras.find((extra) => extra.name === 'pi-tin-wrapper-claude')).toBeUndefined();
+    const codexWrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-codex');
+    expect(codexWrapper?.content).toContain('--dangerously-bypass-approvals-and-sandbox');
+    const geminiWrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-gemini');
+    expect(geminiWrapper?.content).toContain('--approval-mode=yolo');
+    expect(dockerfile).toContain('COPY pi-tin-wrapper-gemini /usr/local/pi-tin/bin/gemini');
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
     expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
   });
@@ -255,14 +289,15 @@ describe('generateDockerfile', () => {
     expect(dockerfile).not.toContain('claude.json');
   });
 
-  test('empty agentWraps produces no wrapping in entrypoint', () => {
+  test('empty agentWraps produces no wrapper extras', () => {
     const packages: Tool[] = [
       { name: 'Pi', package: '@earendil-works/pi-coding-agent@latest' },
     ];
-    const { extras } = generateDockerfile(baseProfile, packages, noWraps);
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
 
-    const entrypoint = extras[0]!.content;
-    expect(entrypoint).not.toContain('-real');
+    expect(extras.some((extra) => extra.name.startsWith('pi-tin-wrapper-'))).toBe(false);
+    expect(dockerfile).not.toContain('COPY pi-tin-wrapper-');
+    expect(dockerfile).not.toContain('mkdir -p /usr/local/pi-tin/bin');
   });
 
   test('returns no extras when no packages', () => {

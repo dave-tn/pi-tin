@@ -154,7 +154,10 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     dotDirs: ['.claude'],
     hostModeSupported: false,
     skipPermissionsFlag: '--dangerously-skip-permissions',
-    containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
+    // DISABLE_AUTOUPDATER: Claude Code's in-app updater reinstalls via npm in
+    // place (non-atomic) and would race pi-tin's own refresh; agent versions
+    // refresh at each `pi-tin open` instead.
+    containerEnv: { CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1' },
   },
   {
     name: 'Pi',

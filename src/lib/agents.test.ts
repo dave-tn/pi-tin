@@ -47,7 +47,7 @@ describe('KNOWN_AGENTS', () => {
 
   test('agents with containerEnv have the expected env vars', () => {
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.containerEnv).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
+    expect(claude?.containerEnv).toEqual({ CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1' });
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
     expect(gemini?.containerEnv).toEqual({ NO_BROWSER: 'true' });
@@ -71,7 +71,7 @@ describe('agentContainerEnv', () => {
       { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
     ];
     const env = agentContainerEnv(packages);
-    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' });
+    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1', NO_BROWSER: 'true' });
   });
 
   test('includes the OpenCode external_directory sandbox config', () => {
