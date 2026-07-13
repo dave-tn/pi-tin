@@ -21,6 +21,7 @@ import {
   moveLegacyHostTmuxConfig,
 } from '../lib/tmux.js';
 import { withExitHandling } from '../lib/exit-handling.js';
+import { ensureInteractive } from '../lib/confirmation.js';
 import {
   availableApiKeyVars,
   buildWorkspace,
@@ -444,6 +445,11 @@ function printSummary(name: string, tmuxProfileDir: string | undefined): void {
 }
 
 export async function runCreateFlow(nameArg?: string): Promise<void> {
+  ensureInteractive({
+    action: 'run the create wizard',
+    remediation:
+      'Create or update workspaces headlessly with `pi-tin apply <name>` (workspace JSON on stdin); `pi-tin detect-host` reports host facts.',
+  });
   ensureInitialised();
 
   await withExitHandling(async () => {

@@ -19,6 +19,24 @@ export function isInteractiveSession(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
+// Wizard commands must refuse headless invocations up front: with no TTY the
+// first inquirer prompt EOFs into ExitPromptError, which withExitHandling
+// treats as a graceful quit — a false exit-0 success for agents and CI.
+export function ensureInteractive(input: {
+  action: string;
+  remediation: string;
+  isInteractive?: boolean;
+}): void {
+  const interactive = input.isInteractive ?? isInteractiveSession();
+  if (!interactive) {
+    throw new CliError(
+      `Cannot ${input.action} non-interactively — it needs a terminal.`,
+      EXIT.GENERAL,
+      { code: 'interactive_only', remediation: input.remediation },
+    );
+  }
+}
+
 // A neutral yes/no prompt for non-destructive recovery choices (e.g. offering a
 // fallback after a failed rebuild). Callers must confirm a human is attached
 // (isInteractiveSession) first — a non-interactive path must decide without

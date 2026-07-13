@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { runDefaultAction, type DefaultActionDeps, type WorkspaceSelection } from './default-action.js';
+import { CliError, EXIT } from './cli-errors.js';
 import type { Workspace } from './validators.js';
 
 function createWorkspace(projects: string[]): Workspace {
@@ -18,6 +19,7 @@ async function passthroughWithExitHandling<T>(fn: () => Promise<T>): Promise<T> 
 function createDeps(overrides: Partial<DefaultActionDeps> = {}): DefaultActionDeps {
   return {
     ensureInitialised: () => {},
+    ensureInteractive: () => {},
     cwd: () => '/Users/dave/Dev/my-app',
     findWorkspacesForDirectory: () => [],
     confirm: async () => true,
@@ -40,6 +42,21 @@ function createDeps(overrides: Partial<DefaultActionDeps> = {}): DefaultActionDe
 }
 
 describe('runDefaultAction', () => {
+  test('refuses non-interactive sessions before doing anything', async () => {
+    let initialised = false;
+    const deps = createDeps({
+      ensureInteractive: () => {
+        throw new CliError('Cannot choose non-interactively.', EXIT.GENERAL, { code: 'interactive_only' });
+      },
+      ensureInitialised: () => { initialised = true; },
+    });
+    const err = await runDefaultAction({}, deps).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.detail.code).toBe('interactive_only');
+    expect(initialised).toBe(false);
+  });
+
   test('forces a rebuild when auto-opening a single matching workspace', async () => {
     let opened:
       | { name: string; opts: { build?: boolean; workdir?: string | undefined } }

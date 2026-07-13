@@ -14,6 +14,7 @@ function match(name: string, projects: string[]): WorkspaceMatch {
 function createDeps(overrides: Partial<AddCommandDeps> = {}): AddCommandDeps {
   return {
     ensureInitialised: () => {},
+    ensureInteractive: () => {},
     cwd: () => '/Users/dave/Dev/new-app',
     withExitHandling: async (fn) => await fn(),
     findWorkspacesForDirectory: () => [],
@@ -110,6 +111,19 @@ describe('runAddCommand — direct arg', () => {
 });
 
 describe('runAddCommand — interactive', () => {
+  test('no-arg add propagates the interactive_only refusal', async () => {
+    const deps = createDeps({
+      ensureInteractive: () => {
+        throw new CliError('Cannot run non-interactively.', EXIT.GENERAL, { code: 'interactive_only' });
+      },
+      listWorkspaces: () => [match('work', ['/a'])],
+    });
+    const err = await runAddCommand(undefined, deps).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.detail.code).toBe('interactive_only');
+  });
+
   test('runs the create flow when no workspaces exist', async () => {
     let created = false;
     const deps = createDeps({ listWorkspaces: () => [], runCreateFlow: async () => { created = true; } });
