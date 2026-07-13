@@ -35,6 +35,7 @@ import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
 import { syncWorkspaceState } from './workspace-state.js';
+import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
   ensureWorkspaceTmuxDir,
@@ -826,6 +827,11 @@ export async function openWorkspace(
 
   if (opened.mode === 'started') {
     console.log(chalk.green(`Started workspace '${context.wsName}'`));
+    chownMountParents({
+      containerName: context.containerName,
+      user: context.containerProfile.user,
+      parentDirs: planMountParentChown(runtimePlan.volumes, containerHomeDir(context.containerProfile.user)),
+    });
     // Fresh container: restore the previous life's workspace state before the
     // interactive shell begins. Not on join — the running container already has it.
     syncWorkspaceState({
