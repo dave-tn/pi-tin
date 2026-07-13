@@ -74,24 +74,63 @@ function readContainerCliVersion(): string | null {
   return readContainerCliVersionFromSystem() ?? readContainerCliVersionFromText();
 }
 
-function ensureSupportedContainerVersion(): void {
-  const version = readContainerCliVersion();
-  if (version !== null && isSupportedContainerVersion(version)) {
-    return;
+export type ContainerInstallGatePlan =
+  | { kind: 'proceed' }
+  | { kind: 'prompt-install' }
+  | { kind: 'fail'; error: CliError };
+
+export function planContainerInstallGate(
+  installed: boolean,
+  isInteractive: boolean,
+): ContainerInstallGatePlan {
+  if (installed) {
+    return { kind: 'proceed' };
+  }
+  if (isInteractive) {
+    return { kind: 'prompt-install' };
+  }
+  return {
+    kind: 'fail',
+    error: new CliError(
+      "Apple's container CLI is not installed.",
+      EXIT.GENERAL,
+      {
+        code: 'container_not_installed',
+        remediation: `Install it with 'brew install container', or from ${RELEASES_URL}.`,
+      },
+    ),
+  };
+}
+
+export type ContainerVersionGatePlan =
+  | { kind: 'proceed' }
+  | { kind: 'fail'; error: CliError };
+
+// Takes the Homebrew check as a function so the `which brew` spawn only
+// happens when composing failure remediation, not on the happy path.
+export function planContainerVersionGate(input: {
+  version: string | null;
+  isHomebrewInstalled: () => boolean;
+}): ContainerVersionGatePlan {
+  if (input.version !== null && isSupportedContainerVersion(input.version)) {
+    return { kind: 'proceed' };
   }
 
-  const detail = version === null
+  const detail = input.version === null
     ? 'Installed version could not be determined.'
-    : `Found ${version}.`;
-  const upgradeHint = isHomebrewInstalled()
+    : `Found ${input.version}.`;
+  const upgradeHint = input.isHomebrewInstalled()
     ? `Upgrade with 'brew upgrade container', or install the latest release from ${RELEASES_URL}.`
     : `Install the latest release from ${RELEASES_URL}.`;
 
-  throw new CliError(
-    `pi-tin requires Apple container CLI ${MIN_CONTAINER_VERSION} or newer. ${detail}`,
-    EXIT.GENERAL,
-    { code: 'container_version_unsupported', remediation: upgradeHint },
-  );
+  return {
+    kind: 'fail',
+    error: new CliError(
+      `pi-tin requires Apple container CLI ${MIN_CONTAINER_VERSION} or newer. ${detail}`,
+      EXIT.GENERAL,
+      { code: 'container_version_unsupported', remediation: upgradeHint },
+    ),
+  };
 }
 
 export type ContainerSystemProbe =
@@ -310,30 +349,33 @@ async function promptStartSystem(): Promise<void> {
 export async function ensurePrerequisites(): Promise<void> {
   const interactive = isInteractiveSession();
 
-  if (!isContainerInstalled()) {
-    if (!interactive) {
-      throw new CliError(
-        "Apple's container CLI is not installed.",
-        EXIT.GENERAL,
-        {
-          code: 'container_not_installed',
-          remediation: `Install it with 'brew install container', or from ${RELEASES_URL}.`,
-        },
-      );
-    }
-    await withExitHandling(() => promptInstall());
+  const installPlan = planContainerInstallGate(isContainerInstalled(), interactive);
+  switch (installPlan.kind) {
+    case 'proceed':
+      break;
+    case 'prompt-install':
+      await withExitHandling(() => promptInstall());
+      break;
+    case 'fail':
+      throw installPlan.error;
   }
 
-  ensureSupportedContainerVersion();
+  const versionPlan = planContainerVersionGate({
+    version: readContainerCliVersion(),
+    isHomebrewInstalled,
+  });
+  if (versionPlan.kind === 'fail') {
+    throw versionPlan.error;
+  }
 
-  const plan = planContainerSystemGate(probeContainerSystem(), interactive);
-  switch (plan.kind) {
+  const systemPlan = planContainerSystemGate(probeContainerSystem(), interactive);
+  switch (systemPlan.kind) {
     case 'proceed':
       return;
     case 'prompt-start':
       await withExitHandling(() => promptStartSystem());
       return;
     case 'fail':
-      throw plan.error;
+      throw systemPlan.error;
   }
 }

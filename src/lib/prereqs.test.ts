@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   classifyContainerSystemStatus,
   isSupportedContainerVersion,
+  planContainerInstallGate,
   planContainerSystemGate,
+  planContainerVersionGate,
 } from './prereqs.js';
 import { EXIT } from './cli-errors.js';
 
@@ -102,5 +104,49 @@ describe('planContainerSystemGate', () => {
     expect(plan.error.exitCode).toBe(EXIT.GENERAL);
     expect(plan.error.detail.code).toBe('container_system_probe_failed');
     expect(plan.error.message).toContain('spawn container ENOENT');
+  });
+});
+
+describe('planContainerInstallGate', () => {
+  test('installed → proceed regardless of interactivity', () => {
+    expect(planContainerInstallGate(true, true)).toEqual({ kind: 'proceed' });
+    expect(planContainerInstallGate(true, false)).toEqual({ kind: 'proceed' });
+  });
+
+  test('not installed + interactive → prompt to install', () => {
+    expect(planContainerInstallGate(false, true)).toEqual({ kind: 'prompt-install' });
+  });
+
+  test('not installed + non-interactive → structured failure with install remediation', () => {
+    const plan = planContainerInstallGate(false, false);
+    if (plan.kind !== 'fail') throw new Error(`expected fail, got ${plan.kind}`);
+    expect(plan.error.exitCode).toBe(EXIT.GENERAL);
+    expect(plan.error.detail.code).toBe('container_not_installed');
+    expect(plan.error.detail.remediation).toContain('brew install container');
+  });
+});
+
+describe('planContainerVersionGate', () => {
+  test('supported version → proceed', () => {
+    expect(planContainerVersionGate({ version: '1.0.0', isHomebrewInstalled: () => true }))
+      .toEqual({ kind: 'proceed' });
+  });
+
+  test('unsupported version → structured failure naming the found version', () => {
+    const plan = planContainerVersionGate({ version: '0.4.1', isHomebrewInstalled: () => true });
+    if (plan.kind !== 'fail') throw new Error(`expected fail, got ${plan.kind}`);
+    expect(plan.error.exitCode).toBe(EXIT.GENERAL);
+    expect(plan.error.detail.code).toBe('container_version_unsupported');
+    expect(plan.error.message).toContain('Found 0.4.1');
+    expect(plan.error.detail.remediation).toContain('brew upgrade container');
+  });
+
+  test('undeterminable version → structured failure; remediation skips brew without Homebrew', () => {
+    const plan = planContainerVersionGate({ version: null, isHomebrewInstalled: () => false });
+    if (plan.kind !== 'fail') throw new Error(`expected fail, got ${plan.kind}`);
+    expect(plan.error.detail.code).toBe('container_version_unsupported');
+    expect(plan.error.message).toContain('could not be determined');
+    expect(plan.error.detail.remediation).not.toContain('brew');
+    expect(plan.error.detail.remediation).toContain('github.com/apple/container/releases');
   });
 });

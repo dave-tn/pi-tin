@@ -48,8 +48,11 @@ try {
   // command failures.
   if (!isPrereqExemptRequest(args)) {
     if (process.platform !== 'darwin') {
-      console.error(chalk.red('pi-tin requires macOS (uses Apple\'s native container CLI).'));
-      process.exit(1);
+      throw new CliError(
+        'pi-tin requires macOS (uses Apple\'s native container CLI).',
+        EXIT.GENERAL,
+        { code: 'platform_unsupported' },
+      );
     }
     await ensurePrerequisites();
 
