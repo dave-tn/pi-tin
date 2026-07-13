@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import chalk from 'chalk';
-import { buildProgram } from './cli-program.js';
+import { CommanderError } from 'commander';
+import { buildProgram, usageErrorFrom } from './cli-program.js';
 import { ensurePrerequisites } from './lib/prereqs.js';
 import { runAutoStopHelper, AUTO_STOP_COMMAND } from './lib/auto-stop.js';
 import { runUpdateCheckHelper, scheduleUpdateNotice, CHECK_FOR_UPDATE_COMMAND } from './lib/update-check.js';
@@ -79,21 +80,25 @@ try {
 
   await program.parseAsync();
 } catch (err) {
-  if (err instanceof CliError) {
+  const failure = err instanceof CommanderError ? usageErrorFrom(err) : err;
+  if (failure === undefined) {
+    process.exit(0);
+  }
+  if (failure instanceof CliError) {
     // Commander's parsed options aren't visible here, so detect --json from
     // raw argv (same approach as help-request.ts) — an explicit --json on a
     // TTY must still get the JSON error envelope.
     if (shouldEmitJson(args.includes('--json') ? true : undefined)) {
-      process.stderr.write(JSON.stringify(errorEnvelope(err)) + '\n');
+      process.stderr.write(JSON.stringify(errorEnvelope(failure)) + '\n');
     } else {
-      console.error(chalk.red(err.message));
-      if (err.detail.remediation) {
-        console.error(chalk.yellow(err.detail.remediation));
+      console.error(chalk.red(failure.message));
+      if (failure.detail.remediation) {
+        console.error(chalk.yellow(failure.detail.remediation));
       }
     }
-    process.exit(err.exitCode);
+    process.exit(failure.exitCode);
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = failure instanceof Error ? failure.message : String(failure);
   console.error(chalk.red(message));
   process.exit(EXIT.GENERAL);
 }

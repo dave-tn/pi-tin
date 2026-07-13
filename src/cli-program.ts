@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 import { registerCreateCommand } from './commands/create.js';
 import { registerOpenCommand } from './commands/open.js';
 import { registerListCommand } from './commands/list.js';
@@ -18,6 +18,7 @@ import { registerAgentProfileDiscoverCommand } from './commands/agent-profile-di
 import { registerAgentProfileFinderCommand } from './commands/agent-profile-finder.js';
 import { registerAgentGuideCommand } from './commands/agent-guide.js';
 import { runDefaultAction } from './lib/default-action.js';
+import { CliError, EXIT } from './lib/cli-errors.js';
 
 export function buildProgram(meta: { version: string; homepage: string }): Command {
   const program = new Command();
@@ -26,6 +27,12 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
     .name('pi-tin')
     .description('macOS-native workspace manager built on Apple\'s container CLI')
     .version(meta.version, '-v, --version')
+    // Throw CommanderError instead of process.exit so usage errors reach the
+    // top-level envelope handler. Commander writes its own message to stderr
+    // before throwing; suppress that channel — usageErrorFrom re-carries the
+    // message through the CliError renderer.
+    .exitOverride()
+    .configureOutput({ writeErr: () => {} })
     .option('--build', 'Force rebuild the container image when auto-opening a matched workspace')
     // The root default action suppresses commander's implicit `help [command]`
     // subcommand, so enable it explicitly for `pi-tin help <cmd>`.
@@ -68,4 +75,17 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   });
 
   return program;
+}
+
+// undefined = commander already completed a zero-exit flow (help/version
+// printed via stdout); callers exit 0. Anything else is a usage mistake and
+// becomes part of the validation contract (exit 2, envelope code 'usage').
+export function usageErrorFrom(err: CommanderError): CliError | undefined {
+  if (err.exitCode === 0) {
+    return undefined;
+  }
+  return new CliError(err.message.replace(/^error: /, ''), EXIT.VALIDATION, {
+    code: 'usage',
+    remediation: 'Run `pi-tin <command> --help` for usage, or `pi-tin agent-guide` for the machine contract.',
+  });
 }
