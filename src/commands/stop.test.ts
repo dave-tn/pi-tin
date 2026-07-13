@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { planStopWorkspace } from '../lib/workspace-plans.js';
+import { buildStopPreview } from './stop.js';
 
 describe('planStopWorkspace', () => {
   test('returns a no-op when the workspace is not running', () => {
@@ -82,6 +83,32 @@ describe('planStopWorkspace', () => {
     })).toEqual({
       action: 'stop',
       warnAboutInconsistentRuntime: true,
+    });
+  });
+});
+
+describe('buildStopPreview', () => {
+  test('noop plan previews as not-running', () => {
+    expect(buildStopPreview({ action: 'noop' }, 'ws')).toEqual({
+      action: 'noop',
+      workspace: 'ws',
+      reason: 'not-running',
+    });
+  });
+
+  test('stop plan previews without confirmation', () => {
+    expect(buildStopPreview({ action: 'stop', warnAboutInconsistentRuntime: false }, 'ws')).toEqual({
+      action: 'stop',
+      workspace: 'ws',
+      requiresConfirmation: false,
+    });
+  });
+
+  test('confirm plan previews with confirmation required', () => {
+    expect(buildStopPreview({ action: 'confirm', message: 'x' }, 'ws')).toEqual({
+      action: 'stop',
+      workspace: 'ws',
+      requiresConfirmation: true,
     });
   });
 });
