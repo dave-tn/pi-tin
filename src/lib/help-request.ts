@@ -39,7 +39,7 @@ export function classifyHelpRequest(args: string[], isTty: boolean): HelpRequest
 export type InvocationPlan =
   | { kind: 'proceed' }
   | { kind: 'unknown-command'; badInput: string }
-  | { kind: 'missing-subcommand'; group: string; subcommands: string[] };
+  | { kind: 'missing-subcommand'; groupName: string; subcommands: string[] };
 
 // Commander's root default action reports an unknown first positional as
 // "too many arguments" (exit 1, no envelope), and `<unknown> --help` falls
@@ -69,7 +69,7 @@ export function classifyInvocation(
   const subcommands = groupSubcommands.get(commandName);
   const wantsHelp = args.includes('--help') || args.includes('-h');
   if (subcommands !== undefined && target === undefined && !wantsHelp) {
-    return { kind: 'missing-subcommand', group: commandName, subcommands };
+    return { kind: 'missing-subcommand', groupName: commandName, subcommands };
   }
   return { kind: 'proceed' };
 }

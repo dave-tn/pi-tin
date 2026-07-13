@@ -55,10 +55,10 @@ try {
     });
   }
   if (invocation.kind === 'missing-subcommand') {
-    throw new CliError(`Missing subcommand for '${invocation.group}'.`, EXIT.VALIDATION, {
+    throw new CliError(`Missing subcommand for '${invocation.groupName}'.`, EXIT.VALIDATION, {
       code: 'usage',
       validValues: invocation.subcommands,
-      remediation: `Run \`pi-tin ${invocation.group} --help\` for the subcommand list.`,
+      remediation: `Run \`pi-tin ${invocation.groupName} --help\` for the subcommand list.`,
     });
   }
 

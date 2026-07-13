@@ -83,11 +83,13 @@ export function knownCommandNames(program: Command): string[] {
   return [...program.commands.map((c) => c.name()), 'help'];
 }
 
-// Groups (commands with subcommands and no action of their own — the
-// *-profile commands). Invoked bare, commander has no real error for them:
-// it throws commander.help with the literal '(outputHelp)' placeholder as
-// the message. classifyInvocation uses this map to refuse such invocations
-// with a real validation error before parse.
+// Groups: every command that has subcommands (currently the *-profile
+// commands). Invoked bare, commander has no real error for them: it throws
+// commander.help with the literal '(outputHelp)' placeholder as the message.
+// classifyInvocation uses this map to refuse such invocations with a real
+// validation error before parse. Note the filter does not check for a
+// default action — if a future group command gains one, its bare invocation
+// would still be refused as missing-subcommand; exclude it here.
 export function groupSubcommandNames(program: Command): Map<string, string[]> {
   return new Map(
     program.commands
