@@ -170,12 +170,27 @@ The managed `node-dev` container profile uses `node:trixie-slim` (Debian 13), in
 
 A workspace container is semi-ephemeral: your project code and a few live host mounts survive because they're bind-mounted from the host, but the rest of the container's home is rebuilt from the image whenever the container is recreated (a restart, or the first open after an auto-stop). That normally discards small, useful container-internal state like the `zoxide` jump database and shell history.
 
-`workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies. Sync is **best-effort**: if Apple's `container` CLI fails or hangs, pi-tin skips the rest of that sync after a timeout rather than blocking `open`/exit indefinitely.
+`workspace_state` lists home-relative paths pi-tin snapshots across those recreations: copied **in** when a fresh container starts, and **out** when a session closes while the container is still running. State is stored per workspace under `~/.config/pi-tin/workspace-state/<workspace>/`, so two workspaces on the same profile keep independent copies. Sync is **best-effort** with a per-command timeout rather than blocking `open`/exit indefinitely: a path whose copy exceeds the timeout is skipped with a warning (it is almost certainly too large to snapshot — see below) and the remaining paths still sync; only when the `container` runtime itself stops responding is the rest of the sync abandoned.
 
 > [!NOTE]
 > This is a **snapshot, not a live mount.** State is copied in at start and out at close — never synced live, and no shared-directory budget is used. If two sessions run against the same workspace, the last to close wins. It is not a substitute for host mounts.
 
-Keep `workspace_state` deliberately small and tightly coupled to the container's own tooling — inert, tool-owned data such as databases and history, not shell rc files or anything executed. It exists only to smooth over the container's ephemerality for a few specific dev tools; it is **not** a general state-sync or backup mechanism. Everything else should stay ephemeral, with your code and working files living on host mounts instead. Agent sessions are **not** covered here; they persist via [agent profiles](#agent-profiles) instead.
+Keep `workspace_state` deliberately small and tightly coupled to the container's own tooling — inert, tool-owned data such as databases and history, not shell rc files or anything executed. A path too large to copy within the timeout (a package cache like `.nuget/packages`, for example) is skipped on every sync — persist those with a `host.mounts` entry instead. It exists only to smooth over the container's ephemerality for a few specific dev tools; it is **not** a general state-sync or backup mechanism. Everything else should stay ephemeral, with your code and working files living on host mounts instead. Agent sessions are **not** covered here; they persist via [agent profiles](#agent-profiles) instead.
+
+##### Persisting a package cache
+
+Where a cache is genuinely worth keeping warm across container recreations — a cold `dotnet restore` re-downloading gigabytes, say — mount it live, backed by a directory under the same per-workspace state tree so the data stays with the workspace rather than becoming a stray host directory:
+
+```yaml
+# ~/.config/pi-tin/workspaces/<workspace>.yaml
+host:
+  mounts:
+    - host: ~/.config/pi-tin/workspace-state/<workspace>/.nuget/packages
+      container: /home/dev/.nuget/packages
+      readonly: false
+```
+
+Create the host directory first (`mkdir -p`) — a missing path is skipped with a warning — and match the container path to the profile's `user` home. Reserve this for caches that measurably earn their keep: each entry consumes one of the [22 mount slots](#workspaces), and most caches rebuild quickly enough that ephemerality is the simpler default.
 
 #### Creating custom container profiles
 

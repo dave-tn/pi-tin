@@ -61,6 +61,7 @@ describe('planWorkspaceStateSync copy-out', () => {
     expect(groups).toEqual([[
       { kind: 'ensure-host-parent', hostPath: '/host/workspace-state/myws/.zsh_history' },
       { kind: 'remove-host-path', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
+      { kind: 'probe-container-path', containerPath: '/home/dev/.zsh_history' },
       { kind: 'copy-out', containerPath: '/home/dev/.zsh_history', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
       { kind: 'promote-temp', tempPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp', hostPath: '/host/workspace-state/myws/.zsh_history' },
     ]]);
@@ -152,7 +153,7 @@ describe('syncWorkspaceState timeout handling', () => {
     ]);
   });
 
-  test('warns and aborts the rest of the sync after the first subprocess timeout', () => {
+  test('warns and aborts the rest of the sync when the existence probe times out', () => {
     const calls: string[][] = [];
     const warnings: string[] = [];
 
@@ -181,11 +182,89 @@ describe('syncWorkspaceState timeout handling', () => {
       ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
     ]);
     expect(warnings).toEqual([
-      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping the rest of this sync.",
+      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — container runtime unresponsive; skipping the rest of this sync.",
     ]);
   });
 
-  test('copy-in: still chowns the entry when its copy times out, then skips later entries', () => {
+  test('copy-out: a timed-out copy skips only that path — later entries still sync', () => {
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: ['.nuget/packages', '.zsh_history'],
+        user: 'dev',
+        direction: 'copy-out',
+      },
+      {
+        run: (_file, args): void => {
+          calls.push(args);
+          const oversizedCopy = args[0] === 'cp' && args[1] === 'pi-tin-demo:/home/dev/.nuget/packages';
+          if (oversizedCopy) {
+            const error = new Error('spawnSync container ETIMEDOUT');
+            Object.assign(error, { code: 'ETIMEDOUT' });
+            throw error;
+          }
+        },
+        warn: (message): void => {
+          warnings.push(message);
+        },
+      },
+    );
+
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.nuget/packages'],
+      ['cp', 'pi-tin-demo:/home/dev/.nuget/packages', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.nuget/packages.pi-tin-tmp')],
+      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+      ['cp', 'pi-tin-demo:/home/dev/.zsh_history', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.zsh_history.pi-tin-tmp')],
+    ]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.nuget/packages' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
+    ]);
+  });
+
+  test('copy-out: a wedged runtime stops the sync at the next probe after a timed-out copy', () => {
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: ['.nuget/packages', '.zsh_history', '.local/share/zoxide'],
+        user: 'dev',
+        direction: 'copy-out',
+      },
+      {
+        run: (_file, args): void => {
+          calls.push(args);
+          // First probe answers before the runtime wedges; everything after
+          // (the big copy, then the next entry's probe) hits the deadline.
+          if (calls.length === 1) return;
+          const error = new Error('spawnSync container ETIMEDOUT');
+          Object.assign(error, { code: 'ETIMEDOUT' });
+          throw error;
+        },
+        warn: (message): void => {
+          warnings.push(message);
+        },
+      },
+    );
+
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.nuget/packages'],
+      ['cp', 'pi-tin-demo:/home/dev/.nuget/packages', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.nuget/packages.pi-tin-tmp')],
+      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+    ]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.nuget/packages' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
+      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — container runtime unresponsive; skipping the rest of this sync.",
+    ]);
+  });
+
+  test('copy-in: still chowns the entry when its copy times out, then continues with later entries', () => {
     const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, '.zsh_history'), 'snapshot');
@@ -217,14 +296,17 @@ describe('syncWorkspaceState timeout handling', () => {
     );
 
     // The timed-out copy may have landed root-owned files, so the chown still
-    // runs; the second entry is skipped entirely.
+    // runs; the second entry still syncs (it has no host snapshot, so only its
+    // remove and chown run).
     expect(calls).toEqual([
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
       ['cp', path.join(stateDir, '.zsh_history'), 'pi-tin-demo:/home/dev/.zsh_history'],
       ['exec', '--user', 'root', 'pi-tin-demo', 'chown', '-R', 'dev:dev', '/home/dev/.zsh_history'],
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/share/zoxide'],
+      ['exec', '--user', 'root', 'pi-tin-demo', 'chown', '-R', 'dev:dev', '/home/dev/.local/share/zoxide'],
     ]);
     expect(warnings).toEqual([
-      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping the rest of this sync.",
+      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
     ]);
   });
 
@@ -259,13 +341,14 @@ describe('syncWorkspaceState timeout handling', () => {
       },
     );
 
-    // The runtime is likely wedged, so neither the copy nor the chown is
-    // attempted — only a timed-out copy itself earns a follow-up chown.
+    // A timed-out `rm` (near-instant when the runtime is healthy) means the
+    // runtime is wedged: neither the copy nor the chown is attempted and the
+    // rest of the sync is abandoned.
     expect(calls).toEqual([
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
     ]);
     expect(warnings).toEqual([
-      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping the rest of this sync.",
+      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — container runtime unresponsive; skipping the rest of this sync.",
     ]);
   });
 
