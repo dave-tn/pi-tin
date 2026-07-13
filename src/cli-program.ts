@@ -77,6 +77,25 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   return program;
 }
 
+// program.commands does not include the implicit `help` command commander
+// registers via helpCommand(true), so add it by hand.
+export function knownCommandNames(program: Command): string[] {
+  return [...program.commands.map((c) => c.name()), 'help'];
+}
+
+// Groups (commands with subcommands and no action of their own — the
+// *-profile commands). Invoked bare, commander has no real error for them:
+// it throws commander.help with the literal '(outputHelp)' placeholder as
+// the message. classifyInvocation uses this map to refuse such invocations
+// with a real validation error before parse.
+export function groupSubcommandNames(program: Command): Map<string, string[]> {
+  return new Map(
+    program.commands
+      .filter((c) => c.commands.length > 0)
+      .map((c): [string, string[]] => [c.name(), c.commands.map((s) => s.name())]),
+  );
+}
+
 // undefined = commander already completed a zero-exit flow (help/version
 // printed via stdout); callers exit 0. Anything else is a usage mistake and
 // becomes part of the validation contract (exit 2, envelope code 'usage').
@@ -84,7 +103,16 @@ export function usageErrorFrom(err: CommanderError): CliError | undefined {
   if (err.exitCode === 0) {
     return undefined;
   }
-  return new CliError(err.message.replace(/^error: /, ''), EXIT.VALIDATION, {
+  // A failing commander.help means commander printed help in place of a real
+  // error (bare group command, `help <unknown>`): its message is the literal
+  // '(outputHelp)' placeholder and the help text went to the suppressed
+  // writeErr channel. classifyInvocation refuses those invocations before
+  // parse; this backstop keeps the placeholder unprintable for anything it
+  // cannot see (e.g. `help help`, which commander cannot dispatch).
+  const message = err.code === 'commander.help'
+    ? 'Invalid or incomplete command.'
+    : err.message.replace(/^error: /, '');
+  return new CliError(message, EXIT.VALIDATION, {
     code: 'usage',
     remediation: 'Run `pi-tin <command> --help` for usage, or `pi-tin agent-guide` for the machine contract.',
   });
