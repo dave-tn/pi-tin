@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { select } from '@inquirer/prompts';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { withExitHandling } from '../lib/exit-handling.js';
+import { ensureInteractive } from '../lib/confirmation.js';
 import { computeContainerWorkdir } from '../lib/workdir.js';
 import { countSharedDirectories, openWorkspace } from '../lib/open.js';
 import {
@@ -21,6 +22,13 @@ import {
   type WorkspaceSelection,
 } from '../lib/add-project.js';
 
+const ensureAddInteractive = (): void =>
+  ensureInteractive({
+    action: "run 'pi-tin add' without a workspace name",
+    remediation:
+      'Name the workspace: `pi-tin add <workspace>`, or edit headlessly with `pi-tin show <name> --json` → `pi-tin apply <name>`.',
+  });
+
 type Logger = (...args: unknown[]) => void;
 type SelectPrompt = (options: {
   message: string;
@@ -29,6 +37,7 @@ type SelectPrompt = (options: {
 
 export type AddCommandDeps = {
   ensureInitialised: () => void;
+  ensureInteractive: () => void;
   cwd: () => string;
   withExitHandling: <T>(fn: () => Promise<T>) => Promise<T>;
   findWorkspacesForDirectory: (directory: string) => WorkspaceMatch[];
@@ -48,6 +57,7 @@ export type AddCommandDeps = {
 
 const defaultDeps: AddCommandDeps = {
   ensureInitialised,
+  ensureInteractive: ensureAddInteractive,
   cwd: () => process.cwd(),
   withExitHandling,
   findWorkspacesForDirectory,
@@ -99,6 +109,8 @@ export async function runAddCommand(
       await addProjectToChosenWorkspace(target, cwd, deps);
       return;
     }
+
+    deps.ensureInteractive();
 
     if (all.length === 0) {
       await deps.runCreateFlow();

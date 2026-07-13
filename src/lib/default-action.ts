@@ -5,6 +5,7 @@ import { countSharedDirectories, openWorkspace } from './open.js';
 import { appendProjectToWorkspace, findWorkspacesForDirectory, listWorkspaces } from './workspaces.js';
 import { containerNameFor, getContainerState, type ContainerState } from './container.js';
 import { withExitHandling } from './exit-handling.js';
+import { ensureInteractive } from './confirmation.js';
 import { computeContainerWorkdir } from './workdir.js';
 import {
   handleActionError,
@@ -14,6 +15,13 @@ import {
 } from './add-project.js';
 
 export type { WorkspaceSelection };
+
+const ensureDefaultActionInteractive = (): void =>
+  ensureInteractive({
+    action: 'choose a workspace interactively',
+    remediation:
+      'Run an explicit command instead: `pi-tin list`, `pi-tin open <workspace>`, or see `pi-tin agent-guide`.',
+  });
 
 type Logger = (...args: unknown[]) => void;
 type ConfirmPrompt = (options: { message: string; default?: boolean }) => Promise<boolean>;
@@ -26,6 +34,7 @@ type ExitHandling = <T>(fn: () => Promise<T>) => Promise<T>;
 
 export type DefaultActionDeps = {
   ensureInitialised: () => void;
+  ensureInteractive: () => void;
   cwd: () => string;
   findWorkspacesForDirectory: (directory: string) => WorkspaceMatch[];
   confirm: ConfirmPrompt;
@@ -45,6 +54,7 @@ export type DefaultActionDeps = {
 
 const defaultDeps: DefaultActionDeps = {
   ensureInitialised,
+  ensureInteractive: ensureDefaultActionInteractive,
   cwd: () => process.cwd(),
   findWorkspacesForDirectory,
   confirm,
@@ -85,6 +95,7 @@ export async function runDefaultAction(
   opts: { build?: boolean },
   deps: DefaultActionDeps = defaultDeps,
 ): Promise<void> {
+  deps.ensureInteractive();
   deps.ensureInitialised();
 
   const cwd = deps.cwd();
