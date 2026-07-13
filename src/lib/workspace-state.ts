@@ -15,7 +15,7 @@ import { formatDurationMs } from './duration.js';
 // "Workspace state" is a small, container-profile-declared set of inert,
 // tool-owned paths (zoxide DB, shell history, …) that pi-tin snapshots between
 // container lives: copied *in* when a fresh container starts, copied *out* when
-// a session closes. It is not a live mount — see WORKSPACE_STATE_PLAN.md.
+// a session closes. It is not a live mount — see README → Workspace state.
 
 export type WorkspaceStateDirection = 'copy-in' | 'copy-out';
 
