@@ -81,29 +81,75 @@ describe('isPrereqExemptRequest', () => {
 });
 
 describe('classifyInvocation', () => {
-  const known = ['list', 'show', 'stop', 'help'];
+  const known = ['list', 'show', 'stop', 'help', 'container-profile', 'agent-profile'];
+  const groups = new Map([
+    ['container-profile', ['list', 'show', 'apply', 'delete']],
+    ['agent-profile', ['add', 'list', 'show', 'delete', 'discover', 'finder']],
+  ]);
 
   test('bare invocation proceeds', () => {
-    expect(classifyInvocation([], known)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation([], known, groups)).toEqual({ kind: 'proceed' });
   });
 
   test('flag-only invocation proceeds', () => {
-    expect(classifyInvocation(['--build'], known)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['--build'], known, groups)).toEqual({ kind: 'proceed' });
   });
 
   test('known command proceeds', () => {
-    expect(classifyInvocation(['list', '--json'], known)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['list', '--json'], known, groups)).toEqual({ kind: 'proceed' });
   });
 
   test('unknown command is refused', () => {
-    expect(classifyInvocation(['bogus'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+    expect(classifyInvocation(['bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
   });
 
   test('unknown command is refused even with --help', () => {
-    expect(classifyInvocation(['bogus', '--help'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+    expect(classifyInvocation(['bogus', '--help'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
   });
 
   test('flags before the positional are skipped', () => {
-    expect(classifyInvocation(['--build', 'bogus'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+    expect(classifyInvocation(['--build', 'bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('a bare group command is refused with its subcommand names', () => {
+    expect(classifyInvocation(['agent-profile'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      group: 'agent-profile',
+      subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
+    });
+    expect(classifyInvocation(['container-profile'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      group: 'container-profile',
+      subcommands: ['list', 'show', 'apply', 'delete'],
+    });
+  });
+
+  test('a bare group command with a non-help flag is still refused', () => {
+    expect(classifyInvocation(['agent-profile', '--json'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      group: 'agent-profile',
+      subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
+    });
+  });
+
+  test('a group command with a help flag proceeds (commander prints group help, exit 0)', () => {
+    expect(classifyInvocation(['agent-profile', '--help'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['agent-profile', '-h'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('a group command with a subcommand proceeds, even an unknown one (commander reports it)', () => {
+    expect(classifyInvocation(['agent-profile', 'list'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['agent-profile', 'bogus-sub'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('help with a known target proceeds', () => {
+    expect(classifyInvocation(['help', 'list'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help', 'agent-profile'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help', 'help'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('help with an unknown target is refused as an unknown command', () => {
+    expect(classifyInvocation(['help', 'bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
   });
 });

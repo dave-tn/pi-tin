@@ -2,7 +2,7 @@
 
 import chalk from 'chalk';
 import { CommanderError } from 'commander';
-import { buildProgram, usageErrorFrom } from './cli-program.js';
+import { buildProgram, groupSubcommandNames, knownCommandNames, usageErrorFrom } from './cli-program.js';
 import { ensurePrerequisites } from './lib/prereqs.js';
 import { runAutoStopHelper, AUTO_STOP_COMMAND } from './lib/auto-stop.js';
 import { runUpdateCheckHelper, scheduleUpdateNotice, CHECK_FOR_UPDATE_COMMAND } from './lib/update-check.js';
@@ -44,16 +44,21 @@ if (helpRequest === 'guide') {
 const program = buildProgram({ version: PKG_VERSION, homepage: PKG_HOMEPAGE });
 
 try {
-  // program.commands does not include the implicit `help` command commander
-  // registers via helpCommand(true), so add it by hand.
-  const knownCommands = [...program.commands.map((c) => c.name()), 'help'];
-  const invocation = classifyInvocation(args, knownCommands);
+  const knownCommands = knownCommandNames(program);
+  const invocation = classifyInvocation(args, knownCommands, groupSubcommandNames(program));
   if (invocation.kind === 'unknown-command') {
     throw new CliError(`Unknown command '${invocation.badInput}'.`, EXIT.VALIDATION, {
       code: 'unknown_command',
       badInput: invocation.badInput,
       validValues: knownCommands,
       remediation: 'Run `pi-tin agent-guide` (or `pi-tin --help`) for the command list.',
+    });
+  }
+  if (invocation.kind === 'missing-subcommand') {
+    throw new CliError(`Missing subcommand for '${invocation.group}'.`, EXIT.VALIDATION, {
+      code: 'usage',
+      validValues: invocation.subcommands,
+      remediation: `Run \`pi-tin ${invocation.group} --help\` for the subcommand list.`,
     });
   }
 
