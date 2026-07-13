@@ -114,12 +114,12 @@ describe('classifyInvocation', () => {
   test('a bare group command is refused with its subcommand names', () => {
     expect(classifyInvocation(['agent-profile'], known, groups)).toEqual({
       kind: 'missing-subcommand',
-      group: 'agent-profile',
+      groupName: 'agent-profile',
       subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
     });
     expect(classifyInvocation(['container-profile'], known, groups)).toEqual({
       kind: 'missing-subcommand',
-      group: 'container-profile',
+      groupName: 'container-profile',
       subcommands: ['list', 'show', 'apply', 'delete'],
     });
   });
@@ -127,7 +127,7 @@ describe('classifyInvocation', () => {
   test('a bare group command with a non-help flag is still refused', () => {
     expect(classifyInvocation(['agent-profile', '--json'], known, groups)).toEqual({
       kind: 'missing-subcommand',
-      group: 'agent-profile',
+      groupName: 'agent-profile',
       subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
     });
   });

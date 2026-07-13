@@ -102,6 +102,14 @@ describe('commander help-fallback flows', () => {
     expect(err.code).toBe('commander.help');
     expect(err.exitCode).toBe(1);
   });
+
+  test('help help throws commander.help with exit 1 (the usageErrorFrom backstop flow)', async () => {
+    const err = await parseError(['help', 'help']);
+    expect(err).toBeInstanceOf(CommanderError);
+    if (!(err instanceof CommanderError)) throw new Error('unreachable');
+    expect(err.code).toBe('commander.help');
+    expect(err.exitCode).toBe(1);
+  });
 });
 
 describe('buildProgram exitOverride', () => {
