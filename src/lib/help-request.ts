@@ -8,6 +8,13 @@ export function isHelpOrVersionRequest(args: string[]): boolean {
   return flags.some((flag) => args.includes(flag)) || args[0] === 'help';
 }
 
+// Invocations that only print embedded text need no container stack; keeping
+// `agent-guide` exempt means the guide stays readable in environments where
+// the prereq probe would fail (e.g. sandboxed shells).
+export function isPrereqExemptRequest(args: string[]): boolean {
+  return isHelpOrVersionRequest(args) || args[0] === 'agent-guide';
+}
+
 // Route a top-level help invocation. Subcommand help (`<cmd> --help` or
 // `help <cmd>`) and non-help calls return 'normal'/'none' so commander
 // handles them unchanged.

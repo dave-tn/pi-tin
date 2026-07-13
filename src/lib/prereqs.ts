@@ -1,15 +1,18 @@
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 import chalk from 'chalk';
 import { confirm } from '@inquirer/prompts';
 import {
+  ContainerSystemStatusSchema,
   ContainerSystemVersionSchema,
   GitHubReleaseSchema,
 } from './validators.js';
 import { withExitHandling } from './exit-handling.js';
 import { parseSemver } from './semver.js';
+import { CliError, EXIT } from './cli-errors.js';
+import { isInteractiveSession } from './confirmation.js';
 
 const RELEASES_URL = 'https://github.com/apple/container/releases';
 const MIN_CONTAINER_VERSION = '1.0.0';
@@ -80,27 +83,120 @@ function ensureSupportedContainerVersion(): void {
   const detail = version === null
     ? 'Installed version could not be determined.'
     : `Found ${version}.`;
+  const upgradeHint = isHomebrewInstalled()
+    ? `Upgrade with 'brew upgrade container', or install the latest release from ${RELEASES_URL}.`
+    : `Install the latest release from ${RELEASES_URL}.`;
 
-  console.error(chalk.red(
+  throw new CliError(
     `pi-tin requires Apple container CLI ${MIN_CONTAINER_VERSION} or newer. ${detail}`,
-  ));
-
-  if (isHomebrewInstalled()) {
-    console.log(`If you installed via Homebrew, upgrade with: ${chalk.cyan('brew upgrade container')}`);
-  }
-  console.log(`Latest releases: ${chalk.cyan(RELEASES_URL)}`);
-  process.exit(1);
+    EXIT.GENERAL,
+    { code: 'container_version_unsupported', remediation: upgradeHint },
+  );
 }
 
-function isContainerSystemRunning(): boolean {
-  try {
-    execFileSync('container', ['system', 'status'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return true;
-  } catch {
-    return false;
+export type ContainerSystemProbe =
+  | { kind: 'running' }
+  | { kind: 'not-running' }
+  | { kind: 'probe-failed'; detail: string };
+
+export type ContainerSystemGatePlan =
+  | { kind: 'proceed' }
+  | { kind: 'prompt-start' }
+  | { kind: 'fail'; error: CliError };
+
+// A stopped service is reported on stdout ({ "status": "not running" |
+// "unregistered" }, exit 1). The status command's own source swallows every
+// service-connection failure — including a sandbox-denied lookup — into that
+// same verdict, so 'not-running' means "the CLI reports not running", not
+// proof the service is down. Anything without a parseable status means the
+// probe itself failed (spawn error, timeout, unexpected output).
+export function classifyContainerSystemStatus(result: {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}): ContainerSystemProbe {
+  if (result.status === 0) {
+    return { kind: 'running' };
   }
+
+  const reported = parseReportedSystemStatus(result.stdout);
+  if (reported === 'not running' || reported === 'unregistered') {
+    return { kind: 'not-running' };
+  }
+
+  const detail =
+    result.stderr.trim() || result.stdout.trim() || `exit code ${result.status}`;
+  return { kind: 'probe-failed', detail };
+}
+
+function parseReportedSystemStatus(stdout: string): string | null {
+  try {
+    return v.parse(ContainerSystemStatusSchema, JSON.parse(stdout)).status;
+  } catch {
+    return null;
+  }
+}
+
+export function planContainerSystemGate(
+  probe: ContainerSystemProbe,
+  isInteractive: boolean,
+): ContainerSystemGatePlan {
+  switch (probe.kind) {
+    case 'running':
+      return { kind: 'proceed' };
+    case 'not-running':
+      if (isInteractive) {
+        return { kind: 'prompt-start' };
+      }
+      return {
+        kind: 'fail',
+        error: new CliError(
+          "The container system service reports 'not running'.",
+          EXIT.GENERAL,
+          {
+            code: 'container_system_not_running',
+            remediation:
+              "Start it with 'container system start'. Some sandboxed shells "
+              + 'block access to the service, making a running service report '
+              + "as not running — if this ran in a sandbox, check 'container "
+              + "system status' from an unsandboxed shell before starting it.",
+          },
+        ),
+      };
+    case 'probe-failed':
+      return {
+        kind: 'fail',
+        error: new CliError(
+          `Could not determine container system status: ${probe.detail}`,
+          EXIT.GENERAL,
+          {
+            code: 'container_system_probe_failed',
+            remediation: "Run 'container system status' directly to inspect the failure.",
+          },
+        ),
+      };
+  }
+}
+
+// Outlives the status command's internal 10s health-check timeout so the CLI
+// reaches its own verdict; the outer bound only fires if the process wedges.
+const STATUS_PROBE_TIMEOUT_MS = 15_000;
+
+function probeContainerSystem(): ContainerSystemProbe {
+  const result = spawnSync('container', ['system', 'status', '--format', 'json'], {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: STATUS_PROBE_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+  if (result.error) {
+    return { kind: 'probe-failed', detail: result.error.message };
+  }
+  return classifyContainerSystemStatus({
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  });
 }
 
 async function installViaBrew(): Promise<boolean> {
@@ -208,14 +304,36 @@ async function promptStartSystem(): Promise<void> {
   }
 }
 
+// Prompts are for humans only. A non-interactive caller (agent/CI) must get a
+// CliError — rendered as the structured envelope in JSON mode — never a prompt
+// it can't answer (which used to die and exit 0, reading as success).
 export async function ensurePrerequisites(): Promise<void> {
+  const interactive = isInteractiveSession();
+
   if (!isContainerInstalled()) {
+    if (!interactive) {
+      throw new CliError(
+        "Apple's container CLI is not installed.",
+        EXIT.GENERAL,
+        {
+          code: 'container_not_installed',
+          remediation: `Install it with 'brew install container', or from ${RELEASES_URL}.`,
+        },
+      );
+    }
     await withExitHandling(() => promptInstall());
   }
 
   ensureSupportedContainerVersion();
 
-  if (!isContainerSystemRunning()) {
-    await withExitHandling(() => promptStartSystem());
+  const plan = planContainerSystemGate(probeContainerSystem(), interactive);
+  switch (plan.kind) {
+    case 'proceed':
+      return;
+    case 'prompt-start':
+      await withExitHandling(() => promptStartSystem());
+      return;
+    case 'fail':
+      throw plan.error;
   }
 }

@@ -56,7 +56,7 @@ Everyday flow: `cd` into a project and run `pt` — it opens the matching worksp
 - macOS 26 or later with Apple's [`container` CLI](https://github.com/apple/container) **1.0.0 or later** installed
 - Node.js 18+
 
-If the `container` CLI isn't installed, pi-tin will offer to install it for you (via Homebrew or direct download).
+If the `container` CLI isn't installed, pi-tin offers to install it (via Homebrew or direct download). Prompts are interactive-only: without a TTY, missing prerequisites exit with a structured error instead (see [Machine-Readable Output](#machine-readable-output)).
 
 ## Installation
 
@@ -354,6 +354,7 @@ The subsections below — [Editing container profiles](#editing-container-profil
 
 - **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed.
 - **Structured errors.** In JSON mode, errors are emitted as a structured envelope on stderr — `{ "error": { "message", "code", … } }` — so an agent can read the machine-stable `code` (and any `remediation`, `validValues`, or `badInput` fields) instead of grepping the message text.
+- **Prerequisite failures.** On an interactive terminal pi-tin offers to install the `container` CLI or start the container system service. Without a TTY it exits `1` with a structured error instead of prompting: `container_not_installed`, `container_version_unsupported`, `container_system_not_running`, or `container_system_probe_failed`. Caveat for `container_system_not_running`: some sandboxed shells block access to the container system service, so a running service can be reported as not running — verify with `container system status` from an unsandboxed shell before starting or restarting the service.
 
 ### Editing container profiles
 

@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
   ContainerListSchema,
+  ContainerSystemStatusSchema,
   ContainerSystemVersionSchema,
   ImageListSchema,
   NpmDistTagsSchema,
@@ -50,6 +51,24 @@ describe('container CLI JSON schemas', () => {
       'pi-tin-demo:latest',
       'ghcr.io/apple/container-builder-shim/builder:1.0.0',
     ]);
+  });
+
+  test('parses Apple container 1.0 system status output', () => {
+    // Verified sample from container 1.0.0 on macOS; extra fields are ignored.
+    expect(v.parse(ContainerSystemStatusSchema, {
+      apiServerAppName: 'container-apiserver',
+      apiServerBuild: 'release',
+      apiServerCommit: 'unspecified',
+      apiServerVersion: 'container-apiserver version 1.0.0 (build: release, commit: unspeci)',
+      appRoot: '/Users/dev/Library/Application Support/com.apple.container/',
+      installRoot: '/opt/homebrew/Cellar/container/1.0.0_1/',
+      status: 'running',
+    })).toEqual({ status: 'running' });
+    expect(v.parse(ContainerSystemStatusSchema, { status: 'not running' }))
+      .toEqual({ status: 'not running' });
+    expect(v.parse(ContainerSystemStatusSchema, { status: 'unregistered' }))
+      .toEqual({ status: 'unregistered' });
+    expect(() => v.parse(ContainerSystemStatusSchema, {})).toThrow();
   });
 
   test('parses Apple container 1.0 system version output', () => {

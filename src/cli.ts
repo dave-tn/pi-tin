@@ -8,7 +8,7 @@ import { runUpdateCheckHelper, scheduleUpdateNotice, CHECK_FOR_UPDATE_COMMAND } 
 import { isValidWorkspaceName } from './lib/workspaces.js';
 import { CliError, EXIT, errorEnvelope } from './lib/cli-errors.js';
 import { shouldEmitJson, printJson } from './lib/cli-output.js';
-import { classifyHelpRequest, isHelpOrVersionRequest } from './lib/help-request.js';
+import { classifyHelpRequest, isPrereqExemptRequest } from './lib/help-request.js';
 import { AGENT_GUIDE, AGENT_HELP_SCHEMA } from './lib/agent-guide.js';
 
 const args = process.argv.slice(2);
@@ -42,23 +42,25 @@ if (helpRequest === 'guide') {
 
 const program = buildProgram({ version: PKG_VERSION, homepage: PKG_HOMEPAGE });
 
-// Skip prereq checks for help/version
-if (!isHelpOrVersionRequest(args)) {
-  if (process.platform !== 'darwin') {
-    console.error(chalk.red('pi-tin requires macOS (uses Apple\'s native container CLI).'));
-    process.exit(1);
-  }
-  await ensurePrerequisites();
-
-  scheduleUpdateNotice({
-    currentVersion: PKG_VERSION,
-    argv: args,
-    env: process.env,
-    isTty: Boolean(process.stdout.isTTY),
-  });
-}
-
 try {
+  // Skip prereq checks for help/version/agent-guide. The gate runs inside
+  // this try so its CliErrors get the same envelope/exit-code rendering as
+  // command failures.
+  if (!isPrereqExemptRequest(args)) {
+    if (process.platform !== 'darwin') {
+      console.error(chalk.red('pi-tin requires macOS (uses Apple\'s native container CLI).'));
+      process.exit(1);
+    }
+    await ensurePrerequisites();
+
+    scheduleUpdateNotice({
+      currentVersion: PKG_VERSION,
+      argv: args,
+      env: process.env,
+      isTty: Boolean(process.stdout.isTTY),
+    });
+  }
+
   await program.parseAsync();
 } catch (err) {
   if (err instanceof CliError) {

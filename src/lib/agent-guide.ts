@@ -30,6 +30,7 @@ export interface HelpSchema {
     errors: string;
     edit: string;
     destructive: string;
+    sandboxing: string;
   };
   exitCodes: Record<string, string>;
   commands: HelpCommand[];
@@ -47,6 +48,8 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
     edit: 'Read-modify-write: `show --json` → edit the object → `apply --dry-run` → `apply`. apply is full-replace.',
     destructive:
       'Destructive commands require --force and return exit 4 (confirmation required) when run non-interactively without it. Preview with --dry-run first, then confirm with the user before passing --force.',
+    sandboxing:
+      'pi-tin needs the Apple container system service. Some sandboxed shells block access to it, so a running service can be reported as not running (error code container_system_not_running). Before starting or restarting the service in response to that error, verify with `container system status` from an unsandboxed shell.',
   },
   exitCodes: {
     '0': 'success',
@@ -123,6 +126,7 @@ CONTRACT
 - ${AGENT_HELP_SCHEMA.contract.errors}
 - ${AGENT_HELP_SCHEMA.contract.edit}
 - ${AGENT_HELP_SCHEMA.contract.destructive}
+- ${AGENT_HELP_SCHEMA.contract.sandboxing}
 
 TYPICAL FLOWS
 - New/edit workspace:

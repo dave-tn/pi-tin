@@ -174,6 +174,13 @@ const ContainerSystemVersionEntrySchema = v.object({
 
 export const ContainerSystemVersionSchema = v.array(ContainerSystemVersionEntrySchema);
 
+// `container system status --format json` payload. On failure the CLI reports
+// { "status": "not running" | "unregistered" }; keep the field a plain string
+// so unknown future statuses parse and the caller decides what they mean.
+export const ContainerSystemStatusSchema = v.object({
+  status: v.string(),
+});
+
 const GitHubAssetSchema = v.object({
   name: v.optional(v.string()),
   browser_download_url: v.optional(v.string()),

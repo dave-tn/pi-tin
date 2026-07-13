@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyHelpRequest, isHelpOrVersionRequest } from './help-request.js';
+import { classifyHelpRequest, isHelpOrVersionRequest, isPrereqExemptRequest } from './help-request.js';
 
 describe('classifyHelpRequest', () => {
   test('no help token → none', () => {
@@ -60,5 +60,22 @@ describe('isHelpOrVersionRequest', () => {
     expect(isHelpOrVersionRequest([])).toBe(false);
     expect(isHelpOrVersionRequest(['list'])).toBe(false);
     expect(isHelpOrVersionRequest(['open', 'my-workspace'])).toBe(false);
+  });
+});
+
+describe('isPrereqExemptRequest', () => {
+  test('help/version requests are exempt', () => {
+    expect(isPrereqExemptRequest(['--help'])).toBe(true);
+    expect(isPrereqExemptRequest(['-v'])).toBe(true);
+  });
+
+  test('agent-guide is exempt (must stay readable in sandboxed shells)', () => {
+    expect(isPrereqExemptRequest(['agent-guide'])).toBe(true);
+    expect(isPrereqExemptRequest(['agent-guide', '--json'])).toBe(true);
+  });
+
+  test('ordinary commands still hit the gate', () => {
+    expect(isPrereqExemptRequest(['list'])).toBe(false);
+    expect(isPrereqExemptRequest(['open', 'my-workspace'])).toBe(false);
   });
 });
