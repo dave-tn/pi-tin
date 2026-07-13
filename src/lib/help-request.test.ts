@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyHelpRequest, isHelpOrVersionRequest, isPrereqExemptRequest } from './help-request.js';
+import { classifyHelpRequest, classifyInvocation, isHelpOrVersionRequest, isPrereqExemptRequest } from './help-request.js';
 
 describe('classifyHelpRequest', () => {
   test('no help token → none', () => {
@@ -77,5 +77,33 @@ describe('isPrereqExemptRequest', () => {
   test('ordinary commands still hit the gate', () => {
     expect(isPrereqExemptRequest(['list'])).toBe(false);
     expect(isPrereqExemptRequest(['open', 'my-workspace'])).toBe(false);
+  });
+});
+
+describe('classifyInvocation', () => {
+  const known = ['list', 'show', 'stop', 'help'];
+
+  test('bare invocation proceeds', () => {
+    expect(classifyInvocation([], known)).toEqual({ kind: 'proceed' });
+  });
+
+  test('flag-only invocation proceeds', () => {
+    expect(classifyInvocation(['--build'], known)).toEqual({ kind: 'proceed' });
+  });
+
+  test('known command proceeds', () => {
+    expect(classifyInvocation(['list', '--json'], known)).toEqual({ kind: 'proceed' });
+  });
+
+  test('unknown command is refused', () => {
+    expect(classifyInvocation(['bogus'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('unknown command is refused even with --help', () => {
+    expect(classifyInvocation(['bogus', '--help'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('flags before the positional are skipped', () => {
+    expect(classifyInvocation(['--build', 'bogus'], known)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
   });
 });
