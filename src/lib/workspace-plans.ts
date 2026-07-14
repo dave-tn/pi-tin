@@ -282,6 +282,8 @@ export interface PlanAddProjectOptions {
   projectedSharedDirectoryCount: number;
   maxSharedDirectories: number;
   containerState: ContainerState;
+  // A human is attached and can land in the opened tmux session.
+  isInteractive: boolean;
 }
 
 export type AddProjectPlan =
@@ -296,6 +298,14 @@ function addedToRunningMessage(projectPath: string, workspaceName: string): stri
     `'${workspaceName}' is running, so the project isn't mounted yet — that happens on its next restart.`,
     `Once you've finished and exited every open session in '${workspaceName}', the next 'pi-tin open ${workspaceName}' will restart it and mount the project.`,
     '(Reopening while a session is still active just rejoins it unchanged.)',
+  ].join('\n');
+}
+
+function addedHeadlessMessage(projectPath: string, workspaceName: string): string {
+  const project = path.basename(projectPath);
+  return [
+    `Added ${project} to workspace '${workspaceName}'.`,
+    `Run 'pi-tin open ${workspaceName}' from a terminal to start it with the project mounted.`,
   ].join('\n');
 }
 
@@ -340,6 +350,16 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
     return {
       action: 'add-and-message',
       message: addedToRunningMessage(options.projectPath, options.workspaceName),
+    };
+  }
+
+  // add-and-open ends in a tmux attach, which a headless caller cannot
+  // survive — plan the message outcome instead of starting a container it
+  // can never attach to.
+  if (!options.isInteractive) {
+    return {
+      action: 'add-and-message',
+      message: addedHeadlessMessage(options.projectPath, options.workspaceName),
     };
   }
 

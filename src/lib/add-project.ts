@@ -22,6 +22,7 @@ export type WorkspaceSelection =
 export type AddExecutorDeps = {
   countSharedDirectories: (wsName: string, projects: string[]) => number;
   getContainerStateFor: (wsName: string) => ContainerState;
+  isInteractiveSession: () => boolean;
   appendProjectToWorkspace: (wsName: string, projectPath: string) => void;
   computeContainerWorkdir: (cwd: string, projects: string[]) => string | undefined;
   openWorkspace: (wsName: string, opts: { build?: boolean; workdir?: string | undefined }) => Promise<void> | void;
@@ -65,6 +66,7 @@ export async function addProjectToChosenWorkspace(
       projectedSharedDirectoryCount: deps.countSharedDirectories(target.name, candidateProjects),
       maxSharedDirectories: MAX_SHARED_DIRECTORIES,
       containerState: deps.getContainerStateFor(target.name),
+      isInteractive: deps.isInteractiveSession(),
     });
 
     switch (plan.action) {

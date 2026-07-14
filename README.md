@@ -433,9 +433,11 @@ already matches one (e.g. to also include it in a second workspace, or to fork
 it into a new one) — run `pi-tin add`. It shows a picker of the workspaces the
 directory is not already in, plus *Create new workspace*. `pi-tin add <name>`
 adds it straight to that workspace. The same rules apply: comments are
-preserved, a stopped workspace opens with the project mounted, a running one
-prints a restart reminder, and an add that would collide on a project name or
-exceed the mount limit is refused without writing.
+preserved, a stopped workspace opens with the project mounted (headless —
+no TTY — the add still completes and a `pi-tin open <name>` hint is printed
+instead), a running one prints a restart reminder, and an add that would
+collide on a project name or exceed the mount limit is refused without
+writing.
 
 ## SSH Agent Forwarding
 

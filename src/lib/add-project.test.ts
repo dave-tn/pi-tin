@@ -30,6 +30,7 @@ describe('handleWorkspaceSelection', () => {
     return {
       countSharedDirectories: () => 1,
       getContainerStateFor: () => 'stopped' as const,
+      isInteractiveSession: () => true,
       appendProjectToWorkspace: () => {},
       computeContainerWorkdir: () => undefined,
       openWorkspace: () => {},
@@ -58,6 +59,24 @@ describe('handleWorkspaceSelection', () => {
     );
     expect(appended).toEqual(['work', '/x']);
     expect(opened).toBe(true);
+  });
+  test('add-to appends without opening when the session is headless', async () => {
+    let appended = false;
+    let opened = false;
+    const logs: string[] = [];
+    await handleWorkspaceSelection(
+      { kind: 'add-to', target: match('work', ['/a']) },
+      '/x',
+      deps({
+        isInteractiveSession: () => false,
+        appendProjectToWorkspace: () => { appended = true; },
+        openWorkspace: () => { opened = true; },
+        log: (...a: unknown[]) => logs.push(a.join(' ')),
+      }),
+    );
+    expect(appended).toBe(true);
+    expect(opened).toBe(false);
+    expect(logs.join('\n')).toContain('pi-tin open work');
   });
   test('cancel prints hints and writes nothing', async () => {
     const logs: string[] = [];
