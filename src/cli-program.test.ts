@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { buildProgram } from './cli-program.js';
+import { CommanderError } from 'commander';
+import { buildProgram, groupSubcommandNames, knownCommandNames, usageErrorFrom } from './cli-program.js';
+import { CliError, EXIT } from './lib/cli-errors.js';
 
 const meta = { version: '0.0.0-test', homepage: 'https://example.test' };
 
@@ -27,5 +29,109 @@ describe('buildProgram', () => {
     const group = program.commands.find((c) => c.name() === 'container-profile');
     const subs = (group?.commands ?? []).map((c) => c.name()).sort();
     expect(subs).toEqual(['apply', 'delete', 'list', 'show']);
+  });
+});
+
+describe('usageErrorFrom', () => {
+  test('maps a usage error to a validation CliError, stripping the error: prefix', () => {
+    const err = new CommanderError(1, 'commander.unknownOption', "error: unknown option '--bogus'");
+    const cli = usageErrorFrom(err);
+    expect(cli).toBeInstanceOf(CliError);
+    if (!(cli instanceof CliError)) throw new Error('unreachable');
+    expect(cli.exitCode).toBe(EXIT.VALIDATION);
+    expect(cli.detail.code).toBe('usage');
+    expect(cli.message).toBe("unknown option '--bogus'");
+  });
+
+  test('returns undefined for zero-exit flows (help, version)', () => {
+    expect(usageErrorFrom(new CommanderError(0, 'commander.helpDisplayed', '(outputHelp)'))).toBeUndefined();
+    expect(usageErrorFrom(new CommanderError(0, 'commander.version', '0.0.0'))).toBeUndefined();
+    expect(usageErrorFrom(new CommanderError(0, 'commander.help', '(outputHelp)'))).toBeUndefined();
+  });
+
+  test('replaces the (outputHelp) placeholder from a failing help fallback with a real message', () => {
+    const cli = usageErrorFrom(new CommanderError(1, 'commander.help', '(outputHelp)'));
+    expect(cli).toBeInstanceOf(CliError);
+    if (!(cli instanceof CliError)) throw new Error('unreachable');
+    expect(cli.exitCode).toBe(EXIT.VALIDATION);
+    expect(cli.detail.code).toBe('usage');
+    expect(cli.message).not.toContain('outputHelp');
+    expect(cli.message.length).toBeGreaterThan(0);
+  });
+});
+
+describe('command surface helpers', () => {
+  test('knownCommandNames includes the implicit help command', () => {
+    const names = knownCommandNames(buildProgram(meta));
+    expect(names).toContain('help');
+    expect(names).toContain('list');
+    expect(names).toContain('agent-profile');
+  });
+
+  test('groupSubcommandNames maps exactly the subcommand groups', () => {
+    const groups = groupSubcommandNames(buildProgram(meta));
+    expect([...groups.keys()].sort()).toEqual(['agent-profile', 'container-profile']);
+    expect(groups.get('container-profile')?.slice().sort()).toEqual(['apply', 'delete', 'list', 'show']);
+    expect(groups.get('agent-profile')?.slice().sort()).toEqual(['add', 'delete', 'discover', 'finder', 'list', 'show']);
+  });
+});
+
+// These pin the raw commander behavior classifyInvocation exists to
+// intercept: with writeErr suppressed, these flows would otherwise surface
+// the literal '(outputHelp)' placeholder as the error message.
+describe('commander help-fallback flows', () => {
+  const parseError = async (argv: string[]): Promise<unknown> => {
+    const program = buildProgram(meta);
+    return program.parseAsync(['node', 'pi-tin', ...argv]).then(() => undefined, (e: unknown) => e);
+  };
+
+  test('a bare group command throws commander.help with exit 1', async () => {
+    for (const argv of [['agent-profile'], ['container-profile']]) {
+      const err = await parseError(argv);
+      expect(err).toBeInstanceOf(CommanderError);
+      if (!(err instanceof CommanderError)) throw new Error('unreachable');
+      expect(err.code).toBe('commander.help');
+      expect(err.exitCode).toBe(1);
+    }
+  });
+
+  test('help with an unknown target throws commander.help with exit 1', async () => {
+    const err = await parseError(['help', 'bogus']);
+    expect(err).toBeInstanceOf(CommanderError);
+    if (!(err instanceof CommanderError)) throw new Error('unreachable');
+    expect(err.code).toBe('commander.help');
+    expect(err.exitCode).toBe(1);
+  });
+
+  // classifyHelpRequest routes `help help` to root help before parse; this
+  // pins the raw commander behaviour that makes the interception necessary.
+  test('help help throws commander.help with exit 1 at parse level', async () => {
+    const err = await parseError(['help', 'help']);
+    expect(err).toBeInstanceOf(CommanderError);
+    if (!(err instanceof CommanderError)) throw new Error('unreachable');
+    expect(err.code).toBe('commander.help');
+    expect(err.exitCode).toBe(1);
+  });
+});
+
+describe('buildProgram exitOverride', () => {
+  test('an unknown option throws CommanderError instead of exiting', async () => {
+    const program = buildProgram(meta);
+    const err = await program
+      .parseAsync(['node', 'pi-tin', 'list', '--bogus'])
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CommanderError);
+    if (!(err instanceof CommanderError)) throw new Error('unreachable');
+    expect(err.code).toBe('commander.unknownOption');
+  });
+
+  test('a missing required argument throws CommanderError', async () => {
+    const program = buildProgram(meta);
+    const err = await program
+      .parseAsync(['node', 'pi-tin', 'show'])
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CommanderError);
+    if (!(err instanceof CommanderError)) throw new Error('unreachable');
+    expect(err.code).toBe('commander.missingArgument');
   });
 });

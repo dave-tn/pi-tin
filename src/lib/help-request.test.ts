@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyHelpRequest, isHelpOrVersionRequest, isPrereqExemptRequest } from './help-request.js';
+import { classifyHelpRequest, classifyInvocation, isHelpOrVersionRequest, isPrereqExemptRequest } from './help-request.js';
 
 describe('classifyHelpRequest', () => {
   test('no help token → none', () => {
@@ -36,6 +36,18 @@ describe('classifyHelpRequest', () => {
   test('bare help stays top-level', () => {
     expect(classifyHelpRequest(['help'], true)).toBe('normal');
     expect(classifyHelpRequest(['help'], false)).toBe('guide');
+  });
+
+  test('help help is a root help request (commander cannot dispatch it)', () => {
+    expect(classifyHelpRequest(['help', 'help'], true)).toBe('root');
+    expect(classifyHelpRequest(['help', 'help'], false)).toBe('guide');
+    expect(classifyHelpRequest(['help', 'help', '--json'], true)).toBe('json');
+    expect(classifyHelpRequest(['help', 'help', '--json'], false)).toBe('json');
+  });
+
+  test('mixed help argv with a real target falls through to commander', () => {
+    expect(classifyHelpRequest(['help', 'help', 'list'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help', 'help', 'list'], false)).toBe('normal');
   });
 });
 
@@ -77,5 +89,79 @@ describe('isPrereqExemptRequest', () => {
   test('ordinary commands still hit the gate', () => {
     expect(isPrereqExemptRequest(['list'])).toBe(false);
     expect(isPrereqExemptRequest(['open', 'my-workspace'])).toBe(false);
+  });
+});
+
+describe('classifyInvocation', () => {
+  const known = ['list', 'show', 'stop', 'help', 'container-profile', 'agent-profile'];
+  const groups = new Map([
+    ['container-profile', ['list', 'show', 'apply', 'delete']],
+    ['agent-profile', ['add', 'list', 'show', 'delete', 'discover', 'finder']],
+  ]);
+
+  test('bare invocation proceeds', () => {
+    expect(classifyInvocation([], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('flag-only invocation proceeds', () => {
+    expect(classifyInvocation(['--build'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('known command proceeds', () => {
+    expect(classifyInvocation(['list', '--json'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('unknown command is refused', () => {
+    expect(classifyInvocation(['bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('unknown command is refused even with --help', () => {
+    expect(classifyInvocation(['bogus', '--help'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('flags before the positional are skipped', () => {
+    expect(classifyInvocation(['--build', 'bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
+  });
+
+  test('a bare group command is refused with its subcommand names', () => {
+    expect(classifyInvocation(['agent-profile'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      groupName: 'agent-profile',
+      subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
+    });
+    expect(classifyInvocation(['container-profile'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      groupName: 'container-profile',
+      subcommands: ['list', 'show', 'apply', 'delete'],
+    });
+  });
+
+  test('a bare group command with a non-help flag is still refused', () => {
+    expect(classifyInvocation(['agent-profile', '--json'], known, groups)).toEqual({
+      kind: 'missing-subcommand',
+      groupName: 'agent-profile',
+      subcommands: ['add', 'list', 'show', 'delete', 'discover', 'finder'],
+    });
+  });
+
+  test('a group command with a help flag proceeds (commander prints group help, exit 0)', () => {
+    expect(classifyInvocation(['agent-profile', '--help'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['agent-profile', '-h'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('a group command with a subcommand proceeds, even an unknown one (commander reports it)', () => {
+    expect(classifyInvocation(['agent-profile', 'list'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['agent-profile', 'bogus-sub'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('help with a known target proceeds', () => {
+    expect(classifyInvocation(['help', 'list'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help', 'agent-profile'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help'], known, groups)).toEqual({ kind: 'proceed' });
+    expect(classifyInvocation(['help', 'help'], known, groups)).toEqual({ kind: 'proceed' });
+  });
+
+  test('help with an unknown target is refused as an unknown command', () => {
+    expect(classifyInvocation(['help', 'bogus'], known, groups)).toEqual({ kind: 'unknown-command', badInput: 'bogus' });
   });
 });

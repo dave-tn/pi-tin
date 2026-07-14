@@ -10,6 +10,8 @@ import {
   isPiTinImageTag,
 } from '../lib/container.js';
 import { getConfigDir } from '../lib/paths.js';
+import { CliError, EXIT } from '../lib/cli-errors.js';
+import { printJson, shouldEmitJson } from '../lib/cli-output.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { isRecord } from '../lib/guards.js';
 import { planCleanup, selectOrphanedImages } from '../lib/workspace-plans.js';
@@ -50,21 +52,24 @@ export function prunePass(
   }
 }
 
-function run(args: string[], label: string): void {
+function run(args: string[], label: string, quiet: boolean): PruneOutcome {
   const outcome = prunePass(args, (a) =>
     execFileSync('container', a, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     }),
   );
-  if (outcome.status === 'removed') {
-    console.log(outcome.output);
-    console.log(chalk.green(`✔ ${label}`));
-  } else if (outcome.status === 'empty') {
-    console.log(chalk.dim(`  ${label}: nothing to clean`));
-  } else {
+  if (outcome.status === 'failed') {
     console.warn(chalk.yellow(`Warning: ${label} failed: ${outcome.message}`));
+  } else if (!quiet) {
+    if (outcome.status === 'removed') {
+      console.log(outcome.output);
+      console.log(chalk.green(`✔ ${label}`));
+    } else {
+      console.log(chalk.dim(`  ${label}: nothing to clean`));
+    }
   }
+  return outcome;
 }
 
 /**
@@ -77,25 +82,28 @@ export async function confirmCleanup(input: {
   stopped: string[];
   force: boolean;
   isInteractive?: boolean;
+  quiet?: boolean;
 }): Promise<boolean> {
-  if (input.stopped.length > 0) {
-    const names = input.stopped.map((n) => chalk.cyan(n)).join(', ');
-    console.log(
-      chalk.yellow(
-        `⚠ ${input.stopped.length} stopped pi-tin workspace${input.stopped.length === 1 ? '' : 's'} will be removed: ${names}`,
-      ),
-    );
+  if (input.quiet !== true) {
+    if (input.stopped.length > 0) {
+      const names = input.stopped.map((n) => chalk.cyan(n)).join(', ');
+      console.log(
+        chalk.yellow(
+          `⚠ ${input.stopped.length} stopped pi-tin workspace${input.stopped.length === 1 ? '' : 's'} will be removed: ${names}`,
+        ),
+      );
+      console.log(
+        chalk.dim(
+          '  Any in-container state (installed packages, files outside mounted volumes) will be lost.',
+        ),
+      );
+    }
     console.log(
       chalk.dim(
-        '  Any in-container state (installed packages, files outside mounted volumes) will be lost.',
+        'This removes stopped containers, dangling images, and unused volumes — not limited to pi-tin.',
       ),
     );
   }
-  console.log(
-    chalk.dim(
-      'This removes stopped containers, dangling images, and unused volumes — not limited to pi-tin.',
-    ),
-  );
   return confirmDestructive({
     message: 'Continue with cleanup?',
     action: 'clean up containers, images, and volumes',
@@ -105,46 +113,56 @@ export async function confirmCleanup(input: {
   });
 }
 
-async function fullWipe(running: string[], force: boolean): Promise<void> {
+// Thrown from both the `--all --dry-run` preview and fullWipe itself; one
+// constructor keeps the message and remediation from drifting.
+function workspacesRunningError(running: string[]): CliError {
+  return new CliError(
+    `Cannot perform full wipe while ${running.length} workspace${running.length === 1 ? ' is' : 's are'} running: ${running.join(', ')}`,
+    EXIT.GENERAL,
+    {
+      code: 'workspaces_running',
+      remediation: `Stop them first: ${running.map((n) => `pi-tin stop ${n}`).join(', ')}.`,
+    },
+  );
+}
+
+export async function fullWipe(running: string[], force: boolean, json: boolean): Promise<void> {
   if (running.length > 0) {
-    const names = running.map((n) => chalk.cyan(n)).join(', ');
-    console.error(
-      chalk.red(
-        `Cannot perform full wipe while ${running.length} workspace${running.length === 1 ? ' is' : 's are'} running: ${names}`,
-      ),
-    );
-    console.error(
-      chalk.dim(
-        `  Stop them first with: ${running.map((n) => `pi-tin stop ${n}`).join(', ')}`,
-      ),
-    );
-    process.exit(1);
+    throw workspacesRunningError(running);
   }
 
   const allImages = listImageNames().filter(isPiTinImageTag);
   const configDir = getConfigDir();
   const configDirExists = fs.existsSync(configDir);
 
-  console.log(chalk.red.bold('⚠ This will permanently delete ALL pi-tin data:\n'));
-  if (allImages.length > 0) {
-    console.log(chalk.red(`  • ${allImages.length} container image${allImages.length === 1 ? '' : 's'} (${allImages.join(', ')})`));
-  }
-  if (configDirExists) {
-    console.log(chalk.red(`  • All container profiles, workspaces, agent profiles, and configuration`));
-    console.log(chalk.red(`  • Config directory: ${configDir}`));
+  if (!json) {
+    console.log(chalk.red.bold('⚠ This will permanently delete ALL pi-tin data:\n'));
+    if (allImages.length > 0) {
+      console.log(chalk.red(`  • ${allImages.length} container image${allImages.length === 1 ? '' : 's'} (${allImages.join(', ')})`));
+    }
+    if (configDirExists) {
+      console.log(chalk.red(`  • All container profiles, workspaces, agent profiles, and configuration`));
+      console.log(chalk.red(`  • Config directory: ${configDir}`));
+    }
   }
   if (allImages.length === 0 && !configDirExists) {
-    console.log(chalk.dim('  Nothing to remove.'));
+    if (json) {
+      printJson({ action: 'wiped', imagesRemoved: [], imagesFailed: [], configDirRemoved: false, prunes: null });
+    } else {
+      console.log(chalk.dim('  Nothing to remove.'));
+    }
     return;
   }
-  console.log();
-  console.log(chalk.yellow('  All other stopped containers, dangling images, and unused volumes'));
-  console.log(chalk.yellow('  will also be removed (not limited to pi-tin).'));
-  console.log();
-  console.log(chalk.dim('  Your project files and mounted directories are not affected.'));
-  console.log();
-  console.log(chalk.red('  This cannot be undone.'));
-  console.log();
+  if (!json) {
+    console.log();
+    console.log(chalk.yellow('  All other stopped containers, dangling images, and unused volumes'));
+    console.log(chalk.yellow('  will also be removed (not limited to pi-tin).'));
+    console.log();
+    console.log(chalk.dim('  Your project files and mounted directories are not affected.'));
+    console.log();
+    console.log(chalk.red('  This cannot be undone.'));
+    console.log();
+  }
 
   const proceed = await confirmDestructive({
     message: 'Continue with full wipe?',
@@ -152,35 +170,63 @@ async function fullWipe(running: string[], force: boolean): Promise<void> {
     force,
   });
   if (!proceed) {
-    console.log('Cancelled.');
+    if (json) {
+      printJson({ action: 'cancelled' });
+    } else {
+      console.log('Cancelled.');
+    }
     return;
   }
 
-  console.log();
+  if (!json) {
+    console.log();
+  }
 
   // Remove all pi-tin images
+  const imagesRemoved: string[] = [];
+  const imagesFailed: string[] = [];
   for (const img of allImages) {
     try {
       deleteImage(img);
-      console.log(chalk.yellow(`Removed image: ${img}`));
+      imagesRemoved.push(img);
+      if (!json) {
+        console.log(chalk.yellow(`Removed image: ${img}`));
+      }
     } catch (err) {
+      imagesFailed.push(img);
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(chalk.yellow(`Warning: failed to remove image '${img}': ${msg}`));
     }
   }
 
   // Remove stopped containers, dangling images, unused volumes
-  run(['prune'], 'Removed stopped containers');
-  run(['image', 'prune'], 'Removed dangling images');
-  run(['volume', 'prune'], 'Removed unused volumes');
+  const containersOutcome = run(['prune'], 'Removed stopped containers', json);
+  const imagesOutcome = run(['image', 'prune'], 'Removed dangling images', json);
+  const volumesOutcome = run(['volume', 'prune'], 'Removed unused volumes', json);
 
   // Remove config directory
   if (configDirExists) {
     fs.rmSync(configDir, { recursive: true, force: true });
-    console.log(chalk.yellow(`Removed config directory: ${configDir}`));
+    if (!json) {
+      console.log(chalk.yellow(`Removed config directory: ${configDir}`));
+    }
   }
 
-  console.log(chalk.bold('\nAll pi-tin data has been removed.'));
+  if (json) {
+    printJson({
+      action: 'wiped',
+      imagesRemoved,
+      imagesFailed,
+      configDirRemoved: configDirExists,
+      prunes: {
+        containers: containersOutcome.status,
+        images: imagesOutcome.status,
+        volumes: volumesOutcome.status,
+      },
+    });
+  } else {
+    console.log(chalk.bold('\nAll pi-tin data has been removed.'));
+  }
 }
 
 export function registerCleanupCommand(
@@ -191,7 +237,10 @@ export function registerCleanupCommand(
     .description('Remove stopped containers, dangling images, and unused volumes')
     .option('--all', 'Full wipe: remove all pi-tin images, config, and data')
     .option('-f, --force', 'Skip confirmation prompt')
-    .action(async (opts: { all?: boolean; force?: boolean }) => {
+    .option('--dry-run', 'Preview what would be removed without removing anything')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (opts: { all?: boolean; force?: boolean; dryRun?: boolean; json?: boolean }) => {
+      const json = shouldEmitJson(opts.json);
       await withExitHandling(async () => {
         const plan = planCleanup(listContainers());
         if (plan.action === 'refuse') {
@@ -200,11 +249,61 @@ export function registerCleanupCommand(
         const running = plan.runningWorkspaces;
 
         if (opts.all) {
-          await fullWipe(running, opts.force === true);
+          if (opts.dryRun === true) {
+            if (running.length > 0) {
+              throw workspacesRunningError(running);
+            }
+            const images = listImageNames().filter(isPiTinImageTag);
+            const configDir = getConfigDir();
+            const preview = {
+              action: 'full-wipe',
+              images,
+              configDir: fs.existsSync(configDir) ? configDir : null,
+              prunes: ['containers', 'images', 'volumes'],
+            };
+            if (json) {
+              printJson({ ...preview, dryRun: true });
+            } else {
+              console.log(`Would remove ${images.length} pi-tin image${images.length === 1 ? '' : 's'}, the config directory, and run all prunes.`);
+            }
+            return;
+          }
+          await fullWipe(running, opts.force === true, json);
           return;
         }
 
-        if (running.length > 0) {
+        const workspaceNames = listWorkspaces().map((w) => w.name);
+        const orphanedImages = selectOrphanedImages({
+          imageNames: listImageNames(),
+          workspaceNames,
+        });
+
+        if (opts.dryRun === true) {
+          const preview = {
+            action: 'cleanup',
+            runningWorkspaces: running,
+            stoppedWorkspaces: plan.stoppedWorkspaces,
+            orphanedImages,
+            prunes: ['containers', 'images', 'volumes'],
+          };
+          if (json) {
+            printJson({ ...preview, dryRun: true });
+          } else {
+            if (running.length > 0) {
+              console.log(chalk.yellow(`Running (skipped): ${running.join(', ')}`));
+            }
+            if (plan.stoppedWorkspaces.length > 0) {
+              console.log(`Would remove stopped workspace container${plan.stoppedWorkspaces.length === 1 ? '' : 's'}: ${plan.stoppedWorkspaces.join(', ')}`);
+            }
+            if (orphanedImages.length > 0) {
+              console.log(`Would remove orphaned image${orphanedImages.length === 1 ? '' : 's'}: ${orphanedImages.join(', ')}`);
+            }
+            console.log('Would prune stopped containers, dangling images, and unused volumes (not limited to pi-tin).');
+          }
+          return;
+        }
+
+        if (!json && running.length > 0) {
           const names = running.map((n) => chalk.cyan(n)).join(', ');
           console.log(
             chalk.yellow(
@@ -222,36 +321,56 @@ export function registerCleanupCommand(
         const proceed = await confirmCleanup({
           stopped: plan.stoppedWorkspaces,
           force: opts.force === true,
+          quiet: json,
         });
         if (!proceed) {
-          console.log('Cancelled.');
+          if (json) {
+            printJson({ action: 'cancelled' });
+          } else {
+            console.log('Cancelled.');
+          }
           return;
         }
-        console.log();
-
-        console.log(chalk.bold('Cleaning up...\n'));
+        if (!json) {
+          console.log();
+          console.log(chalk.bold('Cleaning up...\n'));
+        }
 
         // Remove orphaned pi-tin images (no matching workspace)
-        const workspaceNames = listWorkspaces().map((w) => w.name);
-        const orphanedImages = selectOrphanedImages({
-          imageNames: listImageNames(),
-          workspaceNames,
-        });
+        const orphanedImagesRemoved: string[] = [];
+        const orphanedImagesFailed: string[] = [];
         for (const img of orphanedImages) {
           try {
             deleteImage(img);
-            console.log(chalk.yellow(`Removed orphaned image: ${img}`));
+            orphanedImagesRemoved.push(img);
+            if (!json) {
+              console.log(chalk.yellow(`Removed orphaned image: ${img}`));
+            }
           } catch (err) {
+            orphanedImagesFailed.push(img);
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(chalk.yellow(`Warning: failed to remove image '${img}': ${msg}`));
           }
         }
 
-        run(['prune'], 'Removed stopped containers');
-        run(['image', 'prune'], 'Removed dangling images');
-        run(['volume', 'prune'], 'Removed unused volumes');
+        const containersOutcome = run(['prune'], 'Removed stopped containers', json);
+        const imagesOutcome = run(['image', 'prune'], 'Removed dangling images', json);
+        const volumesOutcome = run(['volume', 'prune'], 'Removed unused volumes', json);
 
-        console.log(chalk.bold('\nDone.'));
+        if (json) {
+          printJson({
+            action: 'cleaned',
+            orphanedImagesRemoved,
+            orphanedImagesFailed,
+            prunes: {
+              containers: containersOutcome.status,
+              images: imagesOutcome.status,
+              volumes: volumesOutcome.status,
+            },
+          });
+        } else {
+          console.log(chalk.bold('\nDone.'));
+        }
       });
     });
 }

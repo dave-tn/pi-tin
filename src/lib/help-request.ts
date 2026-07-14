@@ -1,4 +1,4 @@
-export type HelpRequest = 'json' | 'guide' | 'normal' | 'none';
+export type HelpRequest = 'json' | 'guide' | 'normal' | 'root' | 'none';
 
 // True when the invocation only asks for help or the version, so the CLI can
 // skip the macOS/prereq gate. Flags must match what commander registers in
@@ -17,7 +17,10 @@ export function isPrereqExemptRequest(args: string[]): boolean {
 
 // Route a top-level help invocation. Subcommand help (`<cmd> --help` or
 // `help <cmd>`) and non-help calls return 'normal'/'none' so commander
-// handles them unchanged.
+// handles them unchanged. `help help` counts as top-level: commander cannot
+// dispatch its implicit help command as its own target (it throws
+// commander.help exit 1), so on a TTY it becomes 'root' — print root help
+// directly instead of parsing.
 export function classifyHelpRequest(args: string[], isTty: boolean): HelpRequest {
   const wantsHelp = args.includes('--help') || args.includes('-h') || args[0] === 'help';
   if (!wantsHelp) {
@@ -25,13 +28,53 @@ export function classifyHelpRequest(args: string[], isTty: boolean): HelpRequest
   }
 
   const nonFlagArgs = args.filter((a) => !a.startsWith('-'));
-  const isTopLevel = nonFlagArgs.length === 0 || (nonFlagArgs[0] === 'help' && nonFlagArgs.length === 1);
-  if (!isTopLevel) {
+  if (!nonFlagArgs.every((a) => a === 'help')) {
     return 'normal';
   }
 
   if (args.includes('--json')) {
     return 'json';
   }
-  return isTty ? 'normal' : 'guide';
+  if (!isTty) {
+    return 'guide';
+  }
+  return nonFlagArgs.length > 1 ? 'root' : 'normal';
+}
+
+export type InvocationPlan =
+  | { kind: 'proceed' }
+  | { kind: 'unknown-command'; badInput: string }
+  | { kind: 'missing-subcommand'; groupName: string; subcommands: string[] };
+
+// Commander's root default action reports an unknown first positional as
+// "too many arguments" (exit 1, no envelope), and `<unknown> --help` falls
+// back to root help with exit 0 — a false positive for agents probing
+// whether a command exists. Commander also has no real error for a bare
+// group command (`agent-profile` with no subcommand) or `help <unknown>`:
+// both throw commander.help whose message is the literal '(outputHelp)'
+// placeholder, with the help text on the suppressed writeErr channel.
+// Decide all of these here, before parse and before any --help routing.
+// All root options are boolean, so the first non-flag token is always the
+// intended command.
+export function classifyInvocation(
+  args: string[],
+  knownCommands: string[],
+  groupSubcommands: ReadonlyMap<string, string[]>,
+): InvocationPlan {
+  const [commandName, target] = args.filter((a) => !a.startsWith('-'));
+  if (commandName === undefined) {
+    return { kind: 'proceed' };
+  }
+  if (!knownCommands.includes(commandName)) {
+    return { kind: 'unknown-command', badInput: commandName };
+  }
+  if (commandName === 'help' && target !== undefined && !knownCommands.includes(target)) {
+    return { kind: 'unknown-command', badInput: target };
+  }
+  const subcommands = groupSubcommands.get(commandName);
+  const wantsHelp = args.includes('--help') || args.includes('-h');
+  if (subcommands !== undefined && target === undefined && !wantsHelp) {
+    return { kind: 'missing-subcommand', groupName: commandName, subcommands };
+  }
+  return { kind: 'proceed' };
 }

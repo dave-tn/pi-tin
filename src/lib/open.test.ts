@@ -414,10 +414,26 @@ describe('planAddProject', () => {
     projectedSharedDirectoryCount: 5,
     maxSharedDirectories: 22,
     containerState: 'stopped' as const,
+    isInteractive: true,
   };
 
   test('adds and opens when the workspace is not running', () => {
     expect(planAddProject(base)).toEqual({ action: 'add-and-open' });
+  });
+
+  test('adds and messages (no open) when headless and the workspace is not running', () => {
+    const plan = planAddProject({ ...base, isInteractive: false });
+    expect(plan.action).toBe('add-and-message');
+    if (plan.action !== 'add-and-message') throw new Error('wrong action');
+    expect(plan.message).toContain('new-app');
+    expect(plan.message).toContain('pi-tin open work');
+  });
+
+  test('headless add to a running workspace keeps the restart message', () => {
+    const plan = planAddProject({ ...base, containerState: 'running', isInteractive: false });
+    expect(plan.action).toBe('add-and-message');
+    if (plan.action !== 'add-and-message') throw new Error('wrong action');
+    expect(plan.message).toContain('restart');
   });
 
   test('adds and messages (no open) when the workspace is running', () => {

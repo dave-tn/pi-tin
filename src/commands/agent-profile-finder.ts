@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import chalk from 'chalk';
+import { ensureInteractive } from '../lib/confirmation.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { getAgentProfilesDir, isSafePathSegment } from '../lib/paths.js';
 import { loadAgentProfile } from '../lib/agent-profiles.js';
@@ -11,6 +12,12 @@ export function registerAgentProfileFinderCommand(
     .command('finder [name]')
     .description('Open agent profiles directory in Finder')
     .action((name?: string) => {
+      // Headless this would exit 0 after silently opening a Finder window on
+      // the host — refuse before the side effect.
+      ensureInteractive({
+        action: "run 'agent-profile finder'",
+        remediation: 'Use `pi-tin agent-profile show <name> --json`.',
+      });
       ensureInitialised();
 
       let targetPath: string;

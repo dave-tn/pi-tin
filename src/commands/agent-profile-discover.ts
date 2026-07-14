@@ -8,9 +8,14 @@ import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import { createAgentProfile, listAgentProfiles } from '../lib/agent-profiles.js';
 import type { AgentProfileMode } from '../lib/agent-profiles.js';
 import { withExitHandling } from '../lib/exit-handling.js';
+import { ensureInteractive } from '../lib/confirmation.js';
 import { KNOWN_AGENTS, defaultProfileNameFor } from '../lib/agents.js';
 
 export async function runAgentProfileDiscover(): Promise<void> {
+  ensureInteractive({
+    action: "run 'agent-profile discover'",
+    remediation: 'Create agent profiles directly: `pi-tin agent-profile add <name> --agent <agent>`.',
+  });
   const home = os.homedir();
 
   // Find agents with existing dot-directories on the host

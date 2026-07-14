@@ -12,8 +12,23 @@ import {
   clearWorkspaceRuntimeState,
 } from '../lib/runtime-state.js';
 import { withExitHandling } from '../lib/exit-handling.js';
-import { planStopWorkspace } from '../lib/workspace-plans.js';
+import { planStopWorkspace, type StopWorkspacePlan } from '../lib/workspace-plans.js';
 import { assertValidWorkspaceName } from '../lib/workspaces.js';
+import { printJson, shouldEmitJson } from '../lib/cli-output.js';
+
+export type StopPreview =
+  | { action: 'noop'; workspace: string; reason: 'not-running' }
+  | { action: 'stop'; workspace: string; requiresConfirmation: boolean };
+
+export function buildStopPreview(
+  plan: Exclude<StopWorkspacePlan, { action: 'refuse' }>,
+  workspace: string,
+): StopPreview {
+  if (plan.action === 'noop') {
+    return { action: 'noop', workspace, reason: 'not-running' };
+  }
+  return { action: 'stop', workspace, requiresConfirmation: plan.action === 'confirm' };
+}
 
 export function registerStopCommand(
   program: import('commander').Command,
@@ -22,12 +37,15 @@ export function registerStopCommand(
     .command('stop <workspace>')
     .description('Stop a running workspace')
     .option('-f, --force', 'Skip confirmation prompt and kill if needed')
-    .action(async (name: string, opts: { force?: boolean }) => {
+    .option('--dry-run', 'Preview what would be stopped without stopping')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (name: string, opts: { force?: boolean; dryRun?: boolean; json?: boolean }) => {
       ensureInitialised();
 
       // stop never goes through loadWorkspace, so validate the raw argv name
       // before deriving container names and runtime-state paths from it.
       assertValidWorkspaceName(name);
+      const json = shouldEmitJson(opts.json);
 
       await withExitHandling(async () => {
         const containerName = containerNameFor(name);
@@ -47,10 +65,26 @@ export function registerStopCommand(
             throw new Error(plan.message);
           }
 
+          if (opts.dryRun === true) {
+            const preview = buildStopPreview(plan, name);
+            if (json) {
+              printJson({ ...preview, dryRun: true });
+            } else if (preview.action === 'noop') {
+              console.log(chalk.dim(`Workspace '${name}' is not running; nothing to stop.`));
+            } else {
+              console.log(`Would stop workspace '${name}'.`);
+            }
+            return;
+          }
+
           if (plan.action === 'noop') {
             await stopAndRemoveContainer(containerName);
             clearWorkspaceRuntimeState(name);
-            console.log(chalk.dim(`Workspace '${name}' is not running.`));
+            if (json) {
+              printJson({ action: 'noop', workspace: name, reason: 'not-running' });
+            } else {
+              console.log(chalk.dim(`Workspace '${name}' is not running.`));
+            }
             return;
           }
 
@@ -65,7 +99,11 @@ export function registerStopCommand(
               force: opts.force === true,
             });
             if (!proceed) {
-              console.log('Cancelled.');
+              if (json) {
+                printJson({ action: 'cancelled', workspace: name });
+              } else {
+                console.log('Cancelled.');
+              }
               return;
             }
           }
@@ -76,7 +114,11 @@ export function registerStopCommand(
 
           await stopAndRemoveContainer(containerName, { force: opts.force === true });
           clearWorkspaceRuntimeState(name);
-          console.log(chalk.green(`Stopped workspace '${name}'`));
+          if (json) {
+            printJson({ action: 'stopped', workspace: name });
+          } else {
+            console.log(chalk.green(`Stopped workspace '${name}'`));
+          }
         });
       });
     });

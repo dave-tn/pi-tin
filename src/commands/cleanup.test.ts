@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { confirmCleanup, prunePass } from './cleanup.js';
+import { confirmCleanup, fullWipe, prunePass } from './cleanup.js';
 import { planCleanup, selectOrphanedImages } from '../lib/workspace-plans.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
@@ -98,6 +98,17 @@ describe('confirmCleanup', () => {
   test('force proceeds without prompting, with or without stopped workspaces', async () => {
     expect(await confirmCleanup({ stopped: [], force: true, isInteractive: false })).toBe(true);
     expect(await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false })).toBe(true);
+  });
+});
+
+describe('fullWipe', () => {
+  test('refuses with a structured error while workspaces are running', async () => {
+    const err = await fullWipe(['ctwo', 'blitz'], true, false).then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.exitCode).toBe(EXIT.GENERAL);
+    expect(err.detail.code).toBe('workspaces_running');
+    expect(err.detail.remediation).toContain('pi-tin stop ctwo');
   });
 });
 

@@ -262,7 +262,7 @@ Notes:
 - `agent.skipPermissions` (default `true`) configures supported agents to skip interactive permission prompts (see [Permissions](#permissions)).
 - `host.sshAgent` (default `true`) forwards your SSH agent for git auth with any provider.
 - `host.githubCLI` (default `false`) enables GitHub CLI integration — automatically mounts `~/.config/gh` and resolves a `GH_TOKEN`.
-- `host.mounts` allows additional host directories to be mounted. Each entry is `{ host, container, readonly }`, all three required (e.g. `{ host: ~/data, container: /data, readonly: true }`). `host` supports `~` expansion; a mount whose host path doesn't exist is skipped with a warning. Must be **directories** — single file mounts are not supported.
+- `host.mounts` allows additional host directories to be mounted. Each entry is `{ host, container, readonly }`, all three required (e.g. `{ host: ~/data, container: /data, readonly: true }`). `host` supports `~` expansion; a mount whose host path doesn't exist is skipped with a warning. Must be **directories** — single file mounts are not supported. Mounting at a nested path (e.g. `~/.nuget/packages`) makes Apple `container` create the missing parent directories root-owned; on each fresh start pi-tin hands parents under the container home back to the workspace user, so tools can write beside the mount. Parents outside the home directory are left as the runtime creates them.
 - `host.env` values are passed to the container at runtime. Use `${VAR}` syntax to forward a host environment variable without hardcoding secrets in the YAML — if the host variable is unset, the entry is silently skipped. Only values that are exactly `${VAR}` are resolved; a `${…}` inside a longer string passes through literally, with a warning.
 - `stopAfterLastSession` controls how long pi-tin keeps a workspace running after the last host-side session exits. Format: an integer with a single `s`/`m`/`h` unit (e.g. `90s`, `5m`, `1h`) — no combinations. Default: `30s`.
 - If Apple's `container` CLI stops responding, pi-tin bounds all of its non-interactive `container` calls (`exec`, `cp`, `run`, `stop`, `kill`, `delete`, `list` and image operations) and fails fast rather than hanging indefinitely; only the interactive shell attach and the streaming image build run without a deadline. In that state you may need to restart the container system (`container system stop`, then `container system start`) before the workspace can be attached or stopped cleanly. If those commands hang too, try restarting the relevant launchd service (for example `launchctl kickstart -k gui/$(id -u)/com.apple.container.apiserver`, or a specific `com.apple.container.container-runtime-linux.<name>` service). If that still does not recover it, log out/in or reboot macOS.
@@ -297,18 +297,18 @@ of the following to a non-empty value:
 
 | Command | Description |
 |---------|-------------|
-| `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted) |
-| `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found |
-| `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly |
-| `pi-tin open <name> [--build]` | Start or join a workspace |
+| `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted; without a TTY exits 1 with error code `interactive_only` — use `apply` instead) |
+| `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found; without a TTY exits 1 with error code `interactive_only` |
+| `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly; the no-argument picker needs a TTY (exit 1, error code `interactive_only`) — `add <name>` works headless |
+| `pi-tin open <name> [--build]` | Start or join a workspace (interactive; attaches a tmux session; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` instead) |
 | `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
 | `pi-tin detect-host` | Print host facts as JSON (output is always JSON) — `{ gitIdentity, tz, colorterm, apiKeys, agents }` — for an agent to compose into a workspace `apply` payload |
 | `pi-tin agent-guide [--json]` | Print the agent usage guide (`--json` for a machine-readable schema of commands, flags, and exit codes) — see [Driving pi-tin from an agent](#driving-pi-tin-from-an-agent) |
-| `pi-tin stop <name> [--force]` | Stop a running workspace (prompts only when live sessions would be killed; non-interactive callers must then pass `--force` or get exit code 4; `--force` also escalates to `container kill` if a graceful stop exceeds 5s) |
-| `pi-tin delete <name> [--force]` | Delete a workspace and its image (`--force` skips the confirmation prompt; non-interactive callers must pass it or get exit code 4) |
-| `pi-tin cleanup [--all] [--force]` | Remove stopped containers, dangling images, unused volumes, and pi-tin images whose workspace no longer exists; `--all` does a full wipe (all pi-tin images, config, and data); `--force` skips the confirmation prompt |
+| `pi-tin stop <name> [--force] [--dry-run] [--json]` | Stop a running workspace (prompts only when live sessions would be killed; non-interactive callers must then pass `--force` or get exit code 4; `--force` also escalates to `container kill` if a graceful stop exceeds 5s; `--dry-run` previews the effect; `--json` (default when piped) emits a structured result) |
+| `pi-tin delete <name> [--force] [--dry-run] [--json]` | Delete a workspace and its image (`--force` skips the confirmation prompt; non-interactive callers must pass it or get exit code 4; `--dry-run` previews the blast radius (container, image); `--json` (default when piped) emits a structured result) |
+| `pi-tin cleanup [--all] [--force] [--dry-run] [--json]` | Remove stopped containers, dangling images, unused volumes, and pi-tin images whose workspace no longer exists; `--all` does a full wipe (all pi-tin images, config, and data); `--force` skips the confirmation prompt; `--dry-run` previews what would be removed; `--json` (default when piped) emits a structured result; a full wipe refuses with error code `workspaces_running` while any workspace is running |
 | `pi-tin container-profile list [--json]` | List all available container profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin container-profile show <name> [--json]` | Show details of a container profile (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin container-profile apply <name> [--dry-run]` | Create or update a container profile from a JSON object on stdin (see [Editing container profiles](#editing-container-profiles)) |
@@ -317,8 +317,8 @@ of the following to a non-empty value:
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
-| `pi-tin agent-profile discover` | Scan for agents and create agent profiles |
-| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder |
+| `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
+| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 
 `pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.
 
@@ -331,7 +331,7 @@ pi-tin is built to be driven by scripts and AI coding agents, not just humans at
 You can hand pi-tin to an AI coding agent and tell it, in plain language, to do the work — for example *"use the pi-tin CLI to create a Python workspace for this project"* or *"use pi-tin to add an API key to my workspace"*. The agent learns the whole command surface from the binary itself, so it does not need any pre-placed instructions:
 
 - `pi-tin agent-guide` prints a concise usage guide written for agents. The top-level `pi-tin --help` prints this same guide automatically when its output is captured (non-TTY); on an interactive terminal it shows the normal help plus an `Agents: run pi-tin agent-guide` pointer.
-- `pi-tin agent-guide --json` (or `pi-tin --help --json`) prints a machine-readable schema of commands, flags, and the exit-code contract.
+- `pi-tin agent-guide --json` (or `pi-tin --help --json`) prints a machine-readable schema of commands, flags, and the exit-code contract. The schema also annotates destructive commands (`destructive: true`) and lists interactive-only commands (`interactiveOnly`) with their headless alternatives.
 
 These describe the [Agent surface](#agent-surface) (the JSON read-modify-write loop) and the [stable exit codes](#machine-readable-output) covered below — start there for the details.
 
@@ -367,8 +367,8 @@ The subsections below — [Editing container profiles](#editing-container-profil
   | 3 | `NOT_FOUND` | Named workspace, container profile, or agent profile does not exist |
   | 4 | `CONFIRMATION_REQUIRED` | Destructive op without `--force` in non-interactive mode |
 
-- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed.
-- **Structured errors.** In JSON mode, errors are emitted as a structured envelope on stderr — `{ "error": { "message", "code", … } }` — so an agent can read the machine-stable `code` (and any `remediation`, `validValues`, or `badInput` fields) instead of grepping the message text.
+- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed. All five support `--dry-run` (preview the effect) and `--json`.
+- **Structured errors.** In JSON mode, errors are emitted as a structured envelope on stderr — `{ "error": { "message", "code", … } }` — so an agent can read the machine-stable `code` (and any `remediation`, `validValues`, or `badInput` fields) instead of grepping the message text. An unknown command is a validation failure: exit 2 with code `unknown_command` and the valid command list in `validValues` (this also applies when --help follows an unknown command, and to `pi-tin help <unknown>`). Usage mistakes (unknown option, missing argument, a group command such as `agent-profile` with no subcommand) are validation failures too: exit 2 with code `usage`.
 - **Prerequisite failures.** On an interactive terminal pi-tin offers to install the `container` CLI or start the container system service. Without a TTY it exits `1` with a structured error instead of prompting: `container_not_installed`, `container_version_unsupported`, `container_system_not_running`, or `container_system_probe_failed` (`platform_unsupported` on a non-macOS host). Caveat for `container_system_not_running`: some sandboxed shells block access to the container system service, so a running service can be reported as not running — verify with `container system status` from an unsandboxed shell before starting or restarting the service.
 
 ### Editing container profiles
@@ -433,9 +433,11 @@ already matches one (e.g. to also include it in a second workspace, or to fork
 it into a new one) — run `pi-tin add`. It shows a picker of the workspaces the
 directory is not already in, plus *Create new workspace*. `pi-tin add <name>`
 adds it straight to that workspace. The same rules apply: comments are
-preserved, a stopped workspace opens with the project mounted, a running one
-prints a restart reminder, and an add that would collide on a project name or
-exceed the mount limit is refused without writing.
+preserved, a stopped workspace opens with the project mounted (headless —
+no TTY — the add still completes and a `pi-tin open <name>` hint is printed
+instead), a running one prints a restart reminder, and an add that would
+collide on a project name or exceed the mount limit is refused without
+writing.
 
 ## SSH Agent Forwarding
 
@@ -560,8 +562,8 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 | `pi-tin agent-profile list [--json]` | List all agent profiles (`--json` for machine-readable output; JSON is the default when output is piped) |
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
-| `pi-tin agent-profile discover` | Scan for agents and create agent profiles |
-| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder |
+| `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
+| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 
 ## Permissions
 
