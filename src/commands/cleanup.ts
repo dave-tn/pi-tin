@@ -113,16 +113,22 @@ export async function confirmCleanup(input: {
   });
 }
 
+// Thrown from both the `--all --dry-run` preview and fullWipe itself; one
+// constructor keeps the message and remediation from drifting.
+function workspacesRunningError(running: string[]): CliError {
+  return new CliError(
+    `Cannot perform full wipe while ${running.length} workspace${running.length === 1 ? ' is' : 's are'} running: ${running.join(', ')}`,
+    EXIT.GENERAL,
+    {
+      code: 'workspaces_running',
+      remediation: `Stop them first: ${running.map((n) => `pi-tin stop ${n}`).join(', ')}.`,
+    },
+  );
+}
+
 export async function fullWipe(running: string[], force: boolean, json: boolean): Promise<void> {
   if (running.length > 0) {
-    throw new CliError(
-      `Cannot perform full wipe while ${running.length} workspace${running.length === 1 ? ' is' : 's are'} running: ${running.join(', ')}`,
-      EXIT.GENERAL,
-      {
-        code: 'workspaces_running',
-        remediation: `Stop them first: ${running.map((n) => `pi-tin stop ${n}`).join(', ')}.`,
-      },
-    );
+    throw workspacesRunningError(running);
   }
 
   const allImages = listImageNames().filter(isPiTinImageTag);
@@ -245,11 +251,7 @@ export function registerCleanupCommand(
         if (opts.all) {
           if (opts.dryRun === true) {
             if (running.length > 0) {
-              throw new CliError(
-                `Cannot perform full wipe while ${running.length} workspace${running.length === 1 ? ' is' : 's are'} running: ${running.join(', ')}`,
-                EXIT.GENERAL,
-                { code: 'workspaces_running', remediation: `Stop them first: ${running.map((n) => `pi-tin stop ${n}`).join(', ')}.` },
-              );
+              throw workspacesRunningError(running);
             }
             const images = listImageNames().filter(isPiTinImageTag);
             const configDir = getConfigDir();
