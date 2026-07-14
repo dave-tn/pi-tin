@@ -103,7 +103,9 @@ describe('commander help-fallback flows', () => {
     expect(err.exitCode).toBe(1);
   });
 
-  test('help help throws commander.help with exit 1 (the usageErrorFrom backstop flow)', async () => {
+  // classifyHelpRequest routes `help help` to root help before parse; this
+  // pins the raw commander behaviour that makes the interception necessary.
+  test('help help throws commander.help with exit 1 at parse level', async () => {
     const err = await parseError(['help', 'help']);
     expect(err).toBeInstanceOf(CommanderError);
     if (!(err instanceof CommanderError)) throw new Error('unreachable');
