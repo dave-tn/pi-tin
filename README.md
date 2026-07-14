@@ -300,7 +300,7 @@ of the following to a non-empty value:
 | `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted; without a TTY exits 1 with error code `interactive_only` — use `apply` instead) |
 | `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found; without a TTY exits 1 with error code `interactive_only` |
 | `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly; the no-argument picker needs a TTY (exit 1, error code `interactive_only`) — `add <name>` works headless |
-| `pi-tin open <name> [--build]` | Start or join a workspace |
+| `pi-tin open <name> [--build]` | Start or join a workspace (interactive — attaches a tmux session; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` to inspect instead) |
 | `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
@@ -318,7 +318,7 @@ of the following to a non-empty value:
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
-| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder |
+| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 
 `pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.
 
@@ -561,7 +561,7 @@ The `pi-tin create` flow will detect keys in your host environment and offer to 
 | `pi-tin agent-profile show <name> [--json]` | Show an agent profile (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
-| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder |
+| `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 
 ## Permissions
 
