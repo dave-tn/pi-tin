@@ -44,7 +44,7 @@ The wizards (`create`, no-arg `add`, bare `pi-tin`, `agent-profile discover`) cu
 - Consumes: `CliError`, `EXIT` from `src/lib/cli-errors.js`; `isInteractiveSession` from `src/lib/confirmation.js`.
 - Produces: `ensureInteractive(input: { action: string; remediation: string; isInteractive?: boolean }): void` — throws `CliError` with `exitCode: EXIT.GENERAL` and `detail.code: 'interactive_only'` when the session is not interactive. Task 7's schema documents the same code string; Task 8's e2e probes rely on it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/lib/confirmation.test.ts` (it already imports `describe/expect/test` from `bun:test`, `CliError`, `EXIT` — extend the existing imports if any of these are missing):
 
@@ -85,12 +85,12 @@ describe('ensureInteractive', () => {
 
 Add `ensureInteractive` to the import from `./confirmation.js`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun test src/lib/confirmation.test.ts`
 Expected: FAIL — `ensureInteractive` is not exported.
 
-- [ ] **Step 3: Implement `ensureInteractive`**
+- [x] **Step 3: Implement `ensureInteractive`**
 
 In `src/lib/confirmation.ts`, directly below `isInteractiveSession` (line 20):
 
@@ -114,12 +114,12 @@ export function ensureInteractive(input: {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/lib/confirmation.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Gate `runCreateFlow`**
+- [x] **Step 5: Gate `runCreateFlow`**
 
 In `src/commands/create.ts`, add to the existing `../lib/confirmation.js` import (or add the import if absent): `ensureInteractive`. Then make the guard the first statement of `runCreateFlow`:
 
@@ -134,7 +134,7 @@ export async function runCreateFlow(nameArg?: string): Promise<void> {
   // …existing body unchanged…
 ```
 
-- [ ] **Step 6: Gate the no-arg `add` path (deps-injected)**
+- [x] **Step 6: Gate the no-arg `add` path (deps-injected)**
 
 In `src/commands/add.ts`:
 
@@ -170,7 +170,7 @@ test('no-arg add propagates the interactive_only refusal', async () => {
 });
 ```
 
-- [ ] **Step 7: Gate the default action (deps-injected)**
+- [x] **Step 7: Gate the default action (deps-injected)**
 
 In `src/lib/default-action.ts`:
 
@@ -210,7 +210,7 @@ test('refuses non-interactive sessions before doing anything', async () => {
 
 (Import `CliError`, `EXIT` from `./cli-errors.js` in both test files if not already imported.)
 
-- [ ] **Step 8: Gate `agent-profile discover` (direct call)**
+- [x] **Step 8: Gate `agent-profile discover` (direct call)**
 
 In `src/commands/agent-profile-discover.ts`, import `ensureInteractive` from `../lib/confirmation.js` and make it the first statement of `runAgentProfileDiscover`:
 
@@ -223,7 +223,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
   // …existing body unchanged…
 ```
 
-- [ ] **Step 9: README rows**
+- [x] **Step 9: README rows**
 
 In the `README.md` command table (lines ~299-322), append to these rows' descriptions:
 
@@ -232,7 +232,7 @@ In the `README.md` command table (lines ~299-322), append to these rows' descrip
 - `pi-tin add [workspace]` row: append `; the no-argument picker needs a TTY (exit 1, error code interactive_only) — \`add <name>\` works headless`
 - `pi-tin agent-profile discover` row: append ` (interactive; without a TTY exits 1 with error code interactive_only — use agent-profile add)`
 
-- [ ] **Step 10: Typecheck, full test run, commit**
+- [x] **Step 10: Typecheck, full test run, commit**
 
 Run: `bun x tsc --noEmit && bun test`
 Expected: PASS (all suites — the deps-factory additions keep existing tests green).
@@ -264,7 +264,7 @@ at the headless alternative."
 - Consumes: `CliError`, `EXIT` from `src/lib/cli-errors.js`; `buildProgram` already constructed in `src/cli.ts:43`.
 - Produces: `classifyInvocation(args: string[], knownCommands: string[]): InvocationPlan` where `InvocationPlan = { kind: 'proceed' } | { kind: 'unknown-command'; badInput: string }`. The envelope `code` string `'unknown_command'` is documented in Task 7/8.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/lib/help-request.test.ts`:
 
@@ -300,12 +300,12 @@ describe('classifyInvocation', () => {
 
 Add `classifyInvocation` to the import from `./help-request.js`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun test src/lib/help-request.test.ts`
 Expected: FAIL — `classifyInvocation` is not exported.
 
-- [ ] **Step 3: Implement `classifyInvocation`**
+- [x] **Step 3: Implement `classifyInvocation`**
 
 Append to `src/lib/help-request.ts`:
 
@@ -329,12 +329,12 @@ export function classifyInvocation(args: string[], knownCommands: string[]): Inv
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/lib/help-request.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Wire into `src/cli.ts`**
+- [x] **Step 5: Wire into `src/cli.ts`**
 
 Add `classifyInvocation` to the existing import from `./lib/help-request.js`. Then insert at the top of the existing `try` block (before the `isPrereqExemptRequest` gate at line 49 — an unknown command must not waste a container-service probe or misreport in sandboxed shells):
 
@@ -355,11 +355,11 @@ Add `classifyInvocation` to the existing import from `./lib/help-request.js`. Th
 
 Verify during this step whether `program.commands` includes `help` (log it once or check with a quick script); if Commander 14 does include it, drop the manual `'help'` append and the comment.
 
-- [ ] **Step 6: README**
+- [x] **Step 6: README**
 
 In the **Structured errors** bullet of `README.md` (Machine-Readable Output section), append: `An unknown command is a validation failure: exit 2 with code \`unknown_command\` and the valid command list in \`validValues\` (this also applies when --help follows an unknown command).`
 
-- [ ] **Step 7: Typecheck, test, build, probe, commit**
+- [x] **Step 7: Typecheck, test, build, probe, commit**
 
 Run: `bun x tsc --noEmit && bun test && bun run build`
 Then probe the built CLI (non-TTY):
@@ -400,7 +400,7 @@ Commander's own errors (unknown option, missing argument, excess arguments) prin
 - Consumes: `CommanderError` from `commander`; `CliError`, `EXIT` from `src/lib/cli-errors.js`.
 - Produces: `usageErrorFrom(err: CommanderError): CliError | undefined` — `undefined` means Commander already completed a zero-exit flow (help/version were printed); otherwise a `CliError` with `exitCode: EXIT.VALIDATION`, `detail.code: 'usage'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/cli-program.test.ts`:
 
@@ -454,12 +454,12 @@ describe('buildProgram exitOverride', () => {
 
 (Both parse failures throw before any command action runs, so no container/config access happens.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun test src/cli-program.test.ts`
 Expected: FAIL — `usageErrorFrom` not exported; without `exitOverride`, Commander calls `process.exit` (the parse tests may kill the runner — that is the bug being fixed).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/cli-program.ts`:
 
@@ -520,12 +520,12 @@ export function usageErrorFrom(err: CommanderError): CliError | undefined {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/cli-program.test.ts && bun test`
 Expected: PASS, full suite green.
 
-- [ ] **Step 5: Build and probe**
+- [x] **Step 5: Build and probe**
 
 Run: `bun run build`, then:
 
@@ -538,11 +538,11 @@ node dist/cli.js -v; echo "exit=$?"                  # version, exit=0
 
 Also confirm no duplicated plain-text error line appears alongside the envelope (writeErr suppression working).
 
-- [ ] **Step 6: README**
+- [x] **Step 6: README**
 
 In the **Structured errors** bullet, append: `Usage mistakes (unknown option, missing argument) are validation failures too: exit 2 with code \`usage\`.`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/cli-program.ts src/cli-program.test.ts src/cli.ts README.md
@@ -567,7 +567,7 @@ help and version flows still exit 0."
 - Consumes: `StopWorkspacePlan` from `src/lib/workspace-plans.js` (already exported at line 97); `shouldEmitJson`, `printJson` from `src/lib/cli-output.js`.
 - Produces: `buildStopPreview(plan: Exclude<StopWorkspacePlan, { action: 'refuse' }>, workspace: string): StopPreview` where `StopPreview = { action: 'noop'; workspace: string; reason: 'not-running' } | { action: 'stop'; workspace: string; requiresConfirmation: boolean }`. JSON results: `{ action: 'stopped' | 'noop' | 'cancelled', workspace, … }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/commands/stop.test.ts` (add `buildStopPreview` to its import from `./stop.js`):
 
@@ -599,12 +599,12 @@ describe('buildStopPreview', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun test src/commands/stop.test.ts`
 Expected: FAIL — `buildStopPreview` not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Rewrite `src/commands/stop.ts` as:
 
@@ -738,16 +738,16 @@ export function registerStopCommand(
 
 (`console.warn` diagnostics stay unconditional — they go to stderr, the diagnostics channel.)
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/commands/stop.test.ts && bun x tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: README**
+- [x] **Step 5: README**
 
 Replace the `pi-tin stop <name> [--force]` row's command cell with `pi-tin stop <name> [--force] [--dry-run] [--json]` and append to its description: `; --dry-run previews the effect; --json (default when piped) emits a structured result`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/commands/stop.ts src/commands/stop.test.ts README.md
@@ -772,7 +772,7 @@ JSON when requested or piped, and --dry-run previews the effect."
 
 The impact object is inline data assembly around one effectful call (`imageExists`) — no new planner is warranted; the branching (`stopRunningContainer`) is already covered by `planDeleteWorkspace` tests. Behaviour is verified end-to-end in Task 8.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 In `src/commands/delete.ts`:
 
@@ -849,16 +849,16 @@ and replace the final success line with:
           }
 ```
 
-- [ ] **Step 2: Typecheck and test**
+- [x] **Step 2: Typecheck and test**
 
 Run: `bun x tsc --noEmit && bun test`
 Expected: PASS.
 
-- [ ] **Step 3: README**
+- [x] **Step 3: README**
 
 Replace the `pi-tin delete <name> [--force]` row's command cell with `pi-tin delete <name> [--force] [--dry-run] [--json]` and append to its description: `; --dry-run previews the blast radius (container, image); --json (default when piped) emits a structured result`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/commands/delete.ts README.md
@@ -882,7 +882,7 @@ prose on the data channel."
 - Consumes: `CliError`, `EXIT` from `src/lib/cli-errors.js`; `shouldEmitJson`, `printJson` from `src/lib/cli-output.js`; existing `planCleanup`, `selectOrphanedImages`.
 - Produces: `fullWipe(running: string[], force: boolean, json: boolean)` now throws `CliError` (`EXIT.GENERAL`, code `'workspaces_running'`) instead of `process.exit(1)`. Dry-run JSON shapes: `{ action: 'cleanup', runningWorkspaces, stoppedWorkspaces, orphanedImages, prunes: ['containers','images','volumes'], dryRun: true }` and `{ action: 'full-wipe', images, configDir: string | null, prunes: […], dryRun: true }`. Result JSON: `{ action: 'cleaned', orphanedImagesRemoved, orphanedImagesFailed, prunes: { containers, images, volumes } }` (prune values are the `PruneOutcome.status` strings) and `{ action: 'wiped', imagesRemoved, imagesFailed, configDirRemoved, prunes: { … } }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `src/commands/cleanup.test.ts` (export `fullWipe` in the next step; the refusal throws before any `container` CLI call, so the test is safe):
 
@@ -901,12 +901,12 @@ describe('fullWipe', () => {
 
 Add imports to the test file: `fullWipe` from `./cleanup.js`; `CliError`, `EXIT` from `../lib/cli-errors.js`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test src/commands/cleanup.test.ts`
 Expected: FAIL — `fullWipe` not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/commands/cleanup.ts`:
 
@@ -1122,16 +1122,16 @@ function run(args: string[], label: string, quiet: boolean): PruneOutcome {
 
 (The orphaned-image computation moves above the dry-run branch so both paths share it; delete the old in-body copy. `getConfigDir` is already imported; keep the existing running-workspaces stdout warning block but wrap it in `if (!json)`.)
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/commands/cleanup.test.ts && bun x tsc --noEmit && bun test`
 Expected: PASS.
 
-- [ ] **Step 5: README**
+- [x] **Step 5: README**
 
 Replace the cleanup row's command cell with `pi-tin cleanup [--all] [--force] [--dry-run] [--json]` and append to its description: `; --dry-run previews what would be removed; --json (default when piped) emits a structured result; a full wipe refuses with error code workspaces_running while any workspace is running`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/commands/cleanup.ts src/commands/cleanup.test.ts README.md
@@ -1156,7 +1156,7 @@ workspaces_running error instead of console.error + exit 1."
 - Consumes: `buildProgram` from `src/cli-program.js` (test only); flag surfaces added in Tasks 4–6.
 - Produces: `HelpCommand.destructive?: true`; `HelpSchema.interactiveOnly: { command: string; use: string }[]`; `HelpSchema.contract.interactive: string`.
 
-- [ ] **Step 1: Write the failing drift test**
+- [x] **Step 1: Write the failing drift test**
 
 Append to `src/lib/agent-guide.test.ts`:
 
@@ -1225,12 +1225,12 @@ describe('agent help schema drift', () => {
 
 (Merge these imports with the file's existing ones; `AGENT_HELP_SCHEMA` is already imported there. If `help` does not appear in `program.commands`, the hardcoded set entry is simply unused — harmless in both directions because the reverse test only iterates schema entries.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test src/lib/agent-guide.test.ts`
 Expected: FAIL — `interactiveOnly` does not exist on the schema, and `stop`/`delete`/`cleanup`/`open`/`create`/`add`/`agent-profile discover`/`agent-profile finder`/`container-profile` group gaps are reported by the first test.
 
-- [ ] **Step 3: Update the schema**
+- [x] **Step 3: Update the schema**
 
 In `src/lib/agent-guide.ts`:
 
@@ -1289,18 +1289,18 @@ In `src/lib/agent-guide.ts`:
     pi-tin delete <name> --force
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun test src/lib/agent-guide.test.ts && bun x tsc --noEmit && bun test`
 Expected: PASS. If the drift test still lists gaps (e.g. a container-profile subcommand or `help` visibility differs from expectation), fix the schema — not the test — unless the test's group-prefix logic is provably wrong.
 
-- [ ] **Step 5: README**
+- [x] **Step 5: README**
 
 In the **Driving pi-tin from an agent** section, append to the `agent-guide --json` bullet: `The schema also annotates destructive commands (\`destructive: true\`) and lists interactive-only commands (\`interactiveOnly\`) with their headless alternatives.`
 
 In the **Destructive-command confirmation** bullet, append: `All five support \`--dry-run\` (preview the effect) and \`--json\`.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/lib/agent-guide.ts src/lib/agent-guide.test.ts README.md
@@ -1321,12 +1321,12 @@ registered commander surface."
 **Files:**
 - No source changes expected; fixes only if probes fail.
 
-- [ ] **Step 1: Full release gate**
+- [x] **Step 1: Full release gate**
 
 Run: `bun run prepublishOnly`
 Expected: typecheck, full test suite, and build all pass.
 
-- [ ] **Step 2: Re-run the field-test probes against the built CLI**
+- [x] **Step 2: Re-run the field-test probes against the built CLI**
 
 Run each against `dist/cli.js` from a non-TTY shell (pipe through `cat` if needed). These are read-only or dry-run — none may mutate config or containers. `pi-tin` resolves to this repo's `dist/cli.js` via the global symlink; a sandboxed shell cannot reach the container service, so run probes that need it unsandboxed.
 
@@ -1349,11 +1349,11 @@ Run each against `dist/cli.js` from a non-TTY shell (pipe through `cat` if neede
 
 Use a stopped workspace name from `pi-tin list` (e.g. `blitz`). After the delete dry-run, confirm with `pi-tin show <ws>` that nothing was deleted.
 
-- [ ] **Step 3: Fix anything that fails, then re-run the gate**
+- [x] **Step 3: Fix anything that fails, then re-run the gate**
 
 Any failing probe is a bug in the corresponding task — fix it there (root cause, not symptom), keep the probe as the regression check, re-run `bun run prepublishOnly`.
 
-- [ ] **Step 4: Final commit (only if fixes were needed)**
+- [x] **Step 4: Final commit (only if fixes were needed)**
 
 ```bash
 git add -A src/ README.md
