@@ -73,13 +73,13 @@ describe('agent help schema drift', () => {
         .filter((o) => !o.hidden)
         .map((o) => o.long)
         .filter((long): long is string => long !== undefined);
-      const documented = (entry.flags ?? []).map((flag) => flag.split(' ')[0] ?? flag);
+      const documentedFlags = (entry.flags ?? []).map((flag) => flag.split(' ')[0] ?? flag);
       problems.push(
-        ...documented
+        ...documentedFlags
           .filter((flag) => !realFlags.includes(flag))
           .map((flag) => `'${entry.command}' documents phantom flag '${flag}'`),
         ...realFlags
-          .filter((flag) => !documented.includes(flag))
+          .filter((flag) => !documentedFlags.includes(flag))
           .map((flag) => `'${entry.command}' does not document real flag '${flag}'`),
       );
     }
