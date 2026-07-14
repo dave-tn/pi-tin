@@ -44,6 +44,11 @@ describe('classifyHelpRequest', () => {
     expect(classifyHelpRequest(['help', 'help', '--json'], true)).toBe('json');
     expect(classifyHelpRequest(['help', 'help', '--json'], false)).toBe('json');
   });
+
+  test('mixed help argv with a real target falls through to commander', () => {
+    expect(classifyHelpRequest(['help', 'help', 'list'], true)).toBe('normal');
+    expect(classifyHelpRequest(['help', 'help', 'list'], false)).toBe('normal');
+  });
 });
 
 describe('isHelpOrVersionRequest', () => {
