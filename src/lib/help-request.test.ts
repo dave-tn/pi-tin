@@ -37,6 +37,13 @@ describe('classifyHelpRequest', () => {
     expect(classifyHelpRequest(['help'], true)).toBe('normal');
     expect(classifyHelpRequest(['help'], false)).toBe('guide');
   });
+
+  test('help help is a root help request (commander cannot dispatch it)', () => {
+    expect(classifyHelpRequest(['help', 'help'], true)).toBe('root');
+    expect(classifyHelpRequest(['help', 'help'], false)).toBe('guide');
+    expect(classifyHelpRequest(['help', 'help', '--json'], true)).toBe('json');
+    expect(classifyHelpRequest(['help', 'help', '--json'], false)).toBe('json');
+  });
 });
 
 describe('isHelpOrVersionRequest', () => {

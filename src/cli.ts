@@ -43,6 +43,13 @@ if (helpRequest === 'guide') {
 
 const program = buildProgram({ version: PKG_VERSION, homepage: PKG_HOMEPAGE });
 
+// `help help` on a TTY: commander cannot dispatch its implicit help command
+// as its own target, so print root help directly instead of parsing.
+if (helpRequest === 'root') {
+  program.outputHelp();
+  process.exit(0);
+}
+
 try {
   const knownCommands = knownCommandNames(program);
   const invocation = classifyInvocation(args, knownCommands, groupSubcommandNames(program));

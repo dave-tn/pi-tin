@@ -108,9 +108,10 @@ export function usageErrorFrom(err: CommanderError): CliError | undefined {
   // A failing commander.help means commander printed help in place of a real
   // error (bare group command, `help <unknown>`): its message is the literal
   // '(outputHelp)' placeholder and the help text went to the suppressed
-  // writeErr channel. classifyInvocation refuses those invocations before
-  // parse; this backstop keeps the placeholder unprintable for anything it
-  // cannot see (e.g. `help help`, which commander cannot dispatch).
+  // writeErr channel. classifyInvocation refuses those invocations (and
+  // classifyHelpRequest routes `help help` to root help) before parse; this
+  // backstop keeps the placeholder unprintable for any degenerate flow the
+  // classifiers cannot see.
   const message = err.code === 'commander.help'
     ? 'Invalid or incomplete command.'
     : err.message.replace(/^error: /, '');
