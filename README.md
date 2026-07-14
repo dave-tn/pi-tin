@@ -300,7 +300,7 @@ of the following to a non-empty value:
 | `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted; without a TTY exits 1 with error code `interactive_only` — use `apply` instead) |
 | `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found; without a TTY exits 1 with error code `interactive_only` |
 | `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly; the no-argument picker needs a TTY (exit 1, error code `interactive_only`) — `add <name>` works headless |
-| `pi-tin open <name> [--build]` | Start or join a workspace (interactive — attaches a tmux session; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` to inspect instead) |
+| `pi-tin open <name> [--build]` | Start or join a workspace (interactive; attaches a tmux session; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` instead) |
 | `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
