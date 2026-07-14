@@ -71,11 +71,12 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       summary: 'Create or update a workspace',
       args: ['<name>'],
       stdin: 'workspace JSON',
-      flags: ['--dry-run'],
+      flags: ['--dry-run', '--json'],
     },
     {
       command: 'detect-host',
       summary: 'Print host facts (git identity, tz, API keys, known agents) as JSON',
+      flags: ['--json'],
     },
     {
       command: 'stop',
@@ -109,7 +110,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       summary: 'Create or update a container profile',
       args: ['<name>'],
       stdin: 'container-profile JSON',
-      flags: ['--dry-run'],
+      flags: ['--dry-run', '--json'],
     },
     {
       command: 'container-profile delete',
