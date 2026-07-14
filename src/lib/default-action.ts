@@ -5,7 +5,7 @@ import { countSharedDirectories, openWorkspace } from './open.js';
 import { appendProjectToWorkspace, findWorkspacesForDirectory, listWorkspaces } from './workspaces.js';
 import { containerNameFor, getContainerState, type ContainerState } from './container.js';
 import { withExitHandling } from './exit-handling.js';
-import { ensureInteractive } from './confirmation.js';
+import { ensureInteractive, isInteractiveSession } from './confirmation.js';
 import { computeContainerWorkdir } from './workdir.js';
 import {
   handleActionError,
@@ -48,6 +48,7 @@ export type DefaultActionDeps = {
   exit: (code: number) => void;
   listWorkspaces: () => WorkspaceMatch[];
   getContainerStateFor: (wsName: string) => ContainerState;
+  isInteractiveSession: () => boolean;
   appendProjectToWorkspace: (wsName: string, projectPath: string) => void;
   countSharedDirectories: (wsName: string, projects: string[]) => number;
 };
@@ -73,6 +74,7 @@ const defaultDeps: DefaultActionDeps = {
   },
   listWorkspaces,
   getContainerStateFor: (wsName: string) => getContainerState(containerNameFor(wsName)),
+  isInteractiveSession,
   appendProjectToWorkspace,
   countSharedDirectories,
 };

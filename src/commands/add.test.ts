@@ -26,6 +26,7 @@ function createDeps(overrides: Partial<AddCommandDeps> = {}): AddCommandDeps {
     openWorkspace: () => {},
     countSharedDirectories: () => 2,
     getContainerStateFor: () => 'stopped',
+    isInteractiveSession: () => true,
     appendProjectToWorkspace: () => {},
     log: () => {},
     error: () => {},
@@ -48,6 +49,23 @@ describe('runAddCommand — direct arg', () => {
     await runAddCommand('work', deps);
     expect(appended).toEqual(['work', '/Users/dave/Dev/new-app']);
     expect(opened).toEqual({ name: 'work', opts: { build: false, workdir: '/workspace/new-app' } });
+  });
+
+  test('appends without opening when headless and the named workspace is stopped', async () => {
+    let appended: [string, string] | undefined;
+    let opened = false;
+    const logs: string[] = [];
+    const deps = createDeps({
+      listWorkspaces: () => [match('work', ['/Users/dave/Dev/my-app'])],
+      isInteractiveSession: () => false,
+      appendProjectToWorkspace: (n, p) => { appended = [n, p]; },
+      openWorkspace: () => { opened = true; },
+      log: (...a: unknown[]) => logs.push(a.join(' ')),
+    });
+    await runAddCommand('work', deps);
+    expect(appended).toEqual(['work', '/Users/dave/Dev/new-app']);
+    expect(opened).toBe(false);
+    expect(logs.join('\n')).toContain('pi-tin open work');
   });
 
   test('throws CliError(NOT_FOUND) when the named workspace does not exist', async () => {

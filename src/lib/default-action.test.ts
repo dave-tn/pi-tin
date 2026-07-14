@@ -35,6 +35,7 @@ function createDeps(overrides: Partial<DefaultActionDeps> = {}): DefaultActionDe
     },
     listWorkspaces: () => [],
     getContainerStateFor: () => 'stopped',
+    isInteractiveSession: () => true,
     appendProjectToWorkspace: () => {},
     countSharedDirectories: () => 1,
     ...overrides,

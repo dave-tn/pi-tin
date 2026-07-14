@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { select } from '@inquirer/prompts';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { withExitHandling } from '../lib/exit-handling.js';
-import { ensureInteractive } from '../lib/confirmation.js';
+import { ensureInteractive, isInteractiveSession } from '../lib/confirmation.js';
 import { computeContainerWorkdir } from '../lib/workdir.js';
 import { countSharedDirectories, openWorkspace } from '../lib/open.js';
 import {
@@ -49,6 +49,7 @@ export type AddCommandDeps = {
   openWorkspace: (wsName: string, opts: { build?: boolean; workdir?: string | undefined }) => Promise<void> | void;
   countSharedDirectories: (wsName: string, projects: string[]) => number;
   getContainerStateFor: (wsName: string) => ContainerState;
+  isInteractiveSession: () => boolean;
   appendProjectToWorkspace: (wsName: string, projectPath: string) => void;
   log: Logger;
   error: Logger;
@@ -72,6 +73,7 @@ const defaultDeps: AddCommandDeps = {
   openWorkspace,
   countSharedDirectories,
   getContainerStateFor: (wsName: string) => getContainerState(containerNameFor(wsName)),
+  isInteractiveSession,
   appendProjectToWorkspace,
   log: (...args: unknown[]) => console.log(...args),
   error: (...args: unknown[]) => console.error(...args),
