@@ -3,13 +3,6 @@ import type { Command } from 'commander';
 import { buildProgram } from '../cli-program.js';
 import { AGENT_GUIDE, AGENT_HELP_SCHEMA } from './agent-guide.js';
 
-function collectCommandPaths(command: Command, prefix = ''): string[] {
-  return command.commands.flatMap((sub) => {
-    const path = prefix === '' ? sub.name() : `${prefix} ${sub.name()}`;
-    return [path, ...collectCommandPaths(sub, path)];
-  });
-}
-
 describe('agent-guide content', () => {
   test('the guide names the core agent commands and JSON contract', () => {
     expect(AGENT_GUIDE).toContain('apply');
@@ -30,14 +23,6 @@ describe('agent-guide content', () => {
     expect(AGENT_HELP_SCHEMA.uiGuide.appliesWhen).toContain('conversational front-end');
     // frontmatter is stripped from the embedded copy
     expect(AGENT_HELP_SCHEMA.uiGuide.guide.startsWith('---')).toBe(false);
-  });
-
-  test('every schema command exists in the real program tree (no drift)', () => {
-    const program = buildProgram({ version: '0.0.0-test', homepage: 'https://example.test' });
-    const paths = new Set(collectCommandPaths(program));
-    for (const { command } of AGENT_HELP_SCHEMA.commands) {
-      expect(paths).toContain(command);
-    }
   });
 });
 
@@ -73,22 +58,32 @@ describe('agent help schema drift', () => {
     expect(undocumented).toEqual([]);
   });
 
-  test('every schema command exists with the flags it claims', () => {
-    const missing: string[] = [];
+  test('every schema command documents exactly its real non-hidden flags', () => {
+    const problems: string[] = [];
     for (const entry of AGENT_HELP_SCHEMA.commands) {
       const command = resolveCommand(program, entry.command);
       if (command === undefined) {
-        missing.push(`unknown command '${entry.command}'`);
+        problems.push(`unknown command '${entry.command}'`);
         continue;
       }
-      for (const flag of entry.flags ?? []) {
-        const long = flag.split(' ')[0];
-        if (!command.options.some((o) => o.long === long)) {
-          missing.push(`'${entry.command}' is missing documented flag '${long}'`);
-        }
-      }
+      // The implicit `-h, --help` lives outside command.options, so only
+      // hidden options need excluding. Schema flag strings may carry arg
+      // hints (`--agent <agent>`); compare on the long-flag token.
+      const realFlags = command.options
+        .filter((o) => !o.hidden)
+        .map((o) => o.long)
+        .filter((long): long is string => long !== undefined);
+      const documented = (entry.flags ?? []).map((flag) => flag.split(' ')[0] ?? flag);
+      problems.push(
+        ...documented
+          .filter((flag) => !realFlags.includes(flag))
+          .map((flag) => `'${entry.command}' documents phantom flag '${flag}'`),
+        ...realFlags
+          .filter((flag) => !documented.includes(flag))
+          .map((flag) => `'${entry.command}' does not document real flag '${flag}'`),
+      );
     }
-    expect(missing).toEqual([]);
+    expect(problems).toEqual([]);
   });
 
   test('every interactive-only entry exists on the program', () => {
