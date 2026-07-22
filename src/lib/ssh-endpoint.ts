@@ -157,6 +157,16 @@ export function appendSshInclude(userConfigPath: string = getUserSshConfigPath()
   fs.chmodSync(userConfigPath, 0o600);
 }
 
+// ssh's Include permission check is fatal on a group/other-writable config
+// file, and atomicWriteFile honours the umask (0666 & ~umask), so a 002
+// umask would brick every ssh/herdr attach. Pin the mode, as appendSshInclude
+// does for ~/.ssh/config.
+function writeGeneratedSshConfig(content: string): void {
+  const configPath = getSshConfigPath();
+  atomicWriteFile(configPath, content);
+  fs.chmodSync(configPath, 0o600);
+}
+
 export function writeWorkspaceSshHostEntry(input: {
   workspaceName: string;
   ipv4Address: string;
@@ -165,7 +175,7 @@ export function writeWorkspaceSshHostEntry(input: {
   const configPath = getSshConfigPath();
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : null;
   const block = renderWorkspaceHostBlock(input);
-  atomicWriteFile(configPath, upsertWorkspaceHostBlock(existing, input.workspaceName, block));
+  writeGeneratedSshConfig(upsertWorkspaceHostBlock(existing, input.workspaceName, block));
 }
 
 export function clearWorkspaceKnownHosts(workspaceName: string): void {
@@ -184,7 +194,7 @@ export function removeWorkspaceSshArtifacts(
     if (fs.existsSync(configPath)) {
       const removed = removeWorkspaceHostBlock(fs.readFileSync(configPath, 'utf-8'), workspaceName);
       if (removed !== null) {
-        atomicWriteFile(configPath, removed);
+        writeGeneratedSshConfig(removed);
       }
     }
     if (options.clearKnownHosts) {

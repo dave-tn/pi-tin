@@ -188,9 +188,12 @@ describe('workspace ssh artifacts round-trip', () => {
     fs.writeFileSync(getSshKnownHostsPath('demo'), 'pinned\n', 'utf-8');
 
     expect(fs.readFileSync(getSshConfigPath(), 'utf-8')).toContain('Host pi-tin-demo');
+    // ssh's Include permission check refuses group/other-writable files.
+    expect(fs.statSync(getSshConfigPath()).mode & 0o777).toBe(0o600);
 
     removeWorkspaceSshArtifacts('demo', { clearKnownHosts: true });
     expect(fs.readFileSync(getSshConfigPath(), 'utf-8')).not.toContain('pi-tin-demo');
+    expect(fs.statSync(getSshConfigPath()).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(getSshKnownHostsPath('demo'))).toBe(false);
   });
 
