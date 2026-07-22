@@ -2,7 +2,15 @@ import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { planWorkspaceOpen, planAddProject, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
+import {
+  planWorkspaceOpen,
+  planAddProject,
+  planImageBuild,
+  planBuildFailureFallback,
+  planAttachPreflight,
+  planHerdrAttach,
+  planAutoStopDecision,
+} from './workspace-plans.js';
 import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand } from './open.js';
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
@@ -193,6 +201,178 @@ describe('computeRuntimeStartPlan', () => {
       log.mockRestore();
       warn.mockRestore();
     }
+  });
+});
+
+describe('computeRuntimeStartPlan sshd', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  const planFor = (workspaceExtra: Record<string, unknown>): ReturnType<typeof computeRuntimeStartPlan> => {
+    const projectDir = path.join(tmpDir, 'proj');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const workspace = validateWorkspace({
+      profile: 'node-dev',
+      projects: [projectDir],
+      ...workspaceExtra,
+    });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+    });
+    return computeRuntimeStartPlan({
+      wsName: 'demo',
+      containerName: containerNameFor('demo'),
+      imageTag: imageTagFor('demo'),
+      workspace,
+      containerProfile,
+      resources: resolveResources(containerProfile),
+    });
+  };
+
+  test('sshd swaps the container command to the launcher and changes the runtime hash', () => {
+    const plain = planFor({});
+    const withSshd = planFor({ sshd: true });
+
+    expect(plain.sshdEnabled).toBe(false);
+    expect(plain.command[0]).toBe('/bin/sh');
+    expect(withSshd.sshdEnabled).toBe(true);
+    expect(withSshd.command).toEqual(['/usr/local/bin/pi-tin-sshd-launch']);
+    expect(withSshd.runtimeHash).not.toBe(plain.runtimeHash);
+  });
+
+  test('attach: herdr alone enables sshd', () => {
+    expect(planFor({ attach: 'herdr' }).sshdEnabled).toBe(true);
+  });
+});
+
+describe('planAttachPreflight', () => {
+  const base = {
+    workspaceName: 'demo',
+    configuredAttach: 'shell' as const,
+    attachOverride: undefined,
+    sshdEnabled: false,
+    herdrPresent: false,
+  };
+
+  test('defaults to shell', () => {
+    expect(planAttachPreflight(base)).toEqual({ mode: 'shell' });
+  });
+
+  test('override to shell wins over a herdr workspace', () => {
+    expect(planAttachPreflight({
+      ...base,
+      configuredAttach: 'herdr',
+      attachOverride: 'shell',
+    })).toEqual({ mode: 'shell' });
+  });
+
+  test('herdr without sshd refuses with the config remediation', () => {
+    const plan = planAttachPreflight({ ...base, attachOverride: 'herdr' });
+    expect(plan.mode).toBe('refuse');
+    if (plan.mode === 'refuse') {
+      expect(plan.message).toContain('sshd');
+      expect(plan.message).toContain("'attach: herdr' or 'sshd: true'");
+    }
+  });
+
+  test('herdr without the local binary refuses with the install hint', () => {
+    const plan = planAttachPreflight({
+      ...base,
+      configuredAttach: 'herdr',
+      sshdEnabled: true,
+      herdrPresent: false,
+    });
+    expect(plan.mode).toBe('refuse');
+    if (plan.mode === 'refuse') {
+      expect(plan.message).toContain('herdr is not installed');
+    }
+  });
+
+  test('herdr proceeds when sshd and the binary are present', () => {
+    expect(planAttachPreflight({
+      ...base,
+      configuredAttach: 'herdr',
+      sshdEnabled: true,
+      herdrPresent: true,
+    })).toEqual({ mode: 'herdr' });
+  });
+});
+
+describe('planHerdrAttach', () => {
+  test('refuses without a container IP', () => {
+    const plan = planHerdrAttach({ workspaceName: 'demo', ipv4Address: null });
+    expect(plan.mode).toBe('refuse');
+    if (plan.mode === 'refuse') {
+      expect(plan.message).toContain('no IP address');
+    }
+  });
+
+  test('resolves the host alias from the container name', () => {
+    expect(planHerdrAttach({ workspaceName: 'demo', ipv4Address: '192.168.64.5' })).toEqual({
+      mode: 'herdr',
+      hostAlias: 'pi-tin-demo',
+      ipv4Address: '192.168.64.5',
+    });
+  });
+});
+
+describe('planAutoStopDecision', () => {
+  const base = {
+    containerState: 'running' as const,
+    runtimeState: 'ok' as const,
+    activeSessions: 0,
+    deadlineMatches: true,
+    agentStates: { kind: 'not-applicable' as const },
+  };
+
+  test('stops an idle workspace', () => {
+    expect(planAutoStopDecision(base)).toEqual({ action: 'stop' });
+  });
+
+  test('bails on non-running or unknown container state', () => {
+    expect(planAutoStopDecision({ ...base, containerState: 'stopped' })).toEqual({ action: 'bail' });
+    expect(planAutoStopDecision({ ...base, containerState: 'unknown' })).toEqual({ action: 'bail' });
+  });
+
+  test('bails on inconsistent runtime, live sessions, or a superseded deadline', () => {
+    expect(planAutoStopDecision({ ...base, runtimeState: 'corrupt' })).toEqual({ action: 'bail' });
+    expect(planAutoStopDecision({ ...base, activeSessions: 2 })).toEqual({ action: 'bail' });
+    expect(planAutoStopDecision({ ...base, deadlineMatches: false })).toEqual({ action: 'bail' });
+  });
+
+  test('defers while any herdr agent is working', () => {
+    expect(planAutoStopDecision({
+      ...base,
+      agentStates: { kind: 'states', working: 1 },
+    })).toEqual({ action: 'defer' });
+  });
+
+  test('stops when agents are all idle or the query is unavailable', () => {
+    expect(planAutoStopDecision({
+      ...base,
+      agentStates: { kind: 'states', working: 0 },
+    })).toEqual({ action: 'stop' });
+    expect(planAutoStopDecision({
+      ...base,
+      agentStates: { kind: 'unavailable' },
+    })).toEqual({ action: 'stop' });
   });
 });
 

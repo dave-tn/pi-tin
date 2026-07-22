@@ -20,6 +20,7 @@ import {
 } from '../lib/runtime-state.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { planDeleteWorkspace } from '../lib/workspace-plans.js';
+import { removeWorkspaceSshArtifacts } from '../lib/ssh-endpoint.js';
 import { printJson, shouldEmitJson } from '../lib/cli-output.js';
 
 export function registerDeleteCommand(
@@ -120,6 +121,7 @@ export function registerDeleteCommand(
             fs.unlinkSync(hashPath);
           }
 
+          removeWorkspaceSshArtifacts(name, { clearKnownHosts: true });
           deleteWorkspace(name);
           if (json) {
             printJson({ action: 'deleted', workspace: name, imageRemoved });

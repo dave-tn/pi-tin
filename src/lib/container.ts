@@ -245,6 +245,15 @@ export function getContainerState(
   return match.status === 'running' ? 'running' : 'stopped';
 }
 
+/** IPv4 address of the named container, or null when unlisted or unaddressed. */
+export function getContainerIpv4(
+  name: string,
+  exec: ContainerListExec = execContainerList,
+): string | null {
+  const containers = listContainers(exec);
+  return containers?.find((container) => container.id === name)?.ipv4Address ?? null;
+}
+
 // Apple `container`'s --env-file parser (a port of Moby's kvfile parser) is
 // line-based with no quoting or escaping: any line separator terminates the
 // value, so a value spanning lines cannot be represented. This matches the

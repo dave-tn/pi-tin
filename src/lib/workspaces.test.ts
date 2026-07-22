@@ -166,6 +166,8 @@ describe('writeWorkspace name validation', () => {
     profile: 'default',
     projects: ['/tmp/test'],
     tools: [],
+    sshd: false,
+    attach: 'shell' as const,
     stopAfterLastSession: '30s',
   };
 

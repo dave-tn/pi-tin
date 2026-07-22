@@ -5,7 +5,7 @@ import type { Workspace } from '../lib/validators.js';
 import type { WorkspaceMatch } from '../lib/add-project.js';
 
 function ws(projects: string[]): Workspace {
-  return { profile: 'node-dev', projects, tools: [], stopAfterLastSession: '30s' };
+  return { profile: 'node-dev', projects, tools: [], sshd: false, attach: 'shell', stopAfterLastSession: '30s' };
 }
 function match(name: string, projects: string[]): WorkspaceMatch {
   return { name, workspace: ws(projects) };

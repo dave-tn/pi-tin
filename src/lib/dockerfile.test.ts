@@ -15,7 +15,7 @@ const baseProfile: ContainerProfile = {
   workspace_state: [],
 };
 
-const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null };
+const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null };
 
 describe('generateDockerfile', () => {
   test('produces basic Dockerfile structure', () => {
@@ -178,6 +178,7 @@ describe('generateDockerfile', () => {
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
       claudeConfig: null,
+      sshd: null,
     });
 
     const settingsFile = extras.find((extra) => extra.name === 'claude-managed-settings.json');
@@ -195,6 +196,7 @@ describe('generateDockerfile', () => {
       agentEnv: {},
       claudeManagedSettings: null,
       claudeConfig: null,
+      sshd: null,
     });
 
     const wrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-codex');
@@ -241,6 +243,7 @@ describe('generateDockerfile', () => {
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
       claudeConfig: null,
+      sshd: null,
     });
 
     expect(extras.find((extra) => extra.name === 'pi-tin-wrapper-claude')).toBeUndefined();
@@ -265,6 +268,7 @@ describe('generateDockerfile', () => {
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' },
       claudeManagedSettings: null,
       claudeConfig: null,
+      sshd: null,
     });
 
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
@@ -282,6 +286,7 @@ describe('generateDockerfile', () => {
       agentEnv: {},
       claudeManagedSettings: null,
       claudeConfig: null,
+      sshd: null,
     });
 
     expect(dockerfile).not.toContain('CLAUDE_CODE_SANDBOXED');
@@ -359,6 +364,7 @@ describe('generateDockerfile', () => {
       agentEnv: {},
       claudeManagedSettings: null,
       claudeConfig,
+      sshd: null,
     });
 
     // Copied before the home-dir chown so the file ends up owned by the user.
@@ -383,6 +389,7 @@ describe('generateDockerfile', () => {
       agentEnv: {},
       claudeManagedSettings: null,
       claudeConfig: null,
+      sshd: null,
     });
 
     expect(dockerfile).not.toContain('.claude.json');
@@ -473,6 +480,68 @@ describe('generateDockerfile', () => {
 
     expect(generateDockerfile(python, [], noWraps).dockerfile).toContain('apt-get install');
     expect(generateDockerfile(bun, [], noWraps).dockerfile).toContain('apt-get install');
+  });
+});
+
+describe('generateDockerfile sshd', () => {
+  const sshdOpts = { ...noWraps, sshd: { authorizedKey: 'ssh-ed25519 AAAATESTKEY pi-tin' } };
+
+  test('installs openssh-server and bakes launcher, authorized key, and config', () => {
+    const { dockerfile, extras } = generateDockerfile(baseProfile, [], sshdOpts);
+
+    expect(dockerfile).toContain('openssh-server');
+    expect(dockerfile).toContain('COPY pi-tin-sshd-launch /usr/local/bin/pi-tin-sshd-launch');
+    expect(dockerfile).toContain('COPY pi-tin-authorized-keys $HOME_DIR/.ssh/authorized_keys');
+    expect(dockerfile).toContain('RUN chmod 600 $HOME_DIR/.ssh/authorized_keys');
+    expect(dockerfile).toContain('COPY pi-tin-sshd-config $HOME_DIR/.config/pi-tin-sshd/sshd_config');
+
+    const authorizedKeys = extras.find((extra) => extra.name === 'pi-tin-authorized-keys');
+    expect(authorizedKeys?.content).toBe('ssh-ed25519 AAAATESTKEY pi-tin\n');
+
+    const sshdConfig = extras.find((extra) => extra.name === 'pi-tin-sshd-config')?.content ?? '';
+    expect(sshdConfig).toContain('Port 2222');
+    expect(sshdConfig).toContain('UsePAM no');
+    expect(sshdConfig).toContain('PasswordAuthentication no');
+    expect(sshdConfig).toContain('PermitUserEnvironment yes');
+    expect(sshdConfig).toContain('AllowUsers dev');
+    expect(sshdConfig).toContain('HostKey /home/dev/.config/pi-tin-sshd/ssh_host_ed25519_key');
+
+    const launcher = extras.find((extra) => extra.name === 'pi-tin-sshd-launch')?.content ?? '';
+    expect(launcher).toContain('> "$HOME/.ssh/environment"');
+    expect(launcher).toContain('exec /usr/sbin/sshd -D -e -f');
+  });
+
+  test('generates host keys as the user, after the USER switch', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [], sshdOpts);
+
+    const userIndex = dockerfile.indexOf('USER dev');
+    const keygenIndex = dockerfile.indexOf('RUN ssh-keygen -q -t ed25519 -N ""');
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(keygenIndex).toBeGreaterThan(userIndex);
+  });
+
+  test('adds .local/bin to PATH only when sshd is enabled', () => {
+    const withSshd = generateDockerfile(baseProfile, [], sshdOpts).dockerfile;
+    const withoutSshd = generateDockerfile(baseProfile, [], noWraps).dockerfile;
+
+    expect(withSshd).toContain(':$HOME_DIR/.local/bin:$PATH');
+    expect(withoutSshd).not.toContain('.local/bin');
+  });
+
+  test('sshd disabled leaves no sshd artifacts', () => {
+    const { dockerfile, extras } = generateDockerfile(baseProfile, [], noWraps);
+
+    expect(dockerfile).not.toContain('openssh-server');
+    expect(dockerfile).not.toContain('ssh-keygen');
+    expect(extras.map((extra) => extra.name)).toEqual([]);
+  });
+
+  test('installs openssh-server under apk and dnf too', () => {
+    const alpine: ContainerProfile = { ...baseProfile, base_image: 'node:alpine' };
+    const fedora: ContainerProfile = { ...baseProfile, base_image: 'fedora:latest' };
+
+    expect(generateDockerfile(alpine, [], sshdOpts).dockerfile).toContain('openssh-server');
+    expect(generateDockerfile(fedora, [], sshdOpts).dockerfile).toContain('openssh-server');
   });
 });
 

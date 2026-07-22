@@ -106,6 +106,15 @@ export function dockerfileEnvQuote(value: string): string {
 /** Container path of the agent-refresh script; `pi-tin open` execs it detached. */
 export const REFRESH_SCRIPT_PATH = '/usr/local/bin/pi-tin-refresh-agents';
 
+/** Container path of the sshd launcher; the container command when sshd is enabled. */
+export const SSHD_LAUNCH_PATH = '/usr/local/bin/pi-tin-sshd-launch';
+
+// Unprivileged sshd cannot bind below 1024; one fixed high port works because
+// every workspace container has its own IP.
+export const WORKSPACE_SSHD_PORT = 2222;
+
+const SSHD_CONFIG_DIR_RELATIVE = '.config/pi-tin-sshd';
+
 const AGENT_WRAPPER_BIN_DIR = '/usr/local/pi-tin/bin';
 
 // Launcher baked at build time, first on PATH. Tries the refresh prefix, then
@@ -147,6 +156,47 @@ function generateRefreshScript(packageSpecs: string[]): string {
   ].join('\n');
 }
 
+// The workspace user owns sshd entirely: config and host keys live under the
+// home dir because root-owned /etc/ssh keys are unreadable by an unprivileged
+// sshd. UsePAM must be off (PAM needs root); PermitUserEnvironment pairs with
+// the launcher's env snapshot below.
+function generateSshdConfig(user: string, homeDir: string): string {
+  return [
+    `Port ${WORKSPACE_SSHD_PORT}`,
+    'ListenAddress 0.0.0.0',
+    `HostKey ${homeDir}/${SSHD_CONFIG_DIR_RELATIVE}/ssh_host_ed25519_key`,
+    'PidFile none',
+    'UsePAM no',
+    'PasswordAuthentication no',
+    'KbdInteractiveAuthentication no',
+    'PubkeyAuthentication yes',
+    'AuthorizedKeysFile .ssh/authorized_keys',
+    'PermitUserEnvironment yes',
+    `AllowUsers ${user}`,
+    'X11Forwarding no',
+    'Subsystem sftp internal-sftp',
+    'LogLevel INFO',
+  ].join('\n');
+}
+
+// sshd scrubs the environment for sessions; PermitUserEnvironment plus this
+// snapshot restores the container env (image ENV, runtime --env-file values,
+// SSH_AUTH_SOCK, PATH) so ssh sessions match `container exec` sessions. The
+// ^KEY= anchor drops continuation lines of multiline image ENV values (same
+// rationale as partitionEnvForFile: config is trusted, this is robustness).
+// Login-owned vars are excluded so ssh/login set them per session.
+function generateSshdLauncher(): string {
+  return [
+    '#!/bin/sh',
+    'umask 077',
+    'mkdir -p "$HOME/.ssh"',
+    "env | LC_ALL=C grep -E '^[A-Za-z_][A-Za-z0-9_]*=' \\",
+    "  | grep -vE '^(HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|SHLVL|HOSTNAME|TERM|_)=' \\",
+    '  > "$HOME/.ssh/environment"',
+    `exec /usr/sbin/sshd -D -e -f "$HOME/${SSHD_CONFIG_DIR_RELATIVE}/sshd_config"`,
+  ].join('\n');
+}
+
 function generateEntrypoint(): string {
   // Configure gh as git credential helper if gh config is mounted
   return [
@@ -171,6 +221,7 @@ export function generateDockerfile(
     agentEnv: Record<string, string>;
     claudeManagedSettings: string | null;
     claudeConfig: string | null;
+    sshd: { authorizedKey: string } | null;
   },
 ): DockerfileResult {
   const lines: string[] = [];
@@ -181,7 +232,12 @@ export function generateDockerfile(
   lines.push(`FROM ${profile.base_image}`);
   lines.push('');
 
-  const allPackages = [...profile.packages, ...profile.extra_packages];
+  const allPackages = [
+    ...profile.packages,
+    ...profile.extra_packages,
+    // Same package name across apt/apk/dnf; each pulls its ssh-keygen dependency.
+    ...(opts.sshd !== null ? ['openssh-server'] : []),
+  ];
   if (allPackages.length > 0) {
     lines.push(...installPackagesLines(pm, allPackages));
     lines.push('');
@@ -215,8 +271,11 @@ export function generateDockerfile(
 
   lines.push(`ENV HOME=$HOME_DIR`);
   // Wrapper launchers first, then the refresh prefix, then the baked prefix —
-  // missing dirs are inert, so the line is unconditional.
-  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$PATH`);
+  // missing dirs are inert, so the line is unconditional. With sshd, .local/bin
+  // joins the image PATH: non-interactive ssh reads no .zshrc, and remote
+  // clients (herdr) locate/auto-install their server binary there.
+  const sshdPathSuffix = opts.sshd !== null ? ':$HOME_DIR/.local/bin' : '';
+  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin${sshdPathSuffix}:$PATH`);
   const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
@@ -275,6 +334,22 @@ export function generateDockerfile(
     lines.push('');
   }
 
+  // sshd artifacts (copied as root before the home-dir chown below fixes ownership)
+  if (opts.sshd !== null) {
+    lines.push(
+      `COPY pi-tin-sshd-launch ${SSHD_LAUNCH_PATH}`,
+      `RUN chmod +x ${SSHD_LAUNCH_PATH}`,
+      `RUN mkdir -p $HOME_DIR/.ssh $HOME_DIR/${SSHD_CONFIG_DIR_RELATIVE} && chmod 700 $HOME_DIR/.ssh`,
+      `COPY pi-tin-authorized-keys $HOME_DIR/.ssh/authorized_keys`,
+      'RUN chmod 600 $HOME_DIR/.ssh/authorized_keys',
+      `COPY pi-tin-sshd-config $HOME_DIR/${SSHD_CONFIG_DIR_RELATIVE}/sshd_config`,
+    );
+    lines.push('');
+    extras.push({ name: 'pi-tin-sshd-launch', content: generateSshdLauncher() });
+    extras.push({ name: 'pi-tin-authorized-keys', content: `${opts.sshd.authorizedKey}\n` });
+    extras.push({ name: 'pi-tin-sshd-config', content: generateSshdConfig(user, homeDir) });
+  }
+
   // Fix ownership of home directory after all root installs
   lines.push(`RUN chown -R ${user}:${user} ${homeDir}`);
   lines.push('');
@@ -283,6 +358,15 @@ export function generateDockerfile(
   lines.push(`USER ${user}`);
   lines.push('WORKDIR /workspace');
   lines.push('');
+
+  // Host keys are baked at build so they stay stable across the container's
+  // ephemeral lives — start-time keys would churn on every fresh start and
+  // trip StrictHostKeyChecking. Generated as the user: an unprivileged sshd
+  // cannot read root-owned keys.
+  if (opts.sshd !== null) {
+    lines.push(`RUN ssh-keygen -q -t ed25519 -N "" -f $HOME_DIR/${SSHD_CONFIG_DIR_RELATIVE}/ssh_host_ed25519_key`);
+    lines.push('');
+  }
 
   // Fail early and clearly if the image has no npm but the workspace needs it.
   if (profile.global_tools.length > 0 || packages.length > 0) {

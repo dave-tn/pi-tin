@@ -84,6 +84,15 @@ const TmuxSchema = v.strictObject({
   mountPlugins: v.optional(v.boolean(), false),
 });
 
+// Also the valid values for the CLI attach override (`--attach`, `pi-tin
+// [shell|herdr]`) — keep the schema and the CLI boundary on one constant.
+export const ATTACH_MODES = ['shell', 'herdr'] as const;
+
+/** Narrow a CLI-supplied attach token, or null when it is not a mode. */
+export function parseAttachMode(value: string): Workspace['attach'] | null {
+  return ATTACH_MODES.find((mode) => mode === value) ?? null;
+}
+
 export const WorkspaceSchema = v.strictObject({
   profile: v.string(),
   projects: v.array(v.string()),
@@ -91,6 +100,9 @@ export const WorkspaceSchema = v.strictObject({
   agent: v.optional(AgentSchema),
   host: v.optional(HostSchema),
   tmux: v.optional(TmuxSchema),
+  // Runs an unprivileged sshd in the workspace; implied by attach: herdr.
+  sshd: v.optional(v.boolean(), false),
+  attach: v.optional(v.picklist(ATTACH_MODES), 'shell'),
   stopAfterLastSession: v.optional(v.pipe(v.string(), v.regex(durationPattern)), '30s'),
 });
 
@@ -141,18 +153,35 @@ export const LockRecordSchema = v.object({
 
 // Schemas for external JSON (container CLI, GitHub API)
 
+// Stopped containers hold no network attachments, so `networks` must stay
+// optional for `container list --all` to keep parsing.
+const RawContainerNetworkSchema = v.object({
+  ipv4Address: v.optional(v.string()),
+});
+
 const RawContainerListEntrySchema = v.object({
   id: v.string(),
   status: v.object({
     state: v.string(),
+    networks: v.optional(v.array(RawContainerNetworkSchema), []),
   }),
 });
+
+// The wire value is CIDR ("192.168.64.5/24"); consumers want a plain address.
+function firstIpv4Address(
+  networks: v.InferOutput<typeof RawContainerNetworkSchema>[],
+): string | null {
+  const cidr = networks.find((network) => network.ipv4Address !== undefined)?.ipv4Address;
+  const address = cidr?.split('/')[0];
+  return address !== undefined && address !== '' ? address : null;
+}
 
 export const ContainerListSchema = v.pipe(
   v.array(RawContainerListEntrySchema),
   v.transform((containers) => containers.map((container) => ({
     id: container.id,
     status: container.status.state,
+    ipv4Address: firstIpv4Address(container.status.networks),
   }))),
 );
 
@@ -180,6 +209,22 @@ export const ContainerSystemVersionSchema = v.array(ContainerSystemVersionEntryS
 export const ContainerSystemStatusSchema = v.object({
   status: v.string(),
 });
+
+// `herdr agent list --json` payload, from inside a workspace container.
+// Deliberately loose — only the per-agent status string matters, herdr's
+// schema is not pinned by pi-tin, and any parse failure downgrades the
+// auto-stop query to 'unavailable' (which stops, today's behaviour).
+// `herdr agent list` (verified live, herdr 0.7.x) already emits JSON — there
+// is no --json flag — shaped { result: { agents: [{ agent_status }] } }, where
+// agent_status is one of idle | working | blocked | done | unknown.
+const HerdrAgentEntrySchema = v.pipe(
+  v.object({ agent_status: v.optional(v.string()) }),
+  v.transform((entry) => ({ status: entry.agent_status ?? null })),
+);
+export const HerdrAgentListSchema = v.pipe(
+  v.object({ result: v.object({ agents: v.array(HerdrAgentEntrySchema) }) }),
+  v.transform((payload) => payload.result.agents),
+);
 
 const GitHubAssetSchema = v.object({
   name: v.optional(v.string()),

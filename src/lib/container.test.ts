@@ -282,8 +282,8 @@ describe('Apple container JSON parsing', () => {
     ]);
 
     expect(parseContainerListOutput(output)).toEqual([
-      { id: 'pi-tin-demo', status: 'running' },
-      { id: 'buildkit', status: 'stopped' },
+      { id: 'pi-tin-demo', status: 'running', ipv4Address: null },
+      { id: 'buildkit', status: 'stopped', ipv4Address: null },
     ]);
   });
 

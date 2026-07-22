@@ -11,6 +11,7 @@ import {
   isContainerSubprocessTimeout,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
+import type { ContainerProfile, Workspace } from './validators.js';
 
 // "Workspace state" is a small, container-profile-declared set of inert,
 // tool-owned paths (zoxide DB, shell history, …) that pi-tin snapshots between
@@ -258,6 +259,52 @@ function runOpGroup(
   }
 
   return entryTimeout;
+}
+
+// herdr workspaces sync two extra paths alongside the container profile's own
+// entries: ~/.config/herdr (session/restore state, needed for
+// restore-and-resume) and ~/.local/bin/herdr (the auto-installed server). The
+// rootfs is ephemeral, so without persisting the server binary every fresh
+// start drops it from PATH and herdr re-prompts to reinstall (~10MB). The
+// binary is the one this host's client installed, so it stays version-matched;
+// a host client upgrade re-prompts once and re-snapshots.
+export function combinedWorkspaceStateEntries(
+  containerProfile: Pick<ContainerProfile, 'workspace_state'>,
+  workspace: Pick<Workspace, 'attach'>,
+): string[] {
+  return [
+    ...containerProfile.workspace_state,
+    ...(workspace.attach === 'herdr' ? ['.config/herdr', '.local/bin/herdr'] : []),
+  ];
+}
+
+// Apple `container cp` does not preserve the executable bit: copy-out normalises
+// the host snapshot to 0644, so a copied-in herdr server lands non-executable
+// and herdr treats it as absent — re-prompting to reinstall on every fresh
+// start. Re-apply +x after copy-in for herdr workspaces. Best-effort like the
+// sync itself; a failure just means herdr reinstalls, the pre-persistence
+// behaviour.
+export function restoreHerdrServerExecutable(
+  options: {
+    containerName: string;
+    workspace: Pick<Workspace, 'attach'>;
+    user: string;
+  },
+  dependencies: { run?: ContainerSubprocessRunner | undefined } = {},
+): void {
+  if (options.workspace.attach !== 'herdr') return;
+
+  const herdrPath = path.posix.join(containerHomeDir(options.user), '.local/bin/herdr');
+  try {
+    execContainerCommand({
+      name: options.containerName,
+      user: 'root',
+      command: ['chmod', '+x', herdrPath],
+      run: dependencies.run,
+    });
+  } catch {
+    // Best effort only.
+  }
 }
 
 // Snapshot workspace state in one direction. Best-effort per operation: a

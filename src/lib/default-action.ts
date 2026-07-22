@@ -4,6 +4,7 @@ import { ensureInitialised } from './init-guard.js';
 import { countSharedDirectories, openWorkspace } from './open.js';
 import { appendProjectToWorkspace, findWorkspacesForDirectory, listWorkspaces } from './workspaces.js';
 import { containerNameFor, getContainerState, type ContainerState } from './container.js';
+import type { Workspace } from './validators.js';
 import { withExitHandling } from './exit-handling.js';
 import { ensureInteractive, isInteractiveSession } from './confirmation.js';
 import { computeContainerWorkdir } from './workdir.js';
@@ -41,7 +42,7 @@ export type DefaultActionDeps = {
   select: SelectPrompt;
   runCreateFlow: RunCreateFlow;
   computeContainerWorkdir: (cwd: string, projects: string[]) => string | undefined;
-  openWorkspace: (wsName: string, opts: { build?: boolean; workdir?: string | undefined }) => Promise<void> | void;
+  openWorkspace: (wsName: string, opts: { build?: boolean; workdir?: string | undefined; attach?: Workspace['attach'] | undefined }) => Promise<void> | void;
   withExitHandling: ExitHandling;
   log: Logger;
   error: Logger;
@@ -82,19 +83,19 @@ const defaultDeps: DefaultActionDeps = {
 async function openMatchedWorkspace(
   match: WorkspaceMatch,
   cwd: string,
-  build: boolean,
+  open: { build: boolean; attach: Workspace['attach'] | undefined },
   deps: Pick<DefaultActionDeps, 'computeContainerWorkdir' | 'openWorkspace' | 'error' | 'exit'>,
 ): Promise<void> {
   try {
     const workdir = deps.computeContainerWorkdir(cwd, match.workspace.projects);
-    await deps.openWorkspace(match.name, { build, workdir });
+    await deps.openWorkspace(match.name, { build: open.build, workdir, attach: open.attach });
   } catch (err) {
     handleActionError(err, deps);
   }
 }
 
 export async function runDefaultAction(
-  opts: { build?: boolean },
+  opts: { build?: boolean; attach?: Workspace['attach'] | undefined },
   deps: DefaultActionDeps = defaultDeps,
 ): Promise<void> {
   deps.ensureInteractive();
@@ -102,7 +103,7 @@ export async function runDefaultAction(
 
   const cwd = deps.cwd();
   const matches = deps.findWorkspacesForDirectory(cwd);
-  const build = opts.build === true;
+  const open = { build: opts.build === true, attach: opts.attach };
 
   await deps.withExitHandling(async () => {
     if (matches.length === 0) {
@@ -140,7 +141,7 @@ export async function runDefaultAction(
         handleActionError(new Error('Expected one matching workspace.'), deps);
         return;
       }
-      await openMatchedWorkspace(match, cwd, build, deps);
+      await openMatchedWorkspace(match, cwd, open, deps);
       return;
     }
 
@@ -153,7 +154,7 @@ export async function runDefaultAction(
     });
 
     if (choice.kind === 'open') {
-      await openMatchedWorkspace(choice.match, cwd, build, deps);
+      await openMatchedWorkspace(choice.match, cwd, open, deps);
       return;
     }
     if (choice.kind === 'create-new') {

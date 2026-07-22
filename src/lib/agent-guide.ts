@@ -143,7 +143,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
   interactiveOnly: [
     { command: 'create', use: 'Use `apply <name>` with workspace JSON on stdin.' },
     { command: 'add', use: 'Use `show <name> --json`, edit projects, then `apply <name>`. (`add <workspace>` with an explicit name works headless.)' },
-    { command: 'open', use: 'Requires a terminal — attaches a tmux session. No headless equivalent.' },
+    { command: 'open', use: 'Requires a terminal — attaches an interactive session (shell or herdr). No headless equivalent.' },
     { command: 'agent-profile discover', use: 'Use `agent-profile add <name> --agent <agent>`.' },
     { command: 'agent-profile finder', use: 'Opens macOS Finder. Use `agent-profile show <name> --json`.' },
   ],

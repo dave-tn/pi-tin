@@ -13,6 +13,7 @@ import {
 } from '../lib/runtime-state.js';
 import { withExitHandling } from '../lib/exit-handling.js';
 import { planStopWorkspace, type StopWorkspacePlan } from '../lib/workspace-plans.js';
+import { removeWorkspaceSshArtifacts } from '../lib/ssh-endpoint.js';
 import { assertValidWorkspaceName } from '../lib/workspaces.js';
 import { printJson, shouldEmitJson } from '../lib/cli-output.js';
 
@@ -114,6 +115,10 @@ export function registerStopCommand(
 
           await stopAndRemoveContainer(containerName, { force: opts.force === true });
           clearWorkspaceRuntimeState(name);
+          // The Host block points at an IP the container just released; the
+          // per-workspace known_hosts stays — the image (and its host keys)
+          // survives a stop.
+          removeWorkspaceSshArtifacts(name, { clearKnownHosts: false });
           if (json) {
             printJson({ action: 'stopped', workspace: name });
           } else {

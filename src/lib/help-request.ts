@@ -55,17 +55,20 @@ export type InvocationPlan =
 // placeholder, with the help text on the suppressed writeErr channel.
 // Decide all of these here, before parse and before any --help routing.
 // All root options are boolean, so the first non-flag token is always the
-// intended command.
+// intended command — or an attach-mode token for the root default action
+// (`pi-tin herdr`), which proceeds to the root [attach] argument. Attach
+// tokens are not commands: `help herdr` stays unknown-command.
 export function classifyInvocation(
   args: string[],
   knownCommands: string[],
   groupSubcommands: ReadonlyMap<string, string[]>,
+  attachModes: readonly string[],
 ): InvocationPlan {
   const [commandName, target] = args.filter((a) => !a.startsWith('-'));
   if (commandName === undefined) {
     return { kind: 'proceed' };
   }
-  if (!knownCommands.includes(commandName)) {
+  if (!knownCommands.includes(commandName) && !attachModes.includes(commandName)) {
     return { kind: 'unknown-command', badInput: commandName };
   }
   if (commandName === 'help' && target !== undefined && !knownCommands.includes(target)) {
