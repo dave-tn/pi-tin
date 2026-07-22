@@ -5,12 +5,24 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import chalk from 'chalk';
-import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir } from './paths.js';
+import { containerHomeDir, expandTilde, getBuildHashPath, getHostGhConfigDir, getSshConfigPath, getUserSshConfigPath } from './paths.js';
 import { ensureInitialised } from './init-guard.js';
 import { loadContainerProfile } from './profiles.js';
 import { loadWorkspace, listWorkspaces, workspaceExists, isValidWorkspaceName } from './workspaces.js';
 import { notFoundWorkspaceError } from './workspace-errors.js';
-import { generateDockerfile, REFRESH_SCRIPT_PATH } from './dockerfile.js';
+import { generateDockerfile, REFRESH_SCRIPT_PATH, SSHD_LAUNCH_PATH, WORKSPACE_SSHD_PORT } from './dockerfile.js';
+import {
+  isSshdEnabled,
+  ensureSshKeypair,
+  writeWorkspaceSshHostEntry,
+  clearWorkspaceKnownHosts,
+  planSshInclude,
+  appendSshInclude,
+  sshIncludeLine,
+  probeSshEndpoint,
+  herdrOnPath,
+  attachHerdr,
+} from './ssh-endpoint.js';
 import {
   CONTAINER_RUN_TIMEOUT_MS,
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
@@ -23,6 +35,7 @@ import {
   execContainer,
   execContainerCommand,
   getContainerState,
+  getContainerIpv4,
   deleteContainer,
   isContainerSubprocessTimeout,
   type VolumeMount,
@@ -30,11 +43,11 @@ import {
 } from './container.js';
 import { stopAndRemoveContainer } from './container-lifecycle.js';
 import { isRecord } from './guards.js';
-import { AUTO_STOP_COMMAND } from './auto-stop.js';
+import { spawnAutoStopHelper } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
-import { syncWorkspaceState } from './workspace-state.js';
+import { combinedWorkspaceStateEntries, restoreHerdrServerExecutable, syncWorkspaceState } from './workspace-state.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
@@ -61,7 +74,13 @@ import {
   sharedDirectoryLimitMessage,
   basenameCollisionMessage,
 } from './project-mounts.js';
-import { planWorkspaceOpen, planImageBuild, planBuildFailureFallback } from './workspace-plans.js';
+import {
+  planWorkspaceOpen,
+  planImageBuild,
+  planBuildFailureFallback,
+  planAttachPreflight,
+  planHerdrAttach,
+} from './workspace-plans.js';
 import { isInteractiveSession, promptConfirm } from './confirmation.js';
 import { CliError, EXIT } from './cli-errors.js';
 
@@ -111,6 +130,7 @@ interface RuntimeStartPlan {
   notices: MountNotice[];
   runtimeHash: string;
   ssh: boolean;
+  sshdEnabled: boolean;
   command: string[];
 }
 
@@ -180,11 +200,18 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
   const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
   const claudeConfig = claudeConfigJson(tools, projectContainerPaths);
+  // Keypair creation is idempotent and must precede Dockerfile generation —
+  // the public key is baked into the image's authorized_keys (and therefore
+  // the build hash, so key rotation rebuilds via the normal drift path).
+  const sshd = isSshdEnabled(context.workspace)
+    ? { authorizedKey: ensureSshKeypair().publicKey }
+    : null;
   const { dockerfile, extras } = generateDockerfile(context.containerProfile, tools, {
     agentWraps,
     agentEnv,
     claudeManagedSettings,
     claudeConfig,
+    sshd,
   });
 
   const hashInput = dockerfile + extras.map((file) => file.name + file.content).join('');
@@ -380,6 +407,7 @@ function resolveRuntimeEnv(context: WorkspaceContext): Record<string, string> {
 function computeRuntimeHash(
   context: WorkspaceContext,
   volumes: VolumeMount[],
+  sshdEnabled: boolean,
 ): string {
   const sortedVolumes = [...volumes]
     .map((volume) => ({
@@ -401,6 +429,9 @@ function computeRuntimeHash(
     volumes: sortedVolumes,
     resources: context.resources,
     sshAgent: context.workspace.host?.sshAgent ?? true,
+    // Toggling sshd swaps the container command, so it must count as runtime
+    // drift and restart a running workspace on the next open.
+    sshdEnabled,
     githubCLI: context.workspace.host?.githubCLI ?? false,
     hostEnv: hostEnvEntries,
   }));
@@ -418,12 +449,16 @@ export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStart
     throw new Error(sharedDirectoryLimitMessage(context.wsName, sharedDirectoryCount));
   }
 
+  const sshdEnabled = isSshdEnabled(context.workspace);
   return {
     volumes,
     notices,
-    runtimeHash: computeRuntimeHash(context, volumes),
+    runtimeHash: computeRuntimeHash(context, volumes, sshdEnabled),
     ssh: context.workspace.host?.sshAgent ?? true,
-    command: KEEPALIVE_COMMAND,
+    sshdEnabled,
+    // With sshd, the launcher is the keepalive: sshd lives and dies with the
+    // container, so there is no second lifecycle to supervise.
+    command: sshdEnabled ? [SSHD_LAUNCH_PATH] : KEEPALIVE_COMMAND,
   };
 }
 
@@ -448,6 +483,9 @@ function buildImageFromPlan(context: WorkspaceContext, buildPlan: BuildPlan): vo
     console.log(chalk.blue(`Building image ${context.imageTag}...`));
     buildImage(context.imageTag, tmpDir);
     writeBuildHash(buildPlan.hashPath, buildPlan.buildHash);
+    // A rebuild bakes fresh sshd host keys; the old known_hosts entry would
+    // hard-fail the next connection. Cheap no-op when the file is absent.
+    clearWorkspaceKnownHosts(context.wsName);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -574,31 +612,6 @@ function spawnAgentRefresh(context: WorkspaceContext): void {
   }
 }
 
-function spawnAutoStopHelper(workspaceName: string, deadlineMs: number): number | undefined {
-  const scriptPath = process.argv[1];
-  if (!scriptPath) {
-    return undefined;
-  }
-
-  try {
-    const child = spawn(process.execPath, [
-      scriptPath,
-      AUTO_STOP_COMMAND,
-      workspaceName,
-      String(deadlineMs),
-    ], {
-      detached: true,
-      stdio: 'ignore',
-      env: process.env,
-    });
-
-    child.unref();
-    return child.pid ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function readStopTimeout(workspaceName: string, fallback: string): string {
   try {
     return loadWorkspace(workspaceName).stopAfterLastSession;
@@ -699,7 +712,7 @@ async function finishWorkspaceSession(
     syncWorkspaceState({
       containerName: context.containerName,
       workspaceName: context.wsName,
-      entries: context.containerProfile.workspace_state,
+      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
       user: context.containerProfile.user,
       direction: 'copy-out',
     });
@@ -734,10 +747,24 @@ async function finishWorkspaceSession(
 
 export async function openWorkspace(
   wsName: string,
-  opts: { build?: boolean; workdir?: string | undefined },
+  opts: { build?: boolean; workdir?: string | undefined; attach?: Workspace['attach'] | undefined },
 ): Promise<void> {
   const context = loadWorkspaceContext(wsName);
   console.log(chalk.green(`Opening workspace: ${wsName}`));
+
+  // Before any build/start side effect: a herdr attach that can never succeed
+  // must not cost an image build or leave a started container behind.
+  const wantsHerdr = (opts.attach ?? context.workspace.attach) === 'herdr';
+  const attachPreflight = planAttachPreflight({
+    workspaceName: wsName,
+    configuredAttach: context.workspace.attach,
+    attachOverride: opts.attach,
+    sshdEnabled: isSshdEnabled(context.workspace),
+    herdrPresent: wantsHerdr ? herdrOnPath() : false,
+  });
+  if (attachPreflight.mode === 'refuse') {
+    throw new Error(attachPreflight.message);
+  }
 
   const buildPlan = computeBuildPlan(context);
   const runtimePlan = computeRuntimeStartPlan(context);
@@ -837,25 +864,41 @@ export async function openWorkspace(
     syncWorkspaceState({
       containerName: context.containerName,
       workspaceName: context.wsName,
-      entries: context.containerProfile.workspace_state,
+      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
       user: context.containerProfile.user,
       direction: 'copy-in',
+    });
+    // container cp drops the executable bit, so the copied-in herdr server needs
+    // +x restored or herdr reinstalls it every fresh start.
+    restoreHerdrServerExecutable({
+      containerName: context.containerName,
+      workspace: context.workspace,
+      user: context.containerProfile.user,
     });
   } else {
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
   }
   console.log(`Active sessions: ${opened.activeSessions}`);
 
+  const containerIpv4 = runtimePlan.sshdEnabled
+    ? await publishSshEndpoint(context)
+    : null;
+
   spawnAgentRefresh(context);
 
   let execResult: ExecResult | null = null;
   try {
-    execResult = execContainer({
-      name: context.containerName,
-      command: loginShellCommand(context.containerProfile.user),
-      workdir: opts.workdir,
-      user: context.containerProfile.user,
-    });
+    if (attachPreflight.mode === 'herdr') {
+      execResult = await attachHerdrClient(context, containerIpv4);
+    } else {
+      // workdir applies to the shell attach only: herdr owns its session cwd.
+      execResult = execContainer({
+        name: context.containerName,
+        command: loginShellCommand(context.containerProfile.user),
+        workdir: opts.workdir,
+        user: context.containerProfile.user,
+      });
+    }
   } finally {
     const exitMessage = await finishWorkspaceSession(context, sessionId);
     console.log(exitMessage);
@@ -864,4 +907,65 @@ export async function openWorkspace(
   if (execResult !== null) {
     setProcessExitCode(execResult);
   }
+}
+
+// Refresh the workspace's Host block (the IP is fresh for this container
+// life) and steer ~/.ssh/config towards Including the generated config.
+async function publishSshEndpoint(context: WorkspaceContext): Promise<string | null> {
+  const containerIpv4 = getContainerIpv4(context.containerName);
+  if (containerIpv4 === null) {
+    console.warn(chalk.yellow(`Warning: could not determine the container IP for '${context.wsName}' — its ssh host entry was not updated.`));
+    return null;
+  }
+
+  writeWorkspaceSshHostEntry({
+    workspaceName: context.wsName,
+    ipv4Address: containerIpv4,
+    user: context.containerProfile.user,
+  });
+
+  const userConfigPath = getUserSshConfigPath();
+  const userSshConfigContent = fs.existsSync(userConfigPath)
+    ? fs.readFileSync(userConfigPath, 'utf-8')
+    : null;
+  const includePlan = planSshInclude({
+    userSshConfigContent,
+    includePath: getSshConfigPath(),
+    isInteractive: isInteractiveSession(),
+  });
+
+  if (includePlan === 'offer-append') {
+    const accepted = await promptConfirm(`Add '${sshIncludeLine()}' to ~/.ssh/config so ssh and remote clients can resolve workspace hosts?`);
+    if (accepted) {
+      appendSshInclude();
+      console.log(chalk.dim(`Added the Include to ${userConfigPath} (backup: ${userConfigPath}.pi-tin.bak).`));
+      return containerIpv4;
+    }
+  }
+  if (includePlan !== 'none') {
+    console.log(chalk.dim(`ssh endpoint ready — add to the top of ${userConfigPath}: ${sshIncludeLine()}`));
+  }
+  return containerIpv4;
+}
+
+async function attachHerdrClient(
+  context: WorkspaceContext,
+  containerIpv4: string | null,
+): Promise<ExecResult> {
+  const herdrPlan = planHerdrAttach({
+    workspaceName: context.wsName,
+    ipv4Address: containerIpv4,
+  });
+  if (herdrPlan.mode === 'refuse') {
+    throw new Error(herdrPlan.message);
+  }
+
+  const reachable = await probeSshEndpoint(herdrPlan.ipv4Address, WORKSPACE_SSHD_PORT);
+  if (!reachable) {
+    throw new Error(
+      `sshd in workspace '${context.wsName}' did not become reachable at ${herdrPlan.ipv4Address}:${WORKSPACE_SSHD_PORT}. Check 'container logs ${context.containerName}'.`,
+    );
+  }
+
+  return attachHerdr(herdrPlan.hostAlias);
 }

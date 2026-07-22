@@ -7,6 +7,7 @@ import { ensurePrerequisites } from './lib/prereqs.js';
 import { runAutoStopHelper, AUTO_STOP_COMMAND } from './lib/auto-stop.js';
 import { runUpdateCheckHelper, scheduleUpdateNotice, CHECK_FOR_UPDATE_COMMAND } from './lib/update-check.js';
 import { isValidWorkspaceName } from './lib/workspaces.js';
+import { ATTACH_MODES } from './lib/validators.js';
 import { CliError, EXIT, errorEnvelope } from './lib/cli-errors.js';
 import { shouldEmitJson, printJson } from './lib/cli-output.js';
 import { classifyHelpRequest, classifyInvocation, isPrereqExemptRequest } from './lib/help-request.js';
@@ -52,7 +53,7 @@ if (helpRequest === 'root') {
 
 try {
   const knownCommands = knownCommandNames(program);
-  const invocation = classifyInvocation(args, knownCommands, groupSubcommandNames(program));
+  const invocation = classifyInvocation(args, knownCommands, groupSubcommandNames(program), ATTACH_MODES);
   if (invocation.kind === 'unknown-command') {
     throw new CliError(`Unknown command '${invocation.badInput}'.`, EXIT.VALIDATION, {
       code: 'unknown_command',

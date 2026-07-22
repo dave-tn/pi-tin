@@ -4,9 +4,11 @@ import {
   ContainerListSchema,
   ContainerSystemStatusSchema,
   ContainerSystemVersionSchema,
+  HerdrAgentListSchema,
   ImageListSchema,
   NpmDistTagsSchema,
   UpdateCheckCacheSchema,
+  parseAttachMode,
   validateWorkspace,
   validateContainerProfile,
 } from './validators.js';
@@ -24,18 +26,39 @@ const baseProfile = {
 
 describe('container CLI JSON schemas', () => {
   test('parses Apple container 1.0 container list output', () => {
+    // Running entries carry status.networks with a CIDR ipv4Address; stopped
+    // entries have no networks key at all (verified against the 1.0.0 source:
+    // ManagedContainer → ContainerStatus → Attachment).
     expect(v.parse(ContainerListSchema, [
       {
         id: 'pi-tin-demo',
-        status: { state: 'running' },
+        status: {
+          state: 'running',
+          networks: [{
+            network: 'default',
+            hostname: 'pi-tin-demo',
+            ipv4Address: '192.168.64.5/24',
+            ipv4Gateway: '192.168.64.1',
+          }],
+        },
       },
       {
         id: 'buildkit',
         status: { state: 'stopped' },
       },
     ])).toEqual([
-      { id: 'pi-tin-demo', status: 'running' },
-      { id: 'buildkit', status: 'stopped' },
+      { id: 'pi-tin-demo', status: 'running', ipv4Address: '192.168.64.5' },
+      { id: 'buildkit', status: 'stopped', ipv4Address: null },
+    ]);
+  });
+
+  test('container list entries with empty or addressless networks parse to a null address', () => {
+    expect(v.parse(ContainerListSchema, [
+      { id: 'a', status: { state: 'running', networks: [] } },
+      { id: 'b', status: { state: 'running', networks: [{ network: 'default' }] } },
+    ])).toEqual([
+      { id: 'a', status: 'running', ipv4Address: null },
+      { id: 'b', status: 'running', ipv4Address: null },
     ]);
   });
 
@@ -422,6 +445,67 @@ describe('WorkspaceSchema tmux', () => {
       tmux: { mode: 'isolated' },
     });
     expect(result.tmux?.mode).toBe('isolated');
+  });
+});
+
+describe('WorkspaceSchema sshd and attach', () => {
+  const baseWorkspace = {
+    profile: 'default',
+    projects: ['/tmp/test'],
+  };
+
+  test('defaults to sshd off and shell attach', () => {
+    const result = validateWorkspace(baseWorkspace);
+    expect(result.sshd).toBe(false);
+    expect(result.attach).toBe('shell');
+  });
+
+  test('accepts sshd true and herdr attach', () => {
+    const result = validateWorkspace({ ...baseWorkspace, sshd: true, attach: 'herdr' });
+    expect(result.sshd).toBe(true);
+    expect(result.attach).toBe('herdr');
+  });
+
+  test('rejects an unknown attach mode naming the field', () => {
+    expect(() => validateWorkspace({ ...baseWorkspace, attach: 'tmux' }))
+      .toThrow(/attach/);
+  });
+});
+
+describe('parseAttachMode', () => {
+  test('narrows valid modes', () => {
+    expect(parseAttachMode('shell')).toBe('shell');
+    expect(parseAttachMode('herdr')).toBe('herdr');
+  });
+
+  test('returns null for anything else', () => {
+    expect(parseAttachMode('tmux')).toBeNull();
+    expect(parseAttachMode('')).toBeNull();
+  });
+});
+
+describe('HerdrAgentListSchema', () => {
+  // Verified live output of `herdr agent list` (herdr 0.7.x).
+  test('parses the real result.agents wire shape and normalises agent_status', () => {
+    expect(v.parse(HerdrAgentListSchema, {
+      id: 'cli:agent:list',
+      result: {
+        agents: [
+          { agent: 'claude', agent_status: 'working', pane_id: 'w1:p1' },
+          { agent: 'codex', agent_status: 'idle', pane_id: 'w1:p2' },
+          { agent: 'pi' },
+        ],
+        type: 'agent_list',
+      },
+    })).toEqual([
+      { status: 'working' },
+      { status: 'idle' },
+      { status: null },
+    ]);
+  });
+
+  test('rejects a payload without result.agents', () => {
+    expect(() => v.parse(HerdrAgentListSchema, { agents: [{ status: 'done' }] })).toThrow();
   });
 });
 

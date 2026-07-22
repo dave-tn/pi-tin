@@ -192,6 +192,8 @@ export function buildWorkspace(options: {
       mounts: options.hostMounts,
       env: options.env,
     },
+    sshd: false,
+    attach: 'shell',
     stopAfterLastSession: '30s',
     ...(options.tmux ? { tmux: options.tmux } : {}),
   };

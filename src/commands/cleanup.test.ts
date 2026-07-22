@@ -15,9 +15,9 @@ describe('planCleanup', () => {
 
   test('partitions pi-tin containers into running and stopped workspaces', () => {
     expect(planCleanup([
-      { id: 'pi-tin-alpha', status: 'running' },
-      { id: 'pi-tin-beta', status: 'stopped' },
-      { id: 'pi-tin-gamma', status: 'created' },
+      { id: 'pi-tin-alpha', status: 'running', ipv4Address: null },
+      { id: 'pi-tin-beta', status: 'stopped', ipv4Address: null },
+      { id: 'pi-tin-gamma', status: 'created', ipv4Address: null },
     ])).toEqual({
       action: 'clean',
       runningWorkspaces: ['alpha'],
@@ -27,8 +27,8 @@ describe('planCleanup', () => {
 
   test('ignores containers that are not pi-tin workspaces', () => {
     expect(planCleanup([
-      { id: 'unrelated', status: 'running' },
-      { id: 'other', status: 'stopped' },
+      { id: 'unrelated', status: 'running', ipv4Address: null },
+      { id: 'other', status: 'stopped', ipv4Address: null },
     ])).toEqual({
       action: 'clean',
       runningWorkspaces: [],

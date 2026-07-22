@@ -41,6 +41,32 @@ export function getUpdateCheckPath(): string {
   return path.join(getStateDir(), 'update-check.json');
 }
 
+/** pi-tin's ssh material: keypair, generated ssh config, per-workspace known_hosts. */
+export function getSshDir(): string {
+  return path.join(getConfigDir(), 'ssh');
+}
+
+export function getSshKeyPath(): string {
+  return path.join(getSshDir(), 'id_ed25519');
+}
+
+export function getSshPublicKeyPath(): string {
+  return path.join(getSshDir(), 'id_ed25519.pub');
+}
+
+/** The generated ssh config users Include from ~/.ssh/config. */
+export function getSshConfigPath(): string {
+  return path.join(getSshDir(), 'config');
+}
+
+export function getSshKnownHostsPath(workspaceName: string): string {
+  return path.join(getSshDir(), `known_hosts.${workspaceName}`);
+}
+
+export function getUserSshConfigPath(): string {
+  return path.join(os.homedir(), '.ssh', 'config');
+}
+
 export function getHostGhConfigDir(): string {
   return path.join(os.homedir(), '.config', 'gh');
 }

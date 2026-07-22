@@ -226,6 +226,8 @@ describe('buildWorkspace', () => {
         mounts: [{ host: '~/.aws', container: '/home/dev/.aws', readonly: true }],
         env: { COLORTERM: '${COLORTERM}' },
       },
+      sshd: false,
+      attach: 'shell',
       stopAfterLastSession: '30s',
     });
   });

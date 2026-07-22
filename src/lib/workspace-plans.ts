@@ -1,12 +1,13 @@
 import path from 'node:path';
 import {
+  containerNameFor,
   isPiTinContainerId,
   workspaceNameFromContainerId,
   isPiTinImageTag,
   workspaceNameFromImageTag,
   type ContainerState,
 } from './container.js';
-import type { ListedContainer } from './validators.js';
+import type { ListedContainer, Workspace } from './validators.js';
 import type { RuntimeStateStatus } from './runtime-state.js';
 import { sharedDirectoryLimitMessage, basenameCollisionMessage } from './project-mounts.js';
 
@@ -364,6 +365,117 @@ export function planAddProject(options: PlanAddProjectOptions): AddProjectPlan {
   }
 
   return { action: 'add-and-open' };
+}
+
+export interface PlanAttachPreflightOptions {
+  workspaceName: string;
+  configuredAttach: Workspace['attach'];
+  attachOverride: Workspace['attach'] | undefined;
+  sshdEnabled: boolean;
+  herdrPresent: boolean;
+}
+
+export type AttachPreflightPlan =
+  | { mode: 'shell' }
+  | { mode: 'herdr' }
+  | { mode: 'refuse'; message: string };
+
+// Runs before any build/start side effect: a herdr attach that can never
+// succeed (no sshd in the image, no herdr on the Mac) must not cost an image
+// build or leave a started container behind.
+export function planAttachPreflight(options: PlanAttachPreflightOptions): AttachPreflightPlan {
+  const attach = options.attachOverride ?? options.configuredAttach;
+  if (attach === 'shell') {
+    return { mode: 'shell' };
+  }
+
+  if (!options.sshdEnabled) {
+    return {
+      mode: 'refuse',
+      message:
+        `Workspace '${options.workspaceName}' is not built with sshd, which herdr attach requires.\n`
+        + `Set 'attach: herdr' or 'sshd: true' in the workspace YAML, then reopen to rebuild.`,
+    };
+  }
+
+  if (!options.herdrPresent) {
+    return {
+      mode: 'refuse',
+      message:
+        'herdr is not installed on this Mac.\n'
+        + 'Install it (https://herdr.dev) or reopen with `--attach shell`.',
+    };
+  }
+
+  return { mode: 'herdr' };
+}
+
+export type HerdrAttachPlan =
+  | { mode: 'herdr'; hostAlias: string; ipv4Address: string }
+  | { mode: 'refuse'; message: string };
+
+// Post-start companion to planAttachPreflight: the container IP only exists
+// once the container runs, and without it there is nothing to ssh into.
+export function planHerdrAttach(options: {
+  workspaceName: string;
+  ipv4Address: string | null;
+}): HerdrAttachPlan {
+  if (options.ipv4Address === null) {
+    return {
+      mode: 'refuse',
+      message:
+        `Workspace '${options.workspaceName}' is running but its container reports no IP address, so herdr cannot connect.\n`
+        + CONTAINER_SYSTEM_RETRY_HINT,
+    };
+  }
+
+  return {
+    mode: 'herdr',
+    hostAlias: containerNameFor(options.workspaceName),
+    ipv4Address: options.ipv4Address,
+  };
+}
+
+export type HerdrAgentStates =
+  | { kind: 'not-applicable' }
+  | { kind: 'unavailable' }
+  | { kind: 'states'; working: number };
+
+export interface PlanAutoStopOptions {
+  containerState: ContainerState;
+  runtimeState: RuntimeStateStatus;
+  activeSessions: number;
+  // The armed shutdown record still names this helper's deadline; a mismatch
+  // means a newer arm/cancel superseded it.
+  deadlineMatches: boolean;
+  agentStates: HerdrAgentStates;
+}
+
+export type AutoStopPlan =
+  | { action: 'stop' }
+  | { action: 'defer' }
+  | { action: 'bail' };
+
+// 'unavailable' deliberately stops rather than defers: a herdr query that
+// never succeeds must not keep a container alive forever, and a stop is
+// recoverable — herdr restores the session and resumes agents on next open.
+export function planAutoStopDecision(options: PlanAutoStopOptions): AutoStopPlan {
+  if (options.containerState !== 'running') {
+    return { action: 'bail' };
+  }
+  if (options.runtimeState !== 'ok') {
+    return { action: 'bail' };
+  }
+  if (options.activeSessions > 0) {
+    return { action: 'bail' };
+  }
+  if (!options.deadlineMatches) {
+    return { action: 'bail' };
+  }
+  if (options.agentStates.kind === 'states' && options.agentStates.working > 0) {
+    return { action: 'defer' };
+  }
+  return { action: 'stop' };
 }
 
 export type CleanupPlan =

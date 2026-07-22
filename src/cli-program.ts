@@ -1,6 +1,6 @@
 import { Command, CommanderError } from 'commander';
 import { registerCreateCommand } from './commands/create.js';
-import { registerOpenCommand } from './commands/open.js';
+import { registerOpenCommand, parseAttachOption } from './commands/open.js';
 import { registerListCommand } from './commands/list.js';
 import { registerStopCommand } from './commands/stop.js';
 import { registerDeleteCommand } from './commands/delete.js';
@@ -69,10 +69,15 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   // Machine-oriented usage guide
   registerAgentGuideCommand(program);
 
-  // Default action — bare `pi-tin` with no subcommand
-  program.action(async (opts: { build?: boolean }) => {
-    await runDefaultAction(opts);
-  });
+  // Default action — bare `pi-tin` opens the cwd-matched workspace; an
+  // optional attach token (`pi-tin herdr`, `pi-tin shell`) overrides the
+  // workspace's configured attach for this open only. classifyInvocation
+  // admits only these tokens, so any other first positional never gets here.
+  program
+    .argument('[attach]', 'Attach override for the matched workspace: shell or herdr')
+    .action(async (attachArg: string | undefined, opts: { build?: boolean }) => {
+      await runDefaultAction({ ...opts, attach: parseAttachOption(attachArg) });
+    });
 
   return program;
 }

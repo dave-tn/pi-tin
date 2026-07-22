@@ -2,9 +2,54 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { planWorkspaceStateSync, syncWorkspaceState } from './workspace-state.js';
+import { combinedWorkspaceStateEntries, planWorkspaceStateSync, restoreHerdrServerExecutable, syncWorkspaceState } from './workspace-state.js';
 
 const hostStateDir = '/host/workspace-state/myws';
+
+describe('combinedWorkspaceStateEntries', () => {
+  const containerProfile = { workspace_state: ['.zsh_history'] };
+
+  test('herdr workspaces add the herdr state dir and the auto-installed server binary', () => {
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'herdr' }))
+      .toEqual(['.zsh_history', '.config/herdr', '.local/bin/herdr']);
+  });
+
+  test('shell workspaces keep only the profile entries', () => {
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'shell' }))
+      .toEqual(['.zsh_history']);
+  });
+});
+
+describe('restoreHerdrServerExecutable', () => {
+  test('chmods +x the copied-in herdr server for herdr workspaces', () => {
+    const calls: string[][] = [];
+    restoreHerdrServerExecutable(
+      { containerName: 'pi-tin-demo', workspace: { attach: 'herdr' }, user: 'dev' },
+      { run: (_file, args): void => { calls.push(args); } },
+    );
+
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'chmod', '+x', '/home/dev/.local/bin/herdr'],
+    ]);
+  });
+
+  test('is a no-op for shell workspaces', () => {
+    const calls: string[][] = [];
+    restoreHerdrServerExecutable(
+      { containerName: 'pi-tin-demo', workspace: { attach: 'shell' }, user: 'dev' },
+      { run: (_file, args): void => { calls.push(args); } },
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  test('swallows chmod failure — herdr just reinstalls', () => {
+    expect(() => restoreHerdrServerExecutable(
+      { containerName: 'pi-tin-demo', workspace: { attach: 'herdr' }, user: 'dev' },
+      { run: (): void => { throw new Error('exec failed'); } },
+    )).not.toThrow();
+  });
+});
 
 describe('planWorkspaceStateSync copy-in', () => {
   test('per entry: remove stale destination, copy in, then fix ownership', () => {

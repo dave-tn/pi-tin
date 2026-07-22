@@ -18,6 +18,8 @@ The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOL
 
 **Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Gemini, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
 
+**Multiplex agents with [herdr](https://herdr.dev).** One config line (`attach: herdr`) and `pt` opens the workspace in herdr: agent panes rendered locally, drag-and-drop images straight into contained agents, detach freely. pi-tin wires everything (SSH endpoint, server install, session persistence) and adds an agent-aware lifecycle — after you detach, the workspace keeps running until the agents finish too, then stops; the next `pt` restores your layout and resumes the agents. → [herdr attach](#herdr-attach)
+
 **Runs on your Mac.** No cloud VMs, no remote dev environment to rent or trust — the sandboxes are local, backed by Apple's native virtualization.
 
 **Open source top to bottom.** pi-tin (GPLv3), Apple's `container` runtime (Apache-2.0), and the Linux kernel — all open — running on the virtualization built into macOS.
@@ -264,7 +266,9 @@ Notes:
 - `host.githubCLI` (default `false`) enables GitHub CLI integration — automatically mounts `~/.config/gh` and resolves a `GH_TOKEN`.
 - `host.mounts` allows additional host directories to be mounted. Each entry is `{ host, container, readonly }`, all three required (e.g. `{ host: ~/data, container: /data, readonly: true }`). `host` supports `~` expansion; a mount whose host path doesn't exist is skipped with a warning. Must be **directories** — single file mounts are not supported. Mounting at a nested path (e.g. `~/.nuget/packages`) makes Apple `container` create the missing parent directories root-owned; on each fresh start pi-tin hands parents under the container home back to the workspace user, so tools can write beside the mount. Parents outside the home directory are left as the runtime creates them.
 - `host.env` values are passed to the container at runtime. Use `${VAR}` syntax to forward a host environment variable without hardcoding secrets in the YAML — if the host variable is unset, the entry is silently skipped. Only values that are exactly `${VAR}` are resolved; a `${…}` inside a longer string passes through literally, with a warning.
-- `stopAfterLastSession` controls how long pi-tin keeps a workspace running after the last host-side session exits. Format: an integer with a single `s`/`m`/`h` unit (e.g. `90s`, `5m`, `1h`) — no combinations. Default: `30s`.
+- `sshd` (default `false`) runs an sshd inside the workspace and publishes a host alias for it (see [SSH access to workspaces](#ssh-access-to-workspaces)). Toggling it applies on the next open via the normal rebuild/restart flow.
+- `attach` (default `shell`) selects what `pi-tin open` attaches: `shell` (a login shell via `container exec`, as before) or `herdr` (a local herdr client connected over SSH — see [herdr attach](#herdr-attach)). `attach: herdr` implies `sshd`. Override per open with `--attach <mode>` or the bare-invocation shorthand (`pi-tin herdr`, `pi-tin shell`).
+- `stopAfterLastSession` controls how long pi-tin keeps a workspace running after the last host-side session exits. Format: an integer with a single `s`/`m`/`h` unit (e.g. `90s`, `5m`, `1h`) — no combinations. Default: `30s`. On herdr workspaces the stop is agent-aware: while any herdr pane reports a working agent, the countdown re-arms instead of stopping.
 - If Apple's `container` CLI stops responding, pi-tin bounds all of its non-interactive `container` calls (`exec`, `cp`, `run`, `stop`, `kill`, `delete`, `list` and image operations) and fails fast rather than hanging indefinitely; only the interactive shell attach and the streaming image build run without a deadline. In that state you may need to restart the container system (`container system stop`, then `container system start`) before the workspace can be attached or stopped cleanly. If those commands hang too, try restarting the relevant launchd service (for example `launchctl kickstart -k gui/$(id -u)/com.apple.container.apiserver`, or a specific `com.apple.container.container-runtime-linux.<name>` service). If that still does not recover it, log out/in or reboot macOS.
 - A workspace start may mount at most **22 distinct host directories** — a conservative limit to avoid Apple `container` startup failures with large mount sets. Projects, `host.mounts`, agent profiles, and GitHub CLI mounts each count toward it.
 - `pi-tin create` forwards `COLORTERM` from the host by default (`COLORTERM: ${COLORTERM}`) so tools inside the workspace can detect truecolor support when your terminal provides it.
@@ -298,9 +302,9 @@ of the following to a non-empty value:
 | Command | Description |
 |---------|-------------|
 | `pi-tin create [name]` | Create a new workspace (interactive; prompts for a name when omitted; without a TTY exits 1 with error code `interactive_only` — use `apply` instead) |
-| `pi-tin [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); `--build` forces a rebuild when a match is found; without a TTY exits 1 with error code `interactive_only` |
+| `pi-tin [shell\|herdr] [--build]` | Auto-open the workspace matching the current directory; when none match, offer to create a new workspace (or, if other workspaces exist, to add the directory to one of them); an attach token (`pi-tin herdr`, `pi-tin shell`) overrides the workspace's configured `attach` for this open; `--build` forces a rebuild when a match is found; without a TTY exits 1 with error code `interactive_only` |
 | `pi-tin add [workspace]` | Add the current directory to an existing workspace (interactive picker), or `add <name>` to target one directly; the no-argument picker needs a TTY (exit 1, error code `interactive_only`) — `add <name>` works headless |
-| `pi-tin open <name> [--build]` | Start or join a workspace (interactive; attaches a tmux session; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` instead) |
+| `pi-tin open <name> [--build] [--attach <mode>]` | Start or join a workspace (interactive; attaches a login shell or, with `attach: herdr`/`--attach herdr`, a local herdr client; without a TTY exits 1 with error code `interactive_only` — use `list`/`show` instead) |
 | `pi-tin list [--json]` | List all workspaces and their status (`--json` for machine-readable output: `sessions`/`projects` counts and `shutdownMs`, milliseconds until auto-shutdown or null; JSON is the default when output is piped) |
 | `pi-tin show <name> [--json]` | Show a workspace definition as JSON (output is always JSON; `--json` is accepted for consistency) |
 | `pi-tin apply <name> [--dry-run]` | Create or update a workspace from a JSON object on stdin (see [Editing workspaces](#editing-workspaces)) |
@@ -410,7 +414,7 @@ Workspaces are **shared-session containers**. `pi-tin open` starts the workspace
 - **`open --build`**: Forces an image rebuild on the next fresh start. If the workspace already has active sessions, pi-tin refuses and asks you to stop it first.
 - **Bare `pi-tin --build`**: From inside a directory matched by exactly one workspace (or after selecting one from multiple matches), behaves the same as `pi-tin open <workspace> --build`.
 - **Rebuild failure**: If a required rebuild fails (for example the machine is offline and the base image or a build step cannot be fetched) and a previously built image exists, pi-tin reports the failure and offers to open the workspace using that older image — your config changes stay unapplied until the next successful rebuild. It aborts instead when there is no previous image to fall back to, or when the session is non-interactive.
-- **Last session exit**: When the last host-side `pi-tin open` session closes, pi-tin starts an auto-stop countdown using `stopAfterLastSession` (default `30s`). Reopening during that grace period cancels the pending stop unless a fresh restart is needed to apply config changes.
+- **Last session exit**: When the last host-side `pi-tin open` session closes, pi-tin starts an auto-stop countdown using `stopAfterLastSession` (default `30s`). Reopening during that grace period cancels the pending stop unless a fresh restart is needed to apply config changes. On herdr workspaces the countdown is agent-aware: while any pane reports a working agent it re-arms instead of stopping, and the final stop snapshots workspace state (including herdr session state) first.
 - **`stop`**: Stops a running workspace immediately.
 - **`delete`**: Removes the workspace configuration and its image. It refuses while sessions are still active.
 
@@ -447,6 +451,32 @@ pi-tin forwards your macOS SSH agent into the container (via `--ssh` on `contain
 - **No configuration.** With `ssh-agent` running on your Mac (the macOS default), Git, scp, and other SSH tools inside the container authenticate transparently.
 
 If you genuinely need keys present in the container, add `~/.ssh` as a custom host mount at creation time — but agent forwarding is recommended.
+
+## SSH access to workspaces
+
+With `sshd: true` (or `attach: herdr`), the workspace runs an unprivileged sshd on port 2222, owned by the workspace user. Each container has its own IP, and on every open pi-tin refreshes a Host block in `~/.config/pi-tin/ssh/config`:
+
+```
+Host pi-tin-<workspace>
+```
+
+One-time setup: `~/.ssh/config` needs `Include ~/.config/pi-tin/ssh/config` near the top. The first sshd-enabled open offers to add it (the previous file is backed up to `~/.ssh/config.pi-tin.bak`); decline and the instruction is printed instead.
+
+Then any SSH-based tool works against the alias — `ssh pi-tin-<workspace>`, `sftp`, VS Code Remote-SSH, herdr:
+
+- **Auth** uses a dedicated pi-tin keypair (`~/.config/pi-tin/ssh/id_ed25519`, generated on first use); the public key is baked into the image. Password auth is disabled.
+- **Environment matches `container exec`.** The container start snapshots its environment (image `ENV`, `host.env` values, `GH_TOKEN`, the forwarded `SSH_AUTH_SOCK`) into `~/.ssh/environment`, so ssh sessions see what shell sessions see.
+- **Host keys** are baked per image build and pinned per workspace (`~/.config/pi-tin/ssh/known_hosts.<workspace>`, `accept-new`). A rebuild mints new host keys and clears that file, so reconnects stay prompt-free; stop/delete remove the Host block (and delete clears the pinned keys).
+- **Session accounting caveat:** raw ssh sessions are invisible to pi-tin — auto-stop counts only `pi-tin open` sessions. For VS Code or other external-client workflows, raise `stopAfterLastSession` or keep a pi-tin session open.
+
+## herdr attach
+
+[herdr](https://herdr.dev) is a client/server terminal multiplexer for AI agents. With `attach: herdr`, `pi-tin open` (bare `pt` day to day) runs the local herdr binary (`herdr --remote pi-tin-<workspace>`) against a herdr server inside the workspace. The session UI runs workspace-side and streams to your terminal, so the herdr config that applies (`config.toml`: theme, toasts, sidebar; plugins) is the **workspace's** `~/.config/herdr` — pi-tin persists it across container lives via workspace state. Keybindings are the exception: your local ones apply by default (snapshotted at attach; `--remote-keybindings server` uses the workspace's). The local clipboard — including image paste — bridges into agent panes, and panes survive detach.
+
+- **Prerequisite:** herdr installed on the Mac. The server side needs nothing: on first attach the client installs a matching server into the workspace's `~/.local/bin` (~10MB). pi-tin persists that binary across container lives via workspace state, so you're prompted to install once, not on every open — it only re-installs after you upgrade the Mac's herdr client (the persisted server must match it).
+- **Detach and auto-stop:** detaching the client ends the pi-tin session and starts the `stopAfterLastSession` countdown, but the stop is **agent-aware** — while any herdr pane reports a working agent, the countdown re-arms. Once agents are idle the workspace stops; herdr session state is snapshotted across container lives (via workspace state), so the next open restores the layout and herdr resumes supported agents (`resume_agents_on_restore`, on by default).
+- **Escape hatches:** `--attach shell` (or `pt shell`) opens a plain login shell on a herdr workspace; `sshd: true` with `attach: shell` keeps sshd in the image so `pt herdr` works ad hoc. A herdr attach on an image built without sshd is refused with the fix (`attach: herdr` or `sshd: true`, then reopen to rebuild).
+- `open`'s working-directory behaviour (`cd` into a project first) applies to shell attaches only — herdr manages its own pane cwds.
 
 ## Git Authentication
 

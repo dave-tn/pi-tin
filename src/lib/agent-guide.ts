@@ -68,7 +68,8 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
     { command: 'show', summary: 'Show a workspace definition', args: ['<name>'], flags: ['--json'] },
     {
       command: 'apply',
-      summary: 'Create or update a workspace',
+      summary:
+        'Create or update a workspace. Notable fields beyond profile/projects: sshd (boolean, SSH endpoint) and attach ("shell" | "herdr"; "herdr" implies sshd and needs the herdr client on the host).',
       args: ['<name>'],
       stdin: 'workspace JSON',
       flags: ['--dry-run', '--json'],
@@ -143,7 +144,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
   interactiveOnly: [
     { command: 'create', use: 'Use `apply <name>` with workspace JSON on stdin.' },
     { command: 'add', use: 'Use `show <name> --json`, edit projects, then `apply <name>`. (`add <workspace>` with an explicit name works headless.)' },
-    { command: 'open', use: 'Requires a terminal — attaches a tmux session. No headless equivalent.' },
+    { command: 'open', use: 'Requires a terminal — attaches an interactive session (shell or herdr). No headless equivalent; have the user run `pt` from the project directory (`pt herdr` / `--attach <mode>` override the configured mode for one open).' },
     { command: 'agent-profile discover', use: 'Use `agent-profile add <name> --agent <agent>`.' },
     { command: 'agent-profile finder', use: 'Opens macOS Finder. Use `agent-profile show <name> --json`.' },
   ],
@@ -153,7 +154,8 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
 export const AGENT_GUIDE = `pi-tin — agent usage guide
 
 pi-tin manages macOS Apple-container dev workspaces. Drive it with the commands
-below instead of editing YAML config by hand.
+below instead of editing YAML config by hand. \`pt\` is a built-in alias for
+\`pi-tin\` — prefer \`pt\` when telling the user what to type themselves.
 
 CONTRACT
 - ${AGENT_HELP_SCHEMA.contract.input}
@@ -182,6 +184,15 @@ TYPICAL FLOWS
 - Stop or delete a workspace (destructive — preview, confirm with the user, then --force):
     pi-tin delete <name> --dry-run
     pi-tin delete <name> --force
+- Enable herdr attach (or plain SSH) for a workspace:
+    pi-tin show <name> --json > ws.json
+    # set "attach": "herdr" (implies sshd; the herdr client must be installed
+    # on the host) — or "sshd": true alone for an SSH endpoint with the
+    # default shell attach — then:
+    pi-tin apply <name> --dry-run < ws.json
+    pi-tin apply <name> < ws.json
+    # the user then runs \`pt\` from the project directory; the next open
+    # rebuilds the image and walks them through the one-time ssh-config prompt
 
 EXIT CODES
 - 0 success | 1 general | 2 validation | 3 not found | 4 confirmation required

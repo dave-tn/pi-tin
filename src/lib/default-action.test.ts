@@ -8,6 +8,8 @@ function createWorkspace(projects: string[]): Workspace {
     profile: 'node-dev',
     projects,
     tools: [],
+    sshd: false,
+    attach: 'shell',
     stopAfterLastSession: '30s',
   };
 }
