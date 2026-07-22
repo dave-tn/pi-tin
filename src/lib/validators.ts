@@ -213,7 +213,7 @@ export const ContainerSystemStatusSchema = v.object({
 // `herdr agent list --json` payload, from inside a workspace container.
 // Deliberately loose — only the per-agent status string matters, herdr's
 // schema is not pinned by pi-tin, and any parse failure downgrades the
-// auto-stop query to 'unavailable' (which stops, today's behaviour).
+// auto-stop query to 'unavailable' (which stops).
 // `herdr agent list` (verified live, herdr 0.7.x) already emits JSON — there
 // is no --json flag — shaped { result: { agents: [{ agent_status }] } }, where
 // agent_status is one of idle | working | blocked | done | unknown.

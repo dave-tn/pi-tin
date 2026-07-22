@@ -455,25 +455,25 @@ If you genuinely need keys present in the container, add `~/.ssh` as a custom ho
 With `sshd: true` (or `attach: herdr`), the workspace runs an unprivileged sshd on port 2222, owned by the workspace user. Each container has its own IP, and on every open pi-tin refreshes a Host block in `~/.config/pi-tin/ssh/config`:
 
 ```
-Host pi-tin-<name>
+Host pi-tin-<workspace>
 ```
 
 One-time setup: `~/.ssh/config` needs `Include ~/.config/pi-tin/ssh/config` near the top. The first sshd-enabled open offers to add it (the previous file is backed up to `~/.ssh/config.pi-tin.bak`); decline and the instruction is printed instead.
 
-Then any SSH-based tool works against the alias — `ssh pi-tin-<name>`, `sftp`, VS Code Remote-SSH, herdr:
+Then any SSH-based tool works against the alias — `ssh pi-tin-<workspace>`, `sftp`, VS Code Remote-SSH, herdr:
 
 - **Auth** uses a dedicated pi-tin keypair (`~/.config/pi-tin/ssh/id_ed25519`, generated on first use); the public key is baked into the image. Password auth is disabled.
 - **Environment matches `container exec`.** The container start snapshots its environment (image `ENV`, `host.env` values, `GH_TOKEN`, the forwarded `SSH_AUTH_SOCK`) into `~/.ssh/environment`, so ssh sessions see what shell sessions see.
-- **Host keys** are baked per image build and pinned per workspace (`~/.config/pi-tin/ssh/known_hosts.<name>`, `accept-new`). A rebuild mints new host keys and clears that file, so reconnects stay prompt-free; stop/delete remove the Host block (and delete clears the pinned keys).
+- **Host keys** are baked per image build and pinned per workspace (`~/.config/pi-tin/ssh/known_hosts.<workspace>`, `accept-new`). A rebuild mints new host keys and clears that file, so reconnects stay prompt-free; stop/delete remove the Host block (and delete clears the pinned keys).
 - **Session accounting caveat:** raw ssh sessions are invisible to pi-tin — auto-stop counts only `pi-tin open` sessions. For VS Code or other external-client workflows, raise `stopAfterLastSession` or keep a pi-tin session open.
 
 ## herdr attach
 
-[herdr](https://herdr.dev) is a client/server terminal multiplexer for AI agents. With `attach: herdr`, `pi-tin open` runs the local herdr binary (`herdr --remote pi-tin-<name>`) against a herdr server inside the workspace. The session UI runs workspace-side and streams to your terminal, so the herdr config that applies (`config.toml`: theme, toasts, sidebar; plugins) is the **workspace's** `~/.config/herdr` — pi-tin persists it across container lives via workspace state. Keybindings are the exception: your local ones apply by default (snapshotted at attach; `--remote-keybindings server` uses the workspace's). The local clipboard — including image paste — bridges into agent panes, and panes survive detach.
+[herdr](https://herdr.dev) is a client/server terminal multiplexer for AI agents. With `attach: herdr`, `pi-tin open` (bare `pt` day to day) runs the local herdr binary (`herdr --remote pi-tin-<workspace>`) against a herdr server inside the workspace. The session UI runs workspace-side and streams to your terminal, so the herdr config that applies (`config.toml`: theme, toasts, sidebar; plugins) is the **workspace's** `~/.config/herdr` — pi-tin persists it across container lives via workspace state. Keybindings are the exception: your local ones apply by default (snapshotted at attach; `--remote-keybindings server` uses the workspace's). The local clipboard — including image paste — bridges into agent panes, and panes survive detach.
 
 - **Prerequisite:** herdr installed on the Mac. The server side needs nothing: on first attach the client installs a matching server into the workspace's `~/.local/bin` (~10MB). pi-tin persists that binary across container lives via workspace state, so you're prompted to install once, not on every open — it only re-installs after you upgrade the Mac's herdr client (the persisted server must match it).
 - **Detach and auto-stop:** detaching the client ends the pi-tin session and starts the `stopAfterLastSession` countdown, but the stop is **agent-aware** — while any herdr pane reports a working agent, the countdown re-arms. Once agents are idle the workspace stops; herdr session state is snapshotted across container lives (via workspace state), so the next open restores the layout and herdr resumes supported agents (`resume_agents_on_restore`, on by default).
-- **Escape hatches:** `--attach shell` (or `pi-tin shell`) opens a plain login shell on a herdr workspace; `sshd: true` with `attach: shell` keeps sshd in the image so `pi-tin herdr` works ad hoc. A herdr attach on an image built without sshd is refused with the fix (`attach: herdr` or `sshd: true`, then reopen to rebuild).
+- **Escape hatches:** `--attach shell` (or `pt shell`) opens a plain login shell on a herdr workspace; `sshd: true` with `attach: shell` keeps sshd in the image so `pt herdr` works ad hoc. A herdr attach on an image built without sshd is refused with the fix (`attach: herdr` or `sshd: true`, then reopen to rebuild).
 - `open`'s working-directory behaviour (`cd` into a project first) applies to shell attaches only — herdr manages its own pane cwds.
 
 ## Git Authentication
