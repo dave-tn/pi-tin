@@ -18,6 +18,8 @@ The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOL
 
 **Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Gemini, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
 
+**Multiplex agents with [herdr](https://herdr.dev).** One config line (`attach: herdr`) and `pt` opens the workspace in herdr: agent panes rendered locally, drag-and-drop images straight into contained agents, detach freely. pi-tin wires everything (SSH endpoint, server install, session persistence) and adds an agent-aware lifecycle — after you detach, the workspace keeps running until the agents finish too, then stops; the next `pt` restores your layout and resumes the agents. → [herdr attach](#herdr-attach)
+
 **Runs on your Mac.** No cloud VMs, no remote dev environment to rent or trust — the sandboxes are local, backed by Apple's native virtualization.
 
 **Open source top to bottom.** pi-tin (GPLv3), Apple's `container` runtime (Apache-2.0), and the Linux kernel — all open — running on the virtualization built into macOS.
