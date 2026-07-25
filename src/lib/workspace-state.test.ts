@@ -35,8 +35,10 @@ const streamOutArgs = (containerPath: string, hostPath: string): string[] =>
   ['-c', STREAM_OUT_SCRIPT, 'sh', containerPath, hostPath, 'pi-tin-demo'];
 
 // Pinned copy of probeContainerPathShape's script (see workspace-state.ts):
-// the single exec round-trip that answers both existence and shape.
-const SHAPE_SCRIPT = 'if [ -d "$1" ]; then echo dir; elif [ -e "$1" ]; then echo file; else echo absent; fi';
+// the single exec round-trip that answers both existence and shape. Absence is
+// the non-zero exit, not a stdout token, so noisy output can never be mistaken
+// for a present path (or vice versa).
+const SHAPE_SCRIPT = 'if [ -d "$1" ]; then echo dir; elif [ -e "$1" ]; then echo file; else exit 3; fi';
 
 const shapeProbeArgs = (containerPath: string): string[] =>
   ['exec', '--user', 'root', 'pi-tin-demo', 'sh', '-c', SHAPE_SCRIPT, 'sh', containerPath];
@@ -439,6 +441,46 @@ describe('binary entry sync behaviour', () => {
     expect(fs.existsSync(recordPath)).toBe(false);
   });
 
+  // The case this whole mechanism exists for: `.local/share/claude` is a
+  // *directory* binary entry, so the shape probe, record-launcher's readlink
+  // and the fingerprint probe all share the one `capture` seam in a single
+  // group, and only a fake that dispatches on args gets the real composition —
+  // shape 'dir' plus a changed fingerprint, ending in a tar stream rather than
+  // `container cp`.
+  test('copy-out of the Claude versions directory streams out and threads the probed total', async () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'share', 'claude', 'versions'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'share', 'claude', 'versions', '2.1.218'), '12345');
+    const copyCalls: Array<{ file: string; args: string[] }> = [];
+    const { events, report } = createReporterCapture();
+
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [CLAUDE_ENTRY], user: 'dev', direction: 'copy-out' },
+      {
+        capture: (_file, args): string => {
+          if (args.includes(SHAPE_SCRIPT)) return 'dir\n';
+          if (args.includes('readlink')) return '/home/dev/.local/share/claude/versions/2.1.300\n';
+          // 9 bytes at a version the host snapshot does not hold: mismatches
+          // the host's `5 ./versions/2.1.218`, so the copy really runs.
+          return '9 ./versions/2.1.300\n';
+        },
+        copy: (file, args): Promise<void> => {
+          copyCalls.push({ file, args });
+          return Promise.resolve();
+        },
+        report,
+      },
+    );
+
+    expect(copyCalls).toEqual([{
+      file: '/bin/sh',
+      args: streamOutArgs(
+        '/home/dev/.local/share/claude',
+        path.join(stateDir, '.local', 'share', 'claude.pi-tin-tmp'),
+      ),
+    }]);
+    expect(events).toEqual(['start .local/share/claude', 'copy total=9 live=yes', 'finish done']);
+  });
+
   const RESTORE_SCRIPT =
     'ln -sfn "$1" "$2" && chown -h "$4:$4" "$2" && find "$3" -maxdepth 1 -type f ! -name "$5" -delete';
 
@@ -627,6 +669,39 @@ describe('copy-out mechanism selection', () => {
     expect(copyCalls[0]?.args[0]).toBe('cp');
   });
 
+  // copyOutIsDirectory lives on the per-entry context, so a directory entry
+  // must not leave the next entry streaming a single file through tar.
+  test('a file entry after a directory entry still uses container cp', async () => {
+    const copyCalls: Array<{ file: string; args: string[] }> = [];
+    await syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: [toolState('.config/herdr'), toolState('.zsh_history')],
+        user: 'dev',
+        direction: 'copy-out',
+      },
+      {
+        capture: (_file, args): string =>
+          (args.includes('/home/dev/.config/herdr') ? 'dir\n' : 'file\n'),
+        copy: (file, args): Promise<void> => {
+          copyCalls.push({ file, args });
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(copyCalls).toEqual([
+      {
+        file: '/bin/sh',
+        args: streamOutArgs('/home/dev/.config/herdr', path.join(stateDir, '.config', 'herdr.pi-tin-tmp')),
+      },
+      {
+        file: 'container',
+        args: ['cp', 'pi-tin-demo:/home/dev/.zsh_history', path.join(stateDir, '.zsh_history.pi-tin-tmp')],
+      },
+    ]);
+  });
+
   // Container output is untrusted: an unrecognised shape must fall back to cp,
   // which is correct for every shape. Guessing 'dir' for a real file would make
   // the tar stream fail and lose that entry's snapshot update.
@@ -645,12 +720,15 @@ describe('copy-out mechanism selection', () => {
     expect(copyCalls[0]?.file).toBe('container');
   });
 
+  // Absence rides the probe's non-zero exit, never a stdout token: stdout is
+  // untrusted and the 'file' fallback would send a missing path to
+  // `container cp`, which can wedge.
   test('an absent container path still skips the entry without copying', async () => {
     const copyCalls: string[] = [];
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.config/herdr')], user: 'dev', direction: 'copy-out' },
       {
-        capture: (_file, args): string => (args.join(' ').includes('echo dir') ? 'absent\n' : ''),
+        capture: (): string => { throw new Error("'container' exited with status 3"); },
         copy: (file): Promise<void> => {
           copyCalls.push(file);
           return Promise.resolve();
@@ -698,7 +776,12 @@ describe('syncWorkspaceState timeout handling', () => {
         run: (): void => { throw new Error('unexpected run seam'); },
         capture: (_file, args): string => {
           calls.push(args);
-          return args.includes('/home/dev/.local/share/zoxide') ? 'absent\n' : 'file\n';
+          // The absent path's probe exits non-zero (see SHAPE_SCRIPT), which
+          // execContainerCommandOutput surfaces as a throw.
+          if (args.includes('/home/dev/.local/share/zoxide')) {
+            throw new Error("'container' exited with status 3");
+          }
+          return 'file\n';
         },
         copy: (_file, args): Promise<void> => { calls.push(args); return Promise.resolve(); },
       },
@@ -823,9 +906,9 @@ describe('syncWorkspaceState timeout handling', () => {
       },
     );
 
-    // The timeout SIGKILLs only the stream's outer shell — the orphaned
-    // pipeline may still be extracting in the background, so the entry's
-    // restore-executable chmod must not run against it.
+    // The timeout SIGKILLs the host pipeline's process group, but the
+    // container-side tar belongs to the runtime and may still be flushing, so
+    // the entry's restore-executable chmod must not run against it.
     expect(calls).toEqual([
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/bin/herdr'],
       streamInArgs(path.join(stateDir, '.local', 'bin'), 'herdr', 'dev', '/home/dev/.local/bin'),
@@ -875,6 +958,45 @@ describe('syncWorkspaceState timeout handling', () => {
     ]);
     expect(warnings).toEqual([
       "Warning: workspace_state copy-in failed for '/home/dev/.zsh_history' in workspace 'demo' — starting without it (the container-side copy was already cleared). Common causes: a file of 8 GiB or larger or a single path component over 100 characters (ustar limits), or a container image without tar.",
+    ]);
+  });
+
+  test('copy-out: a failed stream warns — the snapshot silently stops advancing otherwise', async () => {
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    fs.mkdirSync(path.join(stateDir, '.config'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.config', 'herdr'), 'previous snapshot');
+    const warnings: string[] = [];
+    const copyCalls: string[][] = [];
+
+    await syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: [toolState('.config/herdr'), toolState('.zsh_history')],
+        user: 'dev',
+        direction: 'copy-out',
+      },
+      {
+        capture: (_file, args): string =>
+          (args.includes('/home/dev/.config/herdr') ? 'dir\n' : 'file\n'),
+        copy: (_file, args): Promise<void> => {
+          copyCalls.push(args);
+          return args.includes(STREAM_OUT_SCRIPT)
+            // GNU tar's "file changed as we read it" is exit 1, and pipefail
+            // fails the whole entry on it.
+            ? Promise.reject(new Error('tar exited with status 1'))
+            : Promise.resolve();
+        },
+        warn: (message): void => { warnings.push(message); },
+      },
+    );
+
+    // The previous snapshot survives (promote-temp never ran) and later
+    // entries still sync.
+    expect(fs.readFileSync(path.join(stateDir, '.config', 'herdr'), 'utf-8')).toBe('previous snapshot');
+    expect(copyCalls).toHaveLength(2);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-out failed for '/home/dev/.config/herdr' in workspace 'demo' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes: a container image without tar, a file changing while the tree was being archived, or an unreadable or special file under that path.",
     ]);
   });
 
