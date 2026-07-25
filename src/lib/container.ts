@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -445,31 +445,78 @@ const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options)
   execFileSync(file, args, options);
 };
 
-// spawn-based equivalent of execFileSync + timeout + SIGKILL: the deadline
-// kills only the direct child (for streamToContainer, the outer sh — its
-// tar/`container exec` children are orphaned and finish on their own,
-// exactly as under spawnSync; see streamToContainer). Settled on 'exit',
-// not 'close': orphans inherit the stderr pipe, and waiting for it to close
-// would block the timeout rejection until they finish. The rejection carries
-// code ETIMEDOUT so isContainerSubprocessTimeout classifies it unchanged.
+// Signal a detached child's whole process group. `child.pid` is undefined when
+// the spawn itself failed, and the negative-pid kill throws once the group has
+// already exited — both fall back to signalling the child handle, which is a
+// no-op in exactly those cases.
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid !== undefined) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // Group already gone, or not a group leader — fall through.
+    }
+  }
+  child.kill(signal);
+}
+
+// spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
+// deliberate difference: `detached` makes the child a process-group leader so
+// the deadline can signal the whole group (`kill(-pid)`) rather than just the
+// outer sh. Both copy pipelines are `sh -c '… | …'`, so the processes doing
+// the real work — host tar and `container exec` — are grandchildren; killing
+// only the shell would orphan a host-side tar that keeps writing into the
+// destination long after the caller has given up on it. Group kill stops the
+// writers with the shell. It is best-effort: the group may already be gone
+// (ESRCH), in which case fall back to signalling the child directly.
+// Settled on 'exit', not 'close': anything that did survive inherits the
+// stderr pipe, and waiting for it to close would block the timeout rejection.
+// The rejection carries code ETIMEDOUT so isContainerSubprocessTimeout
+// classifies it unchanged.
+//
+// Its own process group also means the terminal no longer delivers Ctrl-C to
+// the pipeline, so the interrupt is forwarded by hand and then re-raised with
+// the default disposition — otherwise a ^C mid-copy would leave exactly the
+// orphaned writer the group kill exists to prevent.
+const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
 // Exported only as the default runner and for direct tests of its error
 // shapes; production callers go through streamToContainer/copyFromContainer.
 export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
   new Promise((resolve, reject) => {
-    const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
     let timedOut = false;
     const deadline = setTimeout(() => {
       timedOut = true;
-      child.kill(options.killSignal);
+      killProcessGroup(child, options.killSignal);
     }, options.timeout);
-    child.on('error', (error) => {
+    const listeners = new Map<NodeJS.Signals, () => void>();
+    const settle = (): void => {
       clearTimeout(deadline);
+      for (const [signal, listener] of listeners) process.removeListener(signal, listener);
+      listeners.clear();
+    };
+    for (const signal of COPY_INTERRUPTS) {
+      const listener = (): void => {
+        killProcessGroup(child, 'SIGKILL');
+        // Removing our listeners first restores the default disposition, so
+        // the re-raise terminates pi-tin exactly as an unhandled signal would.
+        settle();
+        process.kill(process.pid, signal);
+      };
+      listeners.set(signal, listener);
+      process.on(signal, listener);
+    }
+    child.on('error', (error) => {
+      settle();
       reject(error);
     });
     child.on('exit', (code, signal) => {
-      clearTimeout(deadline);
+      settle();
       if (timedOut) {
         reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
         return;
@@ -510,17 +557,17 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // which busybox tar mishandles and which would poison the workspace-state
 // changed-check fingerprint. A failed host tar truncates the stream, so the
 // container-side tar exits nonzero and the failure surfaces without pipefail.
-// On timeout Node SIGKILLs only the outer shell: tar and `container exec` are
-// that shell's children joined by their own pipe, so the orphaned pipeline
-// keeps extracting in the background until it finishes on its own. Callers
-// must not touch the destination after a timeout (runOpGroup skips the
-// entry's remaining ops); the next sync's probe reconciles whatever the
-// orphan left. The extracted name is the tar member — basename(hostPath) —
+// On timeout the deadline SIGKILLs the whole process group, so the outer
+// shell, the host tar and `container exec` all die together (see
+// spawnContainerCopy). Callers still must not touch the destination after a
+// timeout (runOpGroup skips the entry's remaining ops): the container-side
+// tar is the runtime's process, not ours, and may still be flushing whatever
+// bytes it already received. The next sync's probe reconciles whatever is
+// left. The extracted name is the tar member — basename(hostPath) —
 // so containerPath contributes only its parent directory: both paths must
 // share a basename, which the planner guarantees by deriving them from the
 // same entry path. The `--` keeps a leading-dash basename from parsing as a
-// tar option. The async conversion preserves the kill target (the outer
-// sh) and therefore the documented orphan semantics above.
+// tar option.
 export async function streamToContainer(options: StreamToContainerOptions): Promise<void> {
   const script =
     'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
