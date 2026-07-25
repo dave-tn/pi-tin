@@ -132,4 +132,18 @@ describe('createSyncProgressReporter', () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(writes.length).toBe(writesAfterFinish);
   });
+
+  test('double copyStarted replaces the first ticker without leaking', async () => {
+    const { writes, out } = createOutputCapture(true);
+    const reporter = createSyncProgressReporter('copy-out', out);
+    reporter.startEntry('.config/nested');
+    reporter.copyStarted({ totalBytes: 200, currentBytes: (): number => 100 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    reporter.copyStarted({ totalBytes: 200, currentBytes: (): number => 150 });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    reporter.finishEntry({ kind: 'done', bytes: 200, durationMs: 100 });
+    const writesAfterFinish = writes.length;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(writes.length).toBe(writesAfterFinish);
+  });
 });

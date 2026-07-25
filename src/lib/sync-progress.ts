@@ -157,6 +157,7 @@ export function createSyncProgressReporter(
     },
     copyStarted(progress): void {
       if (out.isTTY !== true) return;
+      stopTicker();
       ticker = setInterval(() => {
         const live = formatLiveLine({
           totalBytes: progress.totalBytes,
@@ -165,6 +166,7 @@ export function createSyncProgressReporter(
         });
         out.write(`${CLEAR_LINE}  ${entryPath}  ${live}`);
       }, LIVE_TICK_MS);
+      if (ticker !== null) ticker.unref();
     },
     finishEntry(outcome): void {
       stopTicker();
