@@ -560,7 +560,7 @@ export async function copyFromContainer(options: CopyFromContainerOptions): Prom
 // the destination layout `container cp` produces, with no path rewriting.
 // Runs as root, not the workspace user: this matches the privilege
 // `container cp` had (it is executed by the runtime with full privilege) and
-// grants nothing new, since containerPathExists, containerFingerprint,
+// grants nothing new, since probeContainerPathShape, containerFingerprint,
 // restore-executable and remove-container-path already operate as root
 // against this same tree. A user-scoped tar would instead fail permanently
 // against any root-owned file underneath — worse, containerFingerprint

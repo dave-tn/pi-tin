@@ -481,8 +481,8 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
       // failed copy-out leaves no temp — streamFromContainer's mkdir -p runs
       // before the pipeline, so a failed directory copy can leave an
       // existing, possibly partial, temp behind. The previous snapshot
-      // survives regardless: runOpGroup returns 'failed' at the first
-      // copy-out error, so this op never runs in a failing group, and the
+      // survives regardless: runOpGroup returns at the first copy-out error
+      // or timeout, so this op never runs in a failing group, and the
       // planner's remove-host-path clears any stale temp before the next
       // attempt's copy-out even starts.
       if (!fs.existsSync(op.tempPath)) return 'continue';
@@ -631,8 +631,8 @@ type OpGroupResult =
 
 // Run one entry's ops. Non-timeout failures are best-effort per op, except a
 // failed copy, which ends the entry in either direction: on copy-out so
-// promote-temp can never swap in the partial temp a killed `container cp` may
-// have left behind; on copy-in (warned — the recipe's remove has already
+// promote-temp can never swap in the partial temp a killed copy may have
+// left behind; on copy-in (warned — the recipe's remove has already
 // cleared the container-side copy) so the restore ops cannot run against the
 // incomplete destination, where restore-launcher would retarget the launcher
 // at a version that never arrived and prune whatever a partial extraction

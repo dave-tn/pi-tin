@@ -425,6 +425,10 @@ describe('binary entry sync behaviour', () => {
         // (host missing) and the entry proceeds to a real copy-out attempt —
         // stub it out so no real subprocess is spawned.
         copy: (): Promise<void> => Promise.resolve(),
+        // The shape probe falls through to this same fingerprint-format
+        // string, which is unrecognised (not literally 'dir'), so it forces
+        // 'file' — even though .local/share/claude is really a directory.
+        // Harmless here: the stubbed copy fake ignores its args either way.
         capture: (_file, args): string => {
           if (args.includes('readlink')) throw new Error('no launcher');
           return '5 ./versions/2.1.218\n';
@@ -688,6 +692,10 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (_file, args): string => {
           calls.push(args);
           return args.includes('/home/dev/.local/share/zoxide') ? 'absent\n' : 'file\n';
@@ -716,6 +724,10 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (_file, args): string => {
           calls.push(args);
           throw timeoutError();
@@ -747,6 +759,14 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
+        // Forced to 'file' regardless of what .nuget/packages would really be
+        // (a directory) — this test is about timeout handling, not shape
+        // selection, and the pinned `['cp', …]` assertion below needs the
+        // container cp path. Do not "correct" this to 'dir'.
         capture: (_file, args): string => {
           calls.push(args);
           return 'file\n';
@@ -901,11 +921,19 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         // First call across either runner answers before the runtime wedges;
         // everything after (the big copy, then the next entry's probe) hits
         // the deadline. Both runners share the same `calls` array, so the
         // count is a single sequential counter across capture and cp calls —
         // exactly as when one runner served both, pre-split.
+        // Forced to 'file' regardless of what .nuget/packages would really be
+        // (a directory) — this test is about timeout handling, not shape
+        // selection, and the pinned `['cp', …]` assertion below needs the
+        // container cp path. Do not "correct" this to 'dir'.
         capture: (_file, args): string => {
           calls.push(args);
           if (calls.length !== 1) throw timeoutError();
@@ -1019,6 +1047,7 @@ describe('syncWorkspaceState timeout handling', () => {
     fs.mkdirSync(stateDir, { recursive: true });
     const snapshotPath = path.join(stateDir, '.zsh_history');
     fs.writeFileSync(snapshotPath, 'previous snapshot');
+    let copyCalls = 0;
 
     await syncWorkspaceState(
       {
@@ -1029,8 +1058,13 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (): string => 'file\n',
         copy: (): Promise<void> => {
+          copyCalls += 1;
           // Simulate a copy SIGKILLed mid-write: a partial temp exists.
           fs.writeFileSync(`${snapshotPath}.pi-tin-tmp`, 'partial');
           return Promise.reject(timeoutError());
@@ -1039,6 +1073,11 @@ describe('syncWorkspaceState timeout handling', () => {
       },
     );
 
+    // Pins the test to the copy-then-timeout path it names — without this,
+    // a future change that skipped the entry before the copy fake ran would
+    // pass vacuously, since an untouched snapshot also satisfies the
+    // assertion below.
+    expect(copyCalls).toBe(1);
     expect(fs.readFileSync(snapshotPath, 'utf-8')).toBe('previous snapshot');
   });
 });
@@ -1085,6 +1124,10 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (): string => 'file\n',
         // Simulate `container cp` producing the temp path mid-copy: the live
         // poll (hostSnapshotBytes on the temp) reads it back.
@@ -1159,6 +1202,10 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (): string => { throw new Error('missing'); },
         report,
       },
@@ -1194,6 +1241,10 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
+        // A tool-state copy-out recipe never uses the run seam; a future op
+        // added on it should fail loudly here rather than silently spawning
+        // a real `container`.
+        run: (): void => { throw new Error('unexpected run seam'); },
         capture: (): string => 'file\n',
         copy: (): Promise<void> => Promise.reject(timeoutError()),
         warn: (message): void => { warnings.push(message); },
