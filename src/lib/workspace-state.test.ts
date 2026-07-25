@@ -23,6 +23,24 @@ const STREAM_SCRIPT =
 const streamInArgs = (hostParent: string, basename: string, user: string, destParent: string): string[] =>
   ['-c', STREAM_SCRIPT, 'sh', hostParent, basename, user, 'pi-tin-demo', destParent];
 
+// Pinned copy of streamFromContainer's pipeline (see src/lib/container.ts): a
+// container-side tar streamed out through `container exec`, extracted on the
+// host.
+const STREAM_OUT_SCRIPT =
+  'set -o pipefail; mkdir -p "$2" && ' +
+  'container exec --user root "$3" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+  'tar -xf - -C "$2"';
+
+const streamOutArgs = (containerPath: string, hostPath: string): string[] =>
+  ['-c', STREAM_OUT_SCRIPT, 'sh', containerPath, hostPath, 'pi-tin-demo'];
+
+// Pinned copy of probeContainerPathShape's script (see workspace-state.ts):
+// the single exec round-trip that answers both existence and shape.
+const SHAPE_SCRIPT = 'if [ -d "$1" ]; then echo dir; elif [ -e "$1" ]; then echo file; else echo absent; fi';
+
+const shapeProbeArgs = (containerPath: string): string[] =>
+  ['exec', '--user', 'root', 'pi-tin-demo', 'sh', '-c', SHAPE_SCRIPT, 'sh', containerPath];
+
 const toolState = (statePath: string): WorkspaceStateEntry => ({ kind: 'tool-state', path: statePath });
 
 const CLAUDE_TOOL = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
@@ -549,6 +567,96 @@ describe('binary entry sync behaviour', () => {
   });
 });
 
+describe('copy-out mechanism selection', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+  let stateDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  test('a directory entry streams out through tar', async () => {
+    const copyCalls: Array<{ file: string; args: string[] }> = [];
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.config/herdr')], user: 'dev', direction: 'copy-out' },
+      {
+        capture: (_file, args): string => (args.join(' ').includes('echo dir') ? 'dir\n' : ''),
+        copy: (file, args): Promise<void> => {
+          copyCalls.push({ file, args });
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(copyCalls).toEqual([{
+      file: '/bin/sh',
+      args: streamOutArgs('/home/dev/.config/herdr', path.join(stateDir, '.config', 'herdr.pi-tin-tmp')),
+    }]);
+  });
+
+  test('a single-file entry still uses container cp', async () => {
+    const copyCalls: Array<{ file: string; args: string[] }> = [];
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
+      {
+        capture: (_file, args): string => (args.join(' ').includes('echo dir') ? 'file\n' : ''),
+        copy: (file, args): Promise<void> => {
+          copyCalls.push({ file, args });
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(copyCalls).toHaveLength(1);
+    expect(copyCalls[0]?.file).toBe('container');
+    expect(copyCalls[0]?.args[0]).toBe('cp');
+  });
+
+  // Container output is untrusted: an unrecognised shape must fall back to cp,
+  // which is correct for every shape. Guessing 'dir' for a real file would make
+  // the tar stream fail and lose that entry's snapshot update.
+  test('unrecognised probe output falls back to container cp', async () => {
+    const copyCalls: Array<{ file: string; args: string[] }> = [];
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.config/herdr')], user: 'dev', direction: 'copy-out' },
+      {
+        capture: (_file, args): string => (args.join(' ').includes('echo dir') ? 'wat\n' : ''),
+        copy: (file, args): Promise<void> => {
+          copyCalls.push({ file, args });
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(copyCalls[0]?.file).toBe('container');
+  });
+
+  test('an absent container path still skips the entry without copying', async () => {
+    const copyCalls: string[] = [];
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.config/herdr')], user: 'dev', direction: 'copy-out' },
+      {
+        capture: (_file, args): string => (args.join(' ').includes('echo dir') ? 'absent\n' : ''),
+        copy: (file): Promise<void> => {
+          copyCalls.push(file);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(copyCalls).toEqual([]);
+  });
+});
+
 describe('syncWorkspaceState timeout handling', () => {
   let tmpDir: string;
   let originalEnv: string | undefined;
@@ -580,20 +688,17 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
-        run: (_file, args): void => {
+        capture: (_file, args): string => {
           calls.push(args);
-          const missingProbe = args[0] === 'exec' && args.at(-1) === '/home/dev/.local/share/zoxide';
-          if (missingProbe) {
-            throw new Error('missing');
-          }
+          return args.includes('/home/dev/.local/share/zoxide') ? 'absent\n' : 'file\n';
         },
         copy: (_file, args): Promise<void> => { calls.push(args); return Promise.resolve(); },
       },
     );
 
     expect(calls).toEqual([
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.local/share/zoxide'],
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+      shapeProbeArgs('/home/dev/.local/share/zoxide'),
+      shapeProbeArgs('/home/dev/.zsh_history'),
       ['cp', 'pi-tin-demo:/home/dev/.zsh_history', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.zsh_history.pi-tin-tmp')],
     ]);
   });
@@ -611,7 +716,7 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
-        run: (_file, args): void => {
+        capture: (_file, args): string => {
           calls.push(args);
           throw timeoutError();
         },
@@ -622,7 +727,7 @@ describe('syncWorkspaceState timeout handling', () => {
     );
 
     expect(calls).toEqual([
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+      shapeProbeArgs('/home/dev/.zsh_history'),
     ]);
     expect(warnings).toEqual([
       "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — container runtime unresponsive; skipping the rest of this sync.",
@@ -642,8 +747,9 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
-        run: (_file, args): void => {
+        capture: (_file, args): string => {
           calls.push(args);
+          return 'file\n';
         },
         copy: (_file, args): Promise<void> => {
           calls.push(args);
@@ -657,9 +763,9 @@ describe('syncWorkspaceState timeout handling', () => {
     );
 
     expect(calls).toEqual([
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.nuget/packages'],
+      shapeProbeArgs('/home/dev/.nuget/packages'),
       ['cp', 'pi-tin-demo:/home/dev/.nuget/packages', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.nuget/packages.pi-tin-tmp')],
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+      shapeProbeArgs('/home/dev/.zsh_history'),
       ['cp', 'pi-tin-demo:/home/dev/.zsh_history', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.zsh_history.pi-tin-tmp')],
     ]);
     expect(warnings).toEqual([
@@ -798,11 +904,12 @@ describe('syncWorkspaceState timeout handling', () => {
         // First call across either runner answers before the runtime wedges;
         // everything after (the big copy, then the next entry's probe) hits
         // the deadline. Both runners share the same `calls` array, so the
-        // count is a single sequential counter across exec and cp calls —
+        // count is a single sequential counter across capture and cp calls —
         // exactly as when one runner served both, pre-split.
-        run: (_file, args): void => {
+        capture: (_file, args): string => {
           calls.push(args);
           if (calls.length !== 1) throw timeoutError();
+          return 'file\n';
         },
         copy: (_file, args): Promise<void> => {
           calls.push(args);
@@ -815,9 +922,9 @@ describe('syncWorkspaceState timeout handling', () => {
     );
 
     expect(calls).toEqual([
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.nuget/packages'],
+      shapeProbeArgs('/home/dev/.nuget/packages'),
       ['cp', 'pi-tin-demo:/home/dev/.nuget/packages', path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.nuget/packages.pi-tin-tmp')],
-      ['exec', '--user', 'root', 'pi-tin-demo', 'test', '-e', '/home/dev/.zsh_history'],
+      shapeProbeArgs('/home/dev/.zsh_history'),
     ]);
     expect(warnings).toEqual([
       "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.nuget/packages' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
@@ -922,7 +1029,7 @@ describe('syncWorkspaceState timeout handling', () => {
         direction: 'copy-out',
       },
       {
-        run: (): void => {},
+        capture: (): string => 'file\n',
         copy: (): Promise<void> => {
           // Simulate a copy SIGKILLed mid-write: a partial temp exists.
           fs.writeFileSync(`${snapshotPath}.pi-tin-tmp`, 'partial');
@@ -978,7 +1085,7 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
-        run: (): void => {},
+        capture: (): string => 'file\n',
         // Simulate `container cp` producing the temp path mid-copy: the live
         // poll (hostSnapshotBytes on the temp) reads it back.
         copy: (): Promise<void> => {
@@ -1052,7 +1159,7 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
-        run: (): void => { throw new Error('missing'); },
+        capture: (): string => { throw new Error('missing'); },
         report,
       },
     );
@@ -1087,7 +1194,7 @@ describe('syncWorkspaceState progress reporting', () => {
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-out' },
       {
-        run: (): void => {},
+        capture: (): string => 'file\n',
         copy: (): Promise<void> => Promise.reject(timeoutError()),
         warn: (message): void => { warnings.push(message); },
         report,

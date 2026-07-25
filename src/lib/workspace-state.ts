@@ -10,6 +10,7 @@ import {
   execContainerCommand,
   execContainerCommandOutput,
   isContainerSubprocessTimeout,
+  streamFromContainer,
   streamToContainer,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
@@ -166,25 +167,35 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
 
 // --- Effectful executor (thin switch over the planned ops) ------------------
 
-function containerPathExists(
+type ContainerPathShape = 'dir' | 'file' | 'absent';
+
+// One exec round-trip answers both "is it there" and "which copy mechanism",
+// so shape costs nothing over the existence check it replaces. Untrusted
+// output: anything unrecognised falls back to 'file', whose `container cp`
+// path is correct for every shape and merely slower for directories —
+// guessing 'dir' for a real file would fail the copy outright.
+function probeContainerPathShape(
   containerName: string,
   containerPath: string,
-  run: ContainerSubprocessRunner | undefined,
-): boolean {
+  capture: ContainerOutputRunner | undefined,
+): ContainerPathShape {
+  const script = 'if [ -d "$1" ]; then echo dir; elif [ -e "$1" ]; then echo file; else echo absent; fi';
   try {
-    execContainerCommand({
+    const output = execContainerCommandOutput({
       name: containerName,
       user: 'root',
-      command: ['test', '-e', containerPath],
-      run,
-    });
-    return true;
+      command: ['sh', '-c', script, 'sh', containerPath],
+      capture,
+    }).trim();
+    if (output === 'dir') return 'dir';
+    if (output === 'absent') return 'absent';
+    return 'file';
   } catch (error) {
     if (isContainerSubprocessTimeout(error)) {
       throw error;
     }
-
-    return false;
+    // Matches the previous probe: a failed existence check skips the entry.
+    return 'absent';
   }
 }
 
@@ -375,6 +386,8 @@ interface SyncEntryContext {
   // syncWorkspaceState after finishEntry closes the TTY entry line — warning
   // mid-entry would render appended to that still-open line.
   copyInFailureOps: WorkspaceStateOp[];
+  // Set by probe-container-path; read by copy-out to pick the mechanism.
+  copyOutIsDirectory: boolean;
 }
 
 interface RunOpOptions {
@@ -423,8 +436,12 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
     case 'remove-host-path':
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       return 'continue';
-    case 'probe-container-path':
-      return containerPathExists(containerName, op.containerPath, options.run) ? 'continue' : 'skip-absent';
+    case 'probe-container-path': {
+      const shape = probeContainerPathShape(containerName, op.containerPath, options.capture);
+      if (shape === 'absent') return 'skip-absent';
+      ctx.copyOutIsDirectory = shape === 'dir';
+      return 'continue';
+    }
     case 'probe-unchanged': {
       const host = hostFingerprint(op.hostPath);
       if (host === null) return op.whenHostMissing === 'skip-entry' ? 'skip-absent' : 'continue';
@@ -438,21 +455,36 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
         currentBytes: () => hostSnapshotBytes(op.hostPath),
       });
       const startedMs = Date.now();
-      await copyFromContainer({
-        name: containerName,
-        containerPath: op.containerPath,
-        hostPath: op.hostPath,
-        timeoutMs: op.timeoutMs,
-        run: options.copy,
-      });
+      if (ctx.copyOutIsDirectory) {
+        await streamFromContainer({
+          name: containerName,
+          containerPath: op.containerPath,
+          hostPath: op.hostPath,
+          timeoutMs: op.timeoutMs,
+          run: options.copy,
+        });
+      } else {
+        await copyFromContainer({
+          name: containerName,
+          containerPath: op.containerPath,
+          hostPath: op.hostPath,
+          timeoutMs: op.timeoutMs,
+          run: options.copy,
+        });
+      }
       ctx.copiedBytes = hostSnapshotBytes(op.hostPath);
       ctx.copyDurationMs = Date.now() - startedMs;
       return 'continue';
     }
     case 'promote-temp':
-      // Only swap when the copy actually produced the temp. If copy-out failed,
-      // the temp is absent and the previous snapshot is left untouched — a bad
-      // session never destroys good state.
+      // Only swap when the copy actually produced the temp. Not because a
+      // failed copy-out leaves no temp — streamFromContainer's mkdir -p runs
+      // before the pipeline, so a failed directory copy can leave an
+      // existing, possibly partial, temp behind. The previous snapshot
+      // survives regardless: runOpGroup returns 'failed' at the first
+      // copy-out error, so this op never runs in a failing group, and the
+      // planner's remove-host-path clears any stale temp before the next
+      // attempt's copy-out even starts.
       if (!fs.existsSync(op.tempPath)) return 'continue';
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       fs.renameSync(op.tempPath, op.hostPath);
@@ -707,6 +739,7 @@ export async function syncWorkspaceState(
       copiedBytes: null,
       copyDurationMs: null,
       copyInFailureOps: [],
+      copyOutIsDirectory: false,
     };
     const result = await runOpGroup({
       containerName: options.containerName,
