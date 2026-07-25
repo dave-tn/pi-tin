@@ -632,7 +632,7 @@ function copyInFailureWarning(workspaceName: string, op: WorkspaceStateOp): stri
 // failure has no surface whatsoever. Directory copy-out streams through tar
 // under `set -o pipefail`, so any guest-side non-zero fails the whole entry.
 function copyOutFailureWarning(workspaceName: string, op: WorkspaceStateOp): string {
-  return `Warning: workspace_state copy-out failed for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes (directories stream through tar): a container image without tar, a file changing while the tree was being archived, or an unreadable or special file under that path.`;
+  return `Warning: workspace_state copy-out failed for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes (directories stream through tar): a container image without tar, or a file changing while the tree was being archived.`;
 }
 
 // Outcome of one entry's op group. Mirrors WorkspaceStateOpResult's
