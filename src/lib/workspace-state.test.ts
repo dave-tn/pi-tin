@@ -996,7 +996,7 @@ describe('syncWorkspaceState timeout handling', () => {
     expect(fs.readFileSync(path.join(stateDir, '.config', 'herdr'), 'utf-8')).toBe('previous snapshot');
     expect(copyCalls).toHaveLength(2);
     expect(warnings).toEqual([
-      "Warning: workspace_state copy-out failed for '/home/dev/.config/herdr' in workspace 'demo' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes: a container image without tar, a file changing while the tree was being archived, or an unreadable or special file under that path.",
+      "Warning: workspace_state copy-out failed for '/home/dev/.config/herdr' in workspace 'demo' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes (directories stream through tar): a container image without tar, a file changing while the tree was being archived, or an unreadable or special file under that path.",
     ]);
   });
 

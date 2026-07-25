@@ -364,6 +364,10 @@ describe('bounded container subprocess options', () => {
       caught = error;
     }
     expect(isContainerSubprocessTimeout(caught)).toBe(true);
+    // The copy runs detached, so it installs interrupt forwarders for its
+    // lifetime. Leaking them would accumulate across every entry of every
+    // sync until Node warns about MaxListeners — pin that they are removed.
+    expect(process.listenerCount('SIGINT')).toBe(0);
   });
 
   test('the default copy runner names the fatal signal when the subprocess dies signalled', async () => {

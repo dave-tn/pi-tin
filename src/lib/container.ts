@@ -462,6 +462,8 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   child.kill(signal);
 }
 
+const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
 // spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
 // deliberate difference: `detached` makes the child a process-group leader so
 // the deadline can signal the whole group (`kill(-pid)`) rather than just the
@@ -480,8 +482,6 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 // the pipeline, so the interrupt is forwarded by hand and then re-raised with
 // the default disposition — otherwise a ^C mid-copy would leave exactly the
 // orphaned writer the group kill exists to prevent.
-const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
-
 // Exported only as the default runner and for direct tests of its error
 // shapes; production callers go through streamToContainer/copyFromContainer.
 export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
