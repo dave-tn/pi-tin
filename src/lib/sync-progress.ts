@@ -1,3 +1,4 @@
+import type { WorkspaceStateDirection } from './workspace-state.js';
 import { formatDurationMs } from './duration.js';
 
 // How a workspace-state entry's sync ended, as shown to the user. bytes and
@@ -96,4 +97,79 @@ export function formatLiveLine(state: {
   }
   const elapsed = `… ${formatCopyDuration(state.elapsedMs)}`;
   return state.totalBytes === null ? elapsed : `(${formatBytes(state.totalBytes)}) ${elapsed}`;
+}
+
+// Executor-side view of one in-flight copy: the total when a probe supplied
+// it, and a live byte count when the destination is host-visible (copy-out
+// polls the growing temp path; copy-in has none).
+export interface SyncCopyProgress {
+  totalBytes: number | null;
+  currentBytes: (() => number | null) | null;
+}
+
+export interface SyncProgressReporter {
+  startEntry(entryPath: string): void;
+  copyStarted(progress: SyncCopyProgress): void;
+  finishEntry(outcome: SyncEntryOutcome): void;
+}
+
+export interface ProgressOutput {
+  isTTY: boolean | undefined;
+  write(text: string): void;
+}
+
+const LIVE_TICK_MS = 200;
+const CLEAR_LINE = '\r\x1b[2K';
+
+const DIRECTION_HEADER: Record<WorkspaceStateDirection, string> = {
+  'copy-in': 'Restoring workspace state:',
+  'copy-out': 'Saving workspace state:',
+};
+
+// Thin writer over the pure formatters. TTY: the entry line opens without a
+// newline, live ticks overwrite it in place, and the final outcome replaces
+// it. Non-TTY: only complete outcome lines are written (no control codes in
+// logs). Interval ticks re-stat the copy-out temp path — cheap next to the
+// copy itself.
+export function createSyncProgressReporter(
+  direction: WorkspaceStateDirection,
+  out: ProgressOutput = process.stdout,
+): SyncProgressReporter {
+  let headerPrinted = false;
+  let entryPath = '';
+  let entryStartedMs = 0;
+  let ticker: ReturnType<typeof setInterval> | null = null;
+
+  const stopTicker = (): void => {
+    if (ticker !== null) clearInterval(ticker);
+    ticker = null;
+  };
+
+  return {
+    startEntry(path): void {
+      if (!headerPrinted) {
+        out.write(`${DIRECTION_HEADER[direction]}\n`);
+        headerPrinted = true;
+      }
+      entryPath = path;
+      entryStartedMs = Date.now();
+      if (out.isTTY === true) out.write(`  ${entryPath} …`);
+    },
+    copyStarted(progress): void {
+      if (out.isTTY !== true) return;
+      ticker = setInterval(() => {
+        const live = formatLiveLine({
+          totalBytes: progress.totalBytes,
+          currentBytes: progress.currentBytes === null ? null : progress.currentBytes(),
+          elapsedMs: Date.now() - entryStartedMs,
+        });
+        out.write(`${CLEAR_LINE}  ${entryPath}  ${live}`);
+      }, LIVE_TICK_MS);
+    },
+    finishEntry(outcome): void {
+      stopTicker();
+      const line = `  ${entryPath} … ${formatEntryOutcome(outcome)}\n`;
+      out.write(out.isTTY === true ? `${CLEAR_LINE}${line}` : line);
+    },
+  };
 }

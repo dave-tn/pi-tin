@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createSyncProgressReporter,
   formatBytes,
   formatCopyDuration,
   formatEntryOutcome,
   formatLiveLine,
+  type ProgressOutput,
 } from './sync-progress.js';
 
 describe('formatBytes', () => {
@@ -72,5 +74,62 @@ describe('formatLiveLine', () => {
   test('a full bar has no head marker and speed guards zero elapsed', () => {
     expect(formatLiveLine({ totalBytes: 100, currentBytes: 100, elapsedMs: 0 }))
       .toBe('[==========]  100/100 B  0 B/s');
+  });
+});
+
+function createOutputCapture(isTTY: boolean): { writes: string[]; out: ProgressOutput } {
+  const writes: string[] = [];
+  return {
+    writes,
+    out: { isTTY, write: (text): void => { writes.push(text); } },
+  };
+}
+
+describe('createSyncProgressReporter', () => {
+  test('non-TTY output prints the header once and one complete line per entry', () => {
+    const { writes, out } = createOutputCapture(false);
+    const reporter = createSyncProgressReporter('copy-out', out);
+    reporter.startEntry('.config/herdr');
+    reporter.finishEntry({ kind: 'done', bytes: 1_200_000, durationMs: 300 });
+    reporter.startEntry('.local/bin/herdr');
+    reporter.finishEntry({ kind: 'unchanged' });
+    expect(writes).toEqual([
+      'Saving workspace state:\n',
+      '  .config/herdr … done (1.2 MB, 0.3s)\n',
+      '  .local/bin/herdr … unchanged\n',
+    ]);
+  });
+
+  test('copy-in direction uses the restoring header', () => {
+    const { writes, out } = createOutputCapture(false);
+    const reporter = createSyncProgressReporter('copy-in', out);
+    reporter.startEntry('.zsh_history');
+    reporter.finishEntry({ kind: 'skipped' });
+    expect(writes[0]).toBe('Restoring workspace state:\n');
+  });
+
+  test('TTY output opens the entry line immediately and overwrites it on finish', () => {
+    const { writes, out } = createOutputCapture(true);
+    const reporter = createSyncProgressReporter('copy-out', out);
+    reporter.startEntry('.config/herdr');
+    reporter.finishEntry({ kind: 'done', bytes: null, durationMs: null });
+    expect(writes).toEqual([
+      'Saving workspace state:\n',
+      '  .config/herdr …',
+      '\r\x1b[2K  .config/herdr … done\n',
+    ]);
+  });
+
+  test('the live ticker renders while a copy runs and stops on finishEntry', async () => {
+    const { writes, out } = createOutputCapture(true);
+    const reporter = createSyncProgressReporter('copy-out', out);
+    reporter.startEntry('.local/bin/herdr');
+    reporter.copyStarted({ totalBytes: 100, currentBytes: (): number => 50 });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    reporter.finishEntry({ kind: 'done', bytes: 100, durationMs: 50 });
+    expect(writes.some((text) => text.includes('50/100 B'))).toBe(true);
+    const writesAfterFinish = writes.length;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(writes.length).toBe(writesAfterFinish);
   });
 });
