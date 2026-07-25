@@ -220,7 +220,7 @@ describe('bounded container subprocess options', () => {
       run,
     });
     expect(calls).toEqual([{
-      file: 'sh',
+      file: '/bin/sh',
       args: [
         '-c',
         'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
@@ -279,26 +279,24 @@ describe('bounded container subprocess options', () => {
     expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
   });
 
-  test('streamFromContainer tars the directory contents out through container exec as the target user', async () => {
+  test('streamFromContainer tars the directory contents out through container exec as root', async () => {
     const { calls, run } = createCopyRunCapture();
     await streamFromContainer({
       name: 'pi-tin-demo',
       containerPath: '/home/dev/.local/share/claude',
       hostPath: '/tmp/host-state/.local/share/claude.pi-tin-tmp',
-      user: 'dev',
       run,
     });
     expect(calls).toEqual([{
-      file: 'sh',
+      file: '/bin/sh',
       args: [
         '-c',
         'set -o pipefail; mkdir -p "$2" && ' +
-          'container exec --user "$3" "$4" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+          'container exec --user root "$3" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
           'tar -xf - -C "$2"',
         'sh',
         '/home/dev/.local/share/claude',
         '/tmp/host-state/.local/share/claude.pi-tin-tmp',
-        'dev',
         'pi-tin-demo',
       ],
       options: boundedOptions,
@@ -313,7 +311,6 @@ describe('bounded container subprocess options', () => {
       name: 'pi-tin-demo',
       containerPath: '/home/dev/.local/share/claude',
       hostPath: '/tmp/host-state/claude.pi-tin-tmp',
-      user: 'dev',
       timeoutMs: 60_000,
       run,
     });
@@ -322,14 +319,18 @@ describe('bounded container subprocess options', () => {
 
   // Without pipefail the pipeline's status is the last command's, so a guest
   // failure that still emits a well-formed (empty) archive exits 0 and a
-  // truncated copy would look like a success.
+  // truncated copy would look like a success. This test is intentionally kept
+  // even though it cannot fail independently of the two script-assertion
+  // tests above: it exists to catch the case where someone drops pipefail
+  // from the source *and* updates both pinned script expectations to match
+  // (the "just make the tests green" edit) — this is the only test left that
+  // would still fail.
   test('both copy pipelines set pipefail', async () => {
     const out = createCopyRunCapture();
     await streamFromContainer({
       name: 'pi-tin-demo',
       containerPath: '/home/dev/.config/herdr',
       hostPath: '/tmp/host-state/.config/herdr.pi-tin-tmp',
-      user: 'dev',
       run: out.run,
     });
     const into = createCopyRunCapture();

@@ -81,7 +81,6 @@ interface StreamFromContainerOptions {
   name: string;
   containerPath: string;
   hostPath: string;
-  user: string;
   timeoutMs?: number | undefined;
   run?: ContainerCopyRunner | undefined;
 }
@@ -528,7 +527,7 @@ export async function streamToContainer(options: StreamToContainerOptions): Prom
     'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
   const run = options.run ?? spawnContainerCopy;
   await run(
-    'sh',
+    '/bin/sh',
     [
       '-c',
       script,
@@ -559,23 +558,30 @@ export async function copyFromContainer(options: CopyFromContainerOptions): Prom
 // directories stream and single files stay on cp (~474 MiB/s, which beats
 // this). Taring the directory's *contents* (`cd … && tar -cf - .`) reproduces
 // the destination layout `container cp` produces, with no path rewriting.
+// Runs as root, not the workspace user: this matches the privilege
+// `container cp` had (it is executed by the runtime with full privilege) and
+// grants nothing new, since containerPathExists, containerFingerprint,
+// restore-executable and remove-container-path already operate as root
+// against this same tree. A user-scoped tar would instead fail permanently
+// against any root-owned file underneath — worse, containerFingerprint
+// enumerates as root and would keep seeing that file as changed while the
+// user-scoped copy kept failing to read it, a permanent per-session loop.
 // pipefail is load-bearing: without it a guest failure that still emits a
 // well-formed empty archive exits 0 and a bad copy looks like a good one.
 export async function streamFromContainer(options: StreamFromContainerOptions): Promise<void> {
   const script =
     'set -o pipefail; mkdir -p "$2" && ' +
-    'container exec --user "$3" "$4" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+    'container exec --user root "$3" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
     'tar -xf - -C "$2"';
   const run = options.run ?? spawnContainerCopy;
   await run(
-    'sh',
+    '/bin/sh',
     [
       '-c',
       script,
       'sh',
       options.containerPath,
       options.hostPath,
-      options.user,
       options.name,
     ],
     containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
