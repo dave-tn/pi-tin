@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import { containerHomeDir, getWorkspaceStateDir } from './paths.js';
-import type { ContainerOutputRunner, ContainerSubprocessRunner } from './container.js';
+import type { ContainerCopyRunner, ContainerOutputRunner, ContainerSubprocessRunner } from './container.js';
 import {
   CONTAINER_BINARY_COPY_TIMEOUT_MS,
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
@@ -14,6 +14,7 @@ import {
 } from './container.js';
 import { formatDurationMs } from './duration.js';
 import { nativeAgentInstalls, type NativeStateEntry } from './agents.js';
+import type { SyncEntryOutcome, SyncProgressReporter } from './sync-progress.js';
 import type { ContainerProfile, Workspace } from './validators.js';
 
 // "Workspace state" is a small set of paths that pi-tin snapshots between
@@ -69,7 +70,9 @@ export interface WorkspaceStatePlanInput {
 export interface WorkspaceStateSyncDependencies {
   run?: ContainerSubprocessRunner | undefined;
   capture?: ContainerOutputRunner | undefined;
+  copy?: ContainerCopyRunner | undefined;
   warn?: ((message: string) => void) | undefined;
+  report?: SyncProgressReporter | undefined;
 }
 
 // Copy-in removes the destination first (stale contents must never survive a
@@ -220,6 +223,18 @@ function hostFingerprintPairs(
     );
 }
 
+// Total regular-file bytes under hostPath, or null when it is absent. Serves
+// three measurement points: copy-in totals, copy-out done-sizes, and the
+// live poll of the growing copy-out temp path (where a mid-copy transient
+// error just yields null for that tick).
+function hostSnapshotBytes(hostPath: string): number | null {
+  try {
+    return hostFingerprintPairs(hostPath, '.').reduce((sum, pair) => sum + pair.size, 0);
+  } catch {
+    return null;
+  }
+}
+
 /** Host-side fingerprint, or null when the path does not exist. */
 export function hostFingerprint(hostPath: string): string | null {
   try {
@@ -238,7 +253,9 @@ export function hostFingerprint(hostPath: string): string | null {
 // Container output is untrusted: parse strictly, and treat any surprise as
 // "changed" (null) so the worst a hostile or odd container can cause is an
 // unnecessary copy. Timeouts propagate for runtime-scope classification.
-export function parseContainerFingerprint(output: string): string | null {
+export function parseContainerFingerprint(
+  output: string,
+): { canonical: string; totalBytes: number } | null {
   const lines = output.split('\n').filter((line) => line.trim() !== '');
   const pairs: Array<{ relPath: string; size: number }> = [];
   for (const line of lines) {
@@ -253,14 +270,17 @@ export function parseContainerFingerprint(output: string): string | null {
     }
     pairs.push({ relPath: match[2], size: Number(match[1]) });
   }
-  return canonicalFingerprint(pairs);
+  return {
+    canonical: canonicalFingerprint(pairs),
+    totalBytes: pairs.reduce((sum, pair) => sum + pair.size, 0),
+  };
 }
 
 function containerFingerprint(
   containerName: string,
   containerPath: string,
   capture: ContainerOutputRunner | undefined,
-): string | null {
+): { canonical: string; totalBytes: number } | null {
   // Busybox-portable: per-file `stat -c` lines for a dir, a bare size for a
   // file. stat reads inode metadata only — `wc -c` streams whole file contents,
   // which on busybox blows the 5s probe deadline for multi-hundred-MB binaries
@@ -341,39 +361,59 @@ function resolveLauncherBasename(op: {
   return newest ?? null;
 }
 
-// 'skip-entry' means the rest of this entry's recipe is pointless (its source
-// does not exist, or its content already matches); every other outcome
-// continues the recipe.
-type WorkspaceStateOpResult = 'continue' | 'skip-entry';
+// 'skip-absent'/'skip-unchanged' both end the entry's recipe; they differ
+// only in what the progress line reports.
+type WorkspaceStateOpResult = 'continue' | 'skip-absent' | 'skip-unchanged';
 
-function runOp(
-  containerName: string,
-  op: WorkspaceStateOp,
-  run: ContainerSubprocessRunner | undefined,
-  capture: ContainerOutputRunner | undefined,
-): WorkspaceStateOpResult {
+// Per-entry mutable measurement side-channel threaded through the ops; the
+// planner stays pure, this is purely for progress reporting.
+interface SyncEntryContext {
+  copyOutTotalBytes: number | null;
+  copiedBytes: number | null;
+  copyDurationMs: number | null;
+  copyInFailed: boolean;
+}
+
+interface RunOpOptions {
+  containerName: string;
+  op: WorkspaceStateOp;
+  ctx: SyncEntryContext;
+  run: ContainerSubprocessRunner | undefined;
+  capture: ContainerOutputRunner | undefined;
+  copy: ContainerCopyRunner | undefined;
+  report: SyncProgressReporter | undefined;
+}
+
+async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
+  const { containerName, op, ctx } = options;
   switch (op.kind) {
     case 'remove-container-path':
       execContainerCommand({
         name: containerName,
         user: 'root',
         command: ['rm', '-rf', op.containerPath],
-        run,
+        run: options.run,
       });
       return 'continue';
-    case 'copy-in':
+    case 'copy-in': {
       // Skip cleanly when the host has no snapshot yet (e.g. the workspace's
       // first ever start) rather than attempting a copy that must fail.
-      if (!fs.existsSync(op.hostPath)) return 'continue';
-      streamToContainer({
+      if (!fs.existsSync(op.hostPath)) return 'skip-absent';
+      const totalBytes = hostSnapshotBytes(op.hostPath);
+      options.report?.copyStarted({ totalBytes, currentBytes: null });
+      const startedMs = Date.now();
+      await streamToContainer({
         name: containerName,
         hostPath: op.hostPath,
         containerPath: op.containerPath,
         user: op.user,
         timeoutMs: op.timeoutMs,
-        run,
+        run: options.copy,
       });
+      ctx.copiedBytes = totalBytes;
+      ctx.copyDurationMs = Date.now() - startedMs;
       return 'continue';
+    }
     case 'ensure-host-parent':
       fs.mkdirSync(path.dirname(op.hostPath), { recursive: true });
       return 'continue';
@@ -381,22 +421,31 @@ function runOp(
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       return 'continue';
     case 'probe-container-path':
-      return containerPathExists(containerName, op.containerPath, run) ? 'continue' : 'skip-entry';
+      return containerPathExists(containerName, op.containerPath, options.run) ? 'continue' : 'skip-absent';
     case 'probe-unchanged': {
       const host = hostFingerprint(op.hostPath);
-      if (host === null) return op.whenHostMissing;
-      const container = containerFingerprint(containerName, op.containerPath, capture);
-      return container !== null && container === host ? 'skip-entry' : 'continue';
+      if (host === null) return op.whenHostMissing === 'skip-entry' ? 'skip-absent' : 'continue';
+      const container = containerFingerprint(containerName, op.containerPath, options.capture);
+      if (container !== null) ctx.copyOutTotalBytes = container.totalBytes;
+      return container !== null && container.canonical === host ? 'skip-unchanged' : 'continue';
     }
-    case 'copy-out':
-      copyFromContainer({
+    case 'copy-out': {
+      options.report?.copyStarted({
+        totalBytes: ctx.copyOutTotalBytes,
+        currentBytes: () => hostSnapshotBytes(op.hostPath),
+      });
+      const startedMs = Date.now();
+      await copyFromContainer({
         name: containerName,
         containerPath: op.containerPath,
         hostPath: op.hostPath,
         timeoutMs: op.timeoutMs,
-        run,
+        run: options.copy,
       });
+      ctx.copiedBytes = hostSnapshotBytes(op.hostPath);
+      ctx.copyDurationMs = Date.now() - startedMs;
       return 'continue';
+    }
     case 'promote-temp':
       // Only swap when the copy actually produced the temp. If copy-out failed,
       // the temp is absent and the previous snapshot is left untouched — a bad
@@ -412,7 +461,7 @@ function runOp(
         name: containerName,
         user: 'root',
         command: ['chmod', '+x', op.containerPath],
-        run,
+        run: options.run,
       });
       return 'continue';
     case 'record-launcher':
@@ -421,7 +470,7 @@ function runOp(
           name: containerName,
           user: 'root',
           command: ['readlink', op.linkContainerPath],
-          capture,
+          capture: options.capture,
         }).trim();
         fs.writeFileSync(op.recordHostPath, `${target}\n`);
       } catch (error) {
@@ -455,7 +504,7 @@ function runOp(
           op.user,
           basename,
         ],
-        run,
+        run: options.run,
       });
       return 'continue';
     }
@@ -535,6 +584,16 @@ function copyInFailureWarning(workspaceName: string, op: WorkspaceStateOp): stri
   return `Warning: workspace_state copy-in failed for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — starting without it (the container-side copy was already cleared). Common causes: a file of 8 GiB or larger or a single path component over 100 characters (ustar limits), or a container image without tar.`;
 }
 
+// Outcome of one entry's op group. Mirrors WorkspaceStateOpResult's
+// skip-absent/skip-unchanged split, plus 'failed' (a non-timeout error during
+// copy-out, or a warned copy-in failure) and 'timed-out' (carrying which op
+// and its scope, for the caller's warning).
+type OpGroupResult =
+  | { kind: 'completed' }
+  | { kind: 'skipped'; reason: 'absent' | 'unchanged' }
+  | { kind: 'failed' }
+  | { kind: 'timed-out'; timeout: WorkspaceStateTimeout };
+
 // Run one entry's ops. Non-timeout failures are best-effort per op (warned
 // when the copy-in itself fails, since the remove has already cleared the
 // container-side copy by then), except during copy-out, which stops at the
@@ -549,29 +608,35 @@ function copyInFailureWarning(workspaceName: string, op: WorkspaceStateOp): stri
 // caller abandons the sync. The copy-out
 // probe doubles as a per-entry health check: a genuinely wedged runtime costs
 // at most one extra copy deadline before the next probe stops the sync.
-function runOpGroup(
-  containerName: string,
-  group: WorkspaceStateOp[],
-  direction: WorkspaceStateDirection,
-  run: ContainerSubprocessRunner | undefined,
-  capture: ContainerOutputRunner | undefined,
-  warnCopyInFailure: (op: WorkspaceStateOp) => void,
-): WorkspaceStateTimeout | null {
-  for (const op of group) {
+async function runOpGroup(options: {
+  containerName: string;
+  group: WorkspaceStateOp[];
+  direction: WorkspaceStateDirection;
+  ctx: SyncEntryContext;
+  run: ContainerSubprocessRunner | undefined;
+  capture: ContainerOutputRunner | undefined;
+  copy: ContainerCopyRunner | undefined;
+  report: SyncProgressReporter | undefined;
+  warnCopyInFailure: (op: WorkspaceStateOp) => void;
+}): Promise<OpGroupResult> {
+  for (const op of options.group) {
     try {
-      if (runOp(containerName, op, run, capture) === 'skip-entry') return null;
+      const result = await runOp({ ...options, op });
+      if (result === 'skip-absent') return { kind: 'skipped', reason: 'absent' };
+      if (result === 'skip-unchanged') return { kind: 'skipped', reason: 'unchanged' };
     } catch (error) {
       if (isContainerSubprocessTimeout(error)) {
-        return op.kind === 'copy-in' || op.kind === 'copy-out'
-          ? { scope: 'entry', op }
-          : { scope: 'runtime', op };
+        const scope = op.kind === 'copy-in' || op.kind === 'copy-out' ? 'entry' : 'runtime';
+        return { kind: 'timed-out', timeout: { scope, op } };
       }
-      if (direction === 'copy-out') return null;
-      if (op.kind === 'copy-in') warnCopyInFailure(op);
+      if (options.direction === 'copy-out') return { kind: 'failed' };
+      if (op.kind === 'copy-in') {
+        options.ctx.copyInFailed = true;
+        options.warnCopyInFailure(op);
+      }
     }
   }
-
-  return null;
+  return options.ctx.copyInFailed ? { kind: 'failed' } : { kind: 'completed' };
 }
 
 // Alongside the container profile's own tool-state entries, pi-tin persists
@@ -608,7 +673,7 @@ export function combinedWorkspaceStateEntries(
 // missing source, a not-yet-created path, or a transient `container` failure
 // must never fail the open/close flow — this is convenience state, not
 // host-authoritative data.
-export function syncWorkspaceState(
+export async function syncWorkspaceState(
   options: {
     containerName: string;
     workspaceName: string;
@@ -617,7 +682,7 @@ export function syncWorkspaceState(
     direction: WorkspaceStateDirection;
   },
   dependencies: WorkspaceStateSyncDependencies = {},
-): void {
+): Promise<void> {
   if (options.entries.length === 0) return;
 
   const warn = dependencies.warn ?? defaultWarn;
@@ -632,17 +697,48 @@ export function syncWorkspaceState(
     warn(copyInFailureWarning(options.workspaceName, op));
   };
 
-  for (const group of groups) {
-    const timedOut = runOpGroup(
-      options.containerName,
+  for (const [index, group] of groups.entries()) {
+    const entry = options.entries[index];
+    if (entry === undefined) continue;
+    dependencies.report?.startEntry(entry.path);
+    const ctx: SyncEntryContext = {
+      copyOutTotalBytes: null,
+      copiedBytes: null,
+      copyDurationMs: null,
+      copyInFailed: false,
+    };
+    const result = await runOpGroup({
+      containerName: options.containerName,
       group,
-      options.direction,
-      dependencies.run,
-      dependencies.capture,
+      direction: options.direction,
+      ctx,
+      run: dependencies.run,
+      capture: dependencies.capture,
+      copy: dependencies.copy,
+      report: dependencies.report,
       warnCopyInFailure,
-    );
-    if (timedOut === null) continue;
-    warn(timeoutWarning(options.workspaceName, options.direction, timedOut));
-    if (timedOut.scope === 'runtime') return;
+    });
+    dependencies.report?.finishEntry(entryOutcome(result, ctx));
+    if (result.kind === 'timed-out') {
+      warn(timeoutWarning(options.workspaceName, options.direction, result.timeout));
+      if (result.timeout.scope === 'runtime') return;
+    }
+  }
+}
+
+function entryOutcome(result: OpGroupResult, ctx: SyncEntryContext): SyncEntryOutcome {
+  switch (result.kind) {
+    case 'completed':
+      return { kind: 'done', bytes: ctx.copiedBytes, durationMs: ctx.copyDurationMs };
+    case 'skipped':
+      return result.reason === 'unchanged' ? { kind: 'unchanged' } : { kind: 'skipped' };
+    case 'failed':
+      return { kind: 'failed' };
+    case 'timed-out':
+      return { kind: 'timed-out' };
+    default: {
+      const _exhaustive: never = result;
+      throw new Error(`Unhandled op group result: ${JSON.stringify(_exhaustive)}`);
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,13 +48,25 @@ export type ContainerSubprocessRunner = (
   options: ContainerExecFileOptions,
 ) => void;
 
+/**
+ * Async sibling of ContainerSubprocessRunner for the two data-moving copy
+ * operations: awaiting instead of blocking keeps the event loop free for
+ * live progress rendering. Same options contract; the runner enforces the
+ * deadline itself.
+ */
+export type ContainerCopyRunner = (
+  file: string,
+  args: string[],
+  options: ContainerExecFileOptions,
+) => Promise<void>;
+
 interface StreamToContainerOptions {
   name: string;
   hostPath: string;
   containerPath: string;
   user: string;
   timeoutMs?: number | undefined;
-  run?: ContainerSubprocessRunner | undefined;
+  run?: ContainerCopyRunner | undefined;
 }
 
 interface CopyFromContainerOptions {
@@ -62,7 +74,7 @@ interface CopyFromContainerOptions {
   containerPath: string;
   hostPath: string;
   timeoutMs?: number | undefined;
-  run?: ContainerSubprocessRunner | undefined;
+  run?: ContainerCopyRunner | undefined;
 }
 
 interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
@@ -420,6 +432,42 @@ const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options)
   execFileSync(file, args, options);
 };
 
+// spawn-based equivalent of execFileSync + timeout + SIGKILL: the deadline
+// kills only the direct child (for streamToContainer, the outer sh — its
+// tar/`container exec` children are orphaned and finish on their own,
+// exactly as under spawnSync; see streamToContainer). Settled on 'exit',
+// not 'close': orphans inherit the stderr pipe, and waiting for it to close
+// would block the timeout rejection until they finish. The rejection carries
+// code ETIMEDOUT so isContainerSubprocessTimeout classifies it unchanged.
+const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const stderrChunks: Buffer[] = [];
+    child.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill(options.killSignal);
+    }, options.timeout);
+    child.on('error', (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.on('exit', (status) => {
+      clearTimeout(deadline);
+      if (timedOut) {
+        reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
+        return;
+      }
+      if (status === 0) {
+        resolve();
+        return;
+      }
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8').trim();
+      reject(new Error(`'${file}' exited with status ${String(status)}${stderr === '' ? '' : `: ${stderr}`}`));
+    });
+  });
+
 function runContainerSubprocess(
   args: string[],
   run: ContainerSubprocessRunner = execContainerSubprocess,
@@ -453,13 +501,14 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // so containerPath contributes only its parent directory: both paths must
 // share a basename, which the planner guarantees by deriving them from the
 // same entry path. The `--` keeps a leading-dash basename from parsing as a
-// tar option.
-export function streamToContainer(options: StreamToContainerOptions): void {
+// tar option. The async conversion preserves the kill target (the outer
+// sh) and therefore the documented orphan semantics above.
+export async function streamToContainer(options: StreamToContainerOptions): Promise<void> {
   const script =
     'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
     'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
-  const run = options.run ?? execContainerSubprocess;
-  run(
+  const run = options.run ?? spawnContainerCopy;
+  await run(
     'sh',
     [
       '-c',
@@ -476,11 +525,12 @@ export function streamToContainer(options: StreamToContainerOptions): void {
 }
 
 // Copy a path out of the running container onto the host.
-export function copyFromContainer(options: CopyFromContainerOptions): void {
-  runContainerSubprocess(
+export async function copyFromContainer(options: CopyFromContainerOptions): Promise<void> {
+  const run = options.run ?? spawnContainerCopy;
+  await run(
+    'container',
     ['cp', `${options.name}:${options.containerPath}`, options.hostPath],
-    options.run,
-    options.timeoutMs,
+    containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
   );
 }
 
