@@ -17,7 +17,7 @@ const hostStateDir = '/host/workspace-state/myws';
 // Pinned copy of streamToContainer's pipeline (see src/lib/container.ts): a
 // host tar streamed into `container exec`, extracted as the container user.
 const STREAM_SCRIPT =
-  'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+  'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
   'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
 
 const streamInArgs = (hostParent: string, basename: string, user: string, destParent: string): string[] =>

@@ -77,6 +77,15 @@ interface CopyFromContainerOptions {
   run?: ContainerCopyRunner | undefined;
 }
 
+interface StreamFromContainerOptions {
+  name: string;
+  containerPath: string;
+  hostPath: string;
+  user: string;
+  timeoutMs?: number | undefined;
+  run?: ContainerCopyRunner | undefined;
+}
+
 interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
   run?: ContainerSubprocessRunner | undefined;
 }
@@ -104,10 +113,15 @@ export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
 export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
 
 // Deadline for copies of persisted agent binaries, which are far too large for
-// the flat 5s deadline. Measured on Apple container 1.1.0: copy-in now streams
-// via tar at a stable ~275 MiB/s (256 MiB in ~0.9s); copy-out rides
-// `container cp` (~330-410 MiB/s out, but a ~500MB dir took 6-12s). 60s keeps
-// slow-machine headroom without masking a wedged runtime for long.
+// the flat 5s deadline. Measured on Apple container 1.1.0 (M1 Max, 256 MiB
+// payloads): copy-in streams via tar at a stable ~275 MiB/s. Copy-out splits by
+// shape — `container cp` carries a flat directory penalty of ~55 MiB/s
+// regardless of file count (1 file and 2048 files both ~4.6-5.0s), while the
+// same bytes as a bare file go at ~474 MiB/s. Directories therefore stream via
+// tar at ~341 MiB/s, which is the `container exec` stdout ceiling: a bare
+// `exec cat` measures ~337 MiB/s, so tar itself costs nothing and no blocking
+// or buffering knob improves on it. 60s keeps slow-machine headroom without
+// masking a wedged runtime for long.
 export const CONTAINER_BINARY_COPY_TIMEOUT_MS = 60_000;
 
 /** Recovery steps for a wedged container runtime, shared by every timeout message. */
@@ -510,7 +524,7 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // sh) and therefore the documented orphan semantics above.
 export async function streamToContainer(options: StreamToContainerOptions): Promise<void> {
   const script =
-    'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+    'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
     'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
   const run = options.run ?? spawnContainerCopy;
   await run(
@@ -535,6 +549,35 @@ export async function copyFromContainer(options: CopyFromContainerOptions): Prom
   await run(
     'container',
     ['cp', `${options.name}:${options.containerPath}`, options.hostPath],
+    containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
+  );
+}
+
+// Copy a directory out of the running container as a single tar stream.
+// `container cp` carries a flat directory-path penalty — ~55 MiB/s whether the
+// directory holds one file or two thousand, against ~341 MiB/s here — so
+// directories stream and single files stay on cp (~474 MiB/s, which beats
+// this). Taring the directory's *contents* (`cd … && tar -cf - .`) reproduces
+// the destination layout `container cp` produces, with no path rewriting.
+// pipefail is load-bearing: without it a guest failure that still emits a
+// well-formed empty archive exits 0 and a bad copy looks like a good one.
+export async function streamFromContainer(options: StreamFromContainerOptions): Promise<void> {
+  const script =
+    'set -o pipefail; mkdir -p "$2" && ' +
+    'container exec --user "$3" "$4" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+    'tar -xf - -C "$2"';
+  const run = options.run ?? spawnContainerCopy;
+  await run(
+    'sh',
+    [
+      '-c',
+      script,
+      'sh',
+      options.containerPath,
+      options.hostPath,
+      options.user,
+      options.name,
+    ],
     containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
   );
 }
