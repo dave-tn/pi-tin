@@ -112,13 +112,13 @@ describe('generateDockerfile', () => {
 
   test('appends npm packages and entrypoint when packages provided', () => {
     const packages: Tool[] = [
-      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+      { name: 'Codex', package: '@openai/codex@latest' },
     ];
     const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
 
     expect(dockerfile).toContain('# Workspace packages');
     expect(dockerfile).not.toContain('USER root');
-    expect(dockerfile).toContain('RUN npm install -g @anthropic-ai/claude-code@latest');
+    expect(dockerfile).toContain('RUN npm install -g @openai/codex@latest');
     expect(dockerfile).toContain('COPY pi-tin-entrypoint');
     expect(dockerfile).toContain('ENTRYPOINT ["/usr/local/bin/pi-tin-entrypoint"]');
     const entrypoint = extras.find((extra) => extra.name === 'pi-tin-entrypoint');
@@ -126,17 +126,17 @@ describe('generateDockerfile', () => {
     expect(entrypoint?.content).toContain('exec "$@"');
   });
 
-  test('PATH prefers wrapper and refresh-prefix bins over the baked npm prefix', () => {
+  test('PATH prefers wrapper and refresh-prefix bins, with .local/bin always present', () => {
     const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 
     expect(dockerfile).toContain(
-      'ENV PATH=/usr/local/pi-tin/bin:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$PATH',
+      'ENV PATH=/usr/local/pi-tin/bin:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin:$PATH',
     );
   });
 
   test('emits a refresh script installing into the shadow prefix', () => {
     const packages: Tool[] = [
-      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+      { name: 'Codex', package: '@openai/codex@latest' },
     ];
     const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
 
@@ -144,7 +144,7 @@ describe('generateDockerfile', () => {
     expect(refresh?.content).toContain('#!/bin/sh');
     expect(refresh?.content).toContain('mkdir /tmp/pi-tin-refresh.lock');
     expect(refresh?.content).toContain(
-      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest"',
+      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "@openai/codex@latest"',
     );
     expect(dockerfile).toContain('COPY pi-tin-refresh-agents /usr/local/bin/pi-tin-refresh-agents');
     expect(dockerfile).toContain('RUN chmod +x /usr/local/bin/pi-tin-refresh-agents');
@@ -210,7 +210,7 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain('RUN chmod +x /usr/local/pi-tin/bin/codex');
   });
 
-  test('refresh script preserves original package specs', () => {
+  test('refresh script preserves original npm package specs and excludes native agents', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Pinned Tool', package: 'typescript@5.9.3' },
@@ -219,8 +219,9 @@ describe('generateDockerfile', () => {
 
     const refresh = extras.find((extra) => extra.name === 'pi-tin-refresh-agents');
     expect(refresh?.content).toContain(
-      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "@anthropic-ai/claude-code@latest" "typescript@5.9.3"',
+      'npm install -g --prefix "$HOME/.npm-refresh" --fetch-timeout=60000 --fetch-retries=0 "typescript@5.9.3"',
     );
+    expect(refresh?.content).not.toContain('@anthropic-ai/claude-code');
     expect(refresh?.content).not.toContain('npm update -g');
   });
 
@@ -312,14 +313,28 @@ describe('generateDockerfile', () => {
 
   test('guards npm availability before installing workspace packages', () => {
     const packages: Tool[] = [
-      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+      { name: 'Codex', package: '@openai/codex@latest' },
     ];
     const { dockerfile } = generateDockerfile(baseProfile, packages, noWraps);
 
     const guardLine = dockerfile.indexOf('command -v npm');
-    const installLine = dockerfile.indexOf('npm install -g @anthropic-ai/claude-code@latest');
+    const installLine = dockerfile.indexOf('npm install -g @openai/codex@latest');
     expect(guardLine).toBeGreaterThan(-1);
     expect(installLine).toBeGreaterThan(guardLine);
+  });
+
+  test('omits the npm guard, refresh script, and npm install for native-only workspaces', () => {
+    const packages: Tool[] = [
+      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    ];
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, noWraps);
+
+    expect(dockerfile).not.toContain('command -v npm');
+    expect(dockerfile).not.toContain('npm install -g');
+    expect(dockerfile).not.toContain('pi-tin-refresh-agents');
+    expect(extras.some((extra) => extra.name === 'pi-tin-refresh-agents')).toBe(false);
+    // The entrypoint (gh credential wiring) is still baked for any tools.
+    expect(dockerfile).toContain('ENTRYPOINT ["/usr/local/bin/pi-tin-entrypoint"]');
   });
 
   test('guards npm availability before installing global tools', () => {
@@ -520,12 +535,12 @@ describe('generateDockerfile sshd', () => {
     expect(keygenIndex).toBeGreaterThan(userIndex);
   });
 
-  test('adds .local/bin to PATH only when sshd is enabled', () => {
+  test('.local/bin is on PATH with and without sshd', () => {
     const withSshd = generateDockerfile(baseProfile, [], sshdOpts).dockerfile;
     const withoutSshd = generateDockerfile(baseProfile, [], noWraps).dockerfile;
 
     expect(withSshd).toContain(':$HOME_DIR/.local/bin:$PATH');
-    expect(withoutSshd).not.toContain('.local/bin');
+    expect(withoutSshd).toContain(':$HOME_DIR/.local/bin:$PATH');
   });
 
   test('sshd disabled leaves no sshd artifacts', () => {
@@ -542,6 +557,76 @@ describe('generateDockerfile sshd', () => {
 
     expect(generateDockerfile(alpine, [], sshdOpts).dockerfile).toContain('openssh-server');
     expect(generateDockerfile(fedora, [], sshdOpts).dockerfile).toContain('openssh-server');
+  });
+});
+
+describe('generateDockerfile native agent installs', () => {
+  const claudeTool: Tool = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
+  const opencodeTool: Tool = { name: 'OpenCode', package: 'opencode-ai@latest' };
+
+  test('bakes each native install as its own RUN in the user phase', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [claudeTool, opencodeTool], noWraps);
+
+    const userIndex = dockerfile.indexOf('USER dev');
+    // Download-then-run: `curl | bash` in a RUN has no pipefail, so a fetch
+    // failure would bake a broken image that buildHash then pins.
+    const claudeIndex = dockerfile.indexOf(
+      'RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
+    );
+    const opencodeIndex = dockerfile.indexOf(
+      'RUN curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
+    );
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(claudeIndex).toBeGreaterThan(userIndex);
+    expect(opencodeIndex).toBeGreaterThan(claudeIndex);
+  });
+
+  test('adds the install script dependencies only when native agents are present', () => {
+    const withNative = generateDockerfile(baseProfile, [claudeTool], noWraps).dockerfile;
+    const withoutNative = generateDockerfile(
+      baseProfile,
+      [{ name: 'Codex', package: '@openai/codex@latest' }],
+      noWraps,
+    ).dockerfile;
+
+    expect(withNative).toContain('ca-certificates');
+    expect(withNative).toContain('bash');
+    expect(withoutNative).not.toContain('ca-certificates');
+    expect(withoutNative).not.toContain('bash');
+  });
+
+  test('musl bases add the agent runtime packages and env', () => {
+    const alpine: ContainerProfile = { ...baseProfile, base_image: 'node:alpine' };
+    const { dockerfile } = generateDockerfile(alpine, [claudeTool], noWraps);
+
+    expect(dockerfile).toContain('libgcc');
+    expect(dockerfile).toContain('libstdc++');
+    expect(dockerfile).toContain('ripgrep');
+    expect(dockerfile).toContain('ENV USE_BUILTIN_RIPGREP="0"');
+  });
+
+  test('glibc bases skip the musl runtime packages and env', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [claudeTool], noWraps);
+
+    expect(dockerfile).not.toContain('libstdc++');
+    expect(dockerfile).not.toContain('USE_BUILTIN_RIPGREP');
+  });
+
+  test('musl-only extras stay scoped to the agents that need them', () => {
+    const alpine: ContainerProfile = { ...baseProfile, base_image: 'node:alpine' };
+    const { dockerfile } = generateDockerfile(alpine, [opencodeTool], noWraps);
+
+    expect(dockerfile).not.toContain('libstdc++');
+    expect(dockerfile).not.toContain('USE_BUILTIN_RIPGREP');
+  });
+
+  test("agent-specific bin dirs join PATH only with that agent; .local/bin needs no suffix", () => {
+    const withOpencode = generateDockerfile(baseProfile, [opencodeTool], noWraps).dockerfile;
+    const claudeOnly = generateDockerfile(baseProfile, [claudeTool], noWraps).dockerfile;
+
+    expect(withOpencode).toContain(':$HOME_DIR/.local/bin:$HOME_DIR/.opencode/bin:$PATH');
+    expect(claudeOnly).toContain(':$HOME_DIR/.local/bin:$PATH');
+    expect(claudeOnly).not.toContain('.opencode');
   });
 });
 

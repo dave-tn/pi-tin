@@ -12,7 +12,7 @@ import {
   listContainers,
   listImageNames,
   getContainerState,
-  copyToContainer,
+  streamToContainer,
   copyFromContainer,
   execContainerCommand,
   stopContainer,
@@ -192,17 +192,28 @@ describe('bounded container subprocess options', () => {
     };
   }
 
-  test('copyToContainer is bounded by default', () => {
+  test('streamToContainer pipes a host tar into container exec as the target user, bounded by default', () => {
     const { calls, run } = createRunCapture();
-    copyToContainer({
+    streamToContainer({
       name: 'pi-tin-demo',
-      hostPath: '/tmp/host-state',
+      hostPath: '/tmp/host-state/.zsh_history',
       containerPath: '/home/dev/.zsh_history',
+      user: 'dev',
       run,
     });
     expect(calls).toEqual([{
-      file: 'container',
-      args: ['cp', '/tmp/host-state', 'pi-tin-demo:/home/dev/.zsh_history'],
+      file: 'sh',
+      args: [
+        '-c',
+        'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+          'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"',
+        'sh',
+        '/tmp/host-state',
+        '.zsh_history',
+        'dev',
+        'pi-tin-demo',
+        '/home/dev',
+      ],
       options: boundedOptions,
     }]);
   });
@@ -220,6 +231,34 @@ describe('bounded container subprocess options', () => {
       args: ['cp', 'pi-tin-demo:/home/dev/.zsh_history', '/tmp/host-state'],
       options: boundedOptions,
     }]);
+  });
+
+  // The binary-copy deadline is worthless if it never reaches the subprocess:
+  // dropping the timeoutMs pass-through would leave every binary copy on the
+  // 5s default and time out in production while the whole suite stays green.
+  test('streamToContainer passes an explicit timeoutMs through to the subprocess', () => {
+    const { calls, run } = createRunCapture();
+    streamToContainer({
+      name: 'pi-tin-demo',
+      hostPath: '/tmp/host-state/.local/bin/herdr',
+      containerPath: '/home/dev/.local/bin/herdr',
+      user: 'dev',
+      timeoutMs: 60_000,
+      run,
+    });
+    expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
+  });
+
+  test('copyFromContainer passes an explicit timeoutMs through to the subprocess', () => {
+    const { calls, run } = createRunCapture();
+    copyFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.local/bin/herdr',
+      hostPath: '/tmp/host-state',
+      timeoutMs: 60_000,
+      run,
+    });
+    expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
   });
 
   test('execContainerCommand is bounded by default', () => {

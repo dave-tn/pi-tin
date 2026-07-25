@@ -2,59 +2,75 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { combinedWorkspaceStateEntries, planWorkspaceStateSync, restoreHerdrServerExecutable, syncWorkspaceState } from './workspace-state.js';
+import {
+  combinedWorkspaceStateEntries,
+  hostFingerprint,
+  parseContainerFingerprint,
+  planWorkspaceStateSync,
+  syncWorkspaceState,
+  type WorkspaceStateEntry,
+} from './workspace-state.js';
 
 const hostStateDir = '/host/workspace-state/myws';
+
+// Pinned copy of streamToContainer's pipeline (see src/lib/container.ts): a
+// host tar streamed into `container exec`, extracted as the container user.
+const STREAM_SCRIPT =
+  'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+  'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
+
+const streamInArgs = (hostParent: string, basename: string, user: string, destParent: string): string[] =>
+  ['-c', STREAM_SCRIPT, 'sh', hostParent, basename, user, 'pi-tin-demo', destParent];
+
+const toolState = (statePath: string): WorkspaceStateEntry => ({ kind: 'tool-state', path: statePath });
+
+const CLAUDE_TOOL = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
+const OPENCODE_TOOL = { name: 'OpenCode', package: 'opencode-ai@latest' };
+const CODEX_TOOL = { name: 'Codex', package: '@openai/codex@latest' };
 
 describe('combinedWorkspaceStateEntries', () => {
   const containerProfile = { workspace_state: ['.zsh_history'] };
 
   test('herdr workspaces add the herdr state dir and the auto-installed server binary', () => {
-    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'herdr' }))
-      .toEqual(['.zsh_history', '.config/herdr', '.local/bin/herdr']);
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'herdr', tools: [] }))
+      .toEqual([
+        { kind: 'tool-state', path: '.zsh_history' },
+        { kind: 'tool-state', path: '.config/herdr' },
+        { kind: 'binary', path: '.local/bin/herdr', executable: true },
+      ]);
   });
 
-  test('shell workspaces keep only the profile entries', () => {
-    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'shell' }))
-      .toEqual(['.zsh_history']);
-  });
-});
-
-describe('restoreHerdrServerExecutable', () => {
-  test('chmods +x the copied-in herdr server for herdr workspaces', () => {
-    const calls: string[][] = [];
-    restoreHerdrServerExecutable(
-      { containerName: 'pi-tin-demo', workspace: { attach: 'herdr' }, user: 'dev' },
-      { run: (_file, args): void => { calls.push(args); } },
-    );
-
-    expect(calls).toEqual([
-      ['exec', '--user', 'root', 'pi-tin-demo', 'chmod', '+x', '/home/dev/.local/bin/herdr'],
-    ]);
+  test('shell workspaces without native agents keep only the profile entries', () => {
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'shell', tools: [CODEX_TOOL] }))
+      .toEqual([{ kind: 'tool-state', path: '.zsh_history' }]);
   });
 
-  test('is a no-op for shell workspaces', () => {
-    const calls: string[][] = [];
-    restoreHerdrServerExecutable(
-      { containerName: 'pi-tin-demo', workspace: { attach: 'shell' }, user: 'dev' },
-      { run: (_file, args): void => { calls.push(args); } },
-    );
-
-    expect(calls).toEqual([]);
+  test('Claude Code adds its versions dir with the managed launcher metadata', () => {
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'shell', tools: [CLAUDE_TOOL] }))
+      .toEqual([
+        { kind: 'tool-state', path: '.zsh_history' },
+        {
+          kind: 'binary',
+          path: '.local/share/claude',
+          executable: false,
+          launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
+        },
+      ]);
   });
 
-  test('swallows chmod failure — herdr just reinstalls', () => {
-    expect(() => restoreHerdrServerExecutable(
-      { containerName: 'pi-tin-demo', workspace: { attach: 'herdr' }, user: 'dev' },
-      { run: (): void => { throw new Error('exec failed'); } },
-    )).not.toThrow();
+  test('OpenCode adds its flat binary; npm agents add nothing', () => {
+    expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'shell', tools: [CODEX_TOOL, OPENCODE_TOOL] }))
+      .toEqual([
+        { kind: 'tool-state', path: '.zsh_history' },
+        { kind: 'binary', path: '.opencode/bin/opencode', executable: true },
+      ]);
   });
 });
 
 describe('planWorkspaceStateSync copy-in', () => {
-  test('per entry: remove stale destination, copy in, then fix ownership', () => {
+  test('per tool-state entry: remove stale destination, then copy in as the container user', () => {
     const groups = planWorkspaceStateSync({
-      entries: ['.zsh_history'],
+      entries: [toolState('.zsh_history')],
       user: 'dev',
       hostStateDir,
       direction: 'copy-in',
@@ -62,29 +78,59 @@ describe('planWorkspaceStateSync copy-in', () => {
 
     expect(groups).toEqual([[
       { kind: 'remove-container-path', containerPath: '/home/dev/.zsh_history' },
-      { kind: 'copy-in', hostPath: '/host/workspace-state/myws/.zsh_history', containerPath: '/home/dev/.zsh_history' },
-      { kind: 'chown-container-path', containerPath: '/home/dev/.zsh_history', user: 'dev' },
+      { kind: 'copy-in', hostPath: '/host/workspace-state/myws/.zsh_history', containerPath: '/home/dev/.zsh_history', user: 'dev', timeoutMs: 5_000 },
     ]]);
   });
 
-  test('derives nested container and host paths', () => {
+  test('binary entries probe for unchanged content first and carry the binary copy deadline', () => {
     const groups = planWorkspaceStateSync({
-      entries: ['.local/share/zoxide'],
+      entries: [{ kind: 'binary', path: '.local/bin/herdr', executable: true }],
       user: 'dev',
       hostStateDir,
       direction: 'copy-in',
     });
 
-    expect(groups[0]?.[1]).toEqual({
-      kind: 'copy-in',
-      hostPath: '/host/workspace-state/myws/.local/share/zoxide',
-      containerPath: '/home/dev/.local/share/zoxide',
+    expect(groups).toEqual([[
+      // Before remove-container-path: with no host snapshot (or matching
+      // content) the entry is skipped, so the image-baked binary survives.
+      { kind: 'probe-unchanged', containerPath: '/home/dev/.local/bin/herdr', hostPath: '/host/workspace-state/myws/.local/bin/herdr', whenHostMissing: 'skip-entry' },
+      { kind: 'remove-container-path', containerPath: '/home/dev/.local/bin/herdr' },
+      { kind: 'copy-in', hostPath: '/host/workspace-state/myws/.local/bin/herdr', containerPath: '/home/dev/.local/bin/herdr', user: 'dev', timeoutMs: 60_000 },
+      { kind: 'restore-executable', containerPath: '/home/dev/.local/bin/herdr' },
+    ]]);
+  });
+
+  test('launcher-managed entries restore the symlink after the copy, without a chmod', () => {
+    const groups = planWorkspaceStateSync({
+      entries: [{
+        kind: 'binary',
+        path: '.local/share/claude',
+        executable: false,
+        launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
+      }],
+      user: 'dev',
+      hostStateDir,
+      direction: 'copy-in',
     });
+
+    expect(groups).toEqual([[
+      { kind: 'probe-unchanged', containerPath: '/home/dev/.local/share/claude', hostPath: '/host/workspace-state/myws/.local/share/claude', whenHostMissing: 'skip-entry' },
+      { kind: 'remove-container-path', containerPath: '/home/dev/.local/share/claude' },
+      { kind: 'copy-in', hostPath: '/host/workspace-state/myws/.local/share/claude', containerPath: '/home/dev/.local/share/claude', user: 'dev', timeoutMs: 60_000 },
+      {
+        kind: 'restore-launcher',
+        linkContainerPath: '/home/dev/.local/bin/claude',
+        versionsDirContainerPath: '/home/dev/.local/share/claude/versions',
+        versionsDirHostPath: '/host/workspace-state/myws/.local/share/claude/versions',
+        recordHostPath: '/host/workspace-state/myws/.local/share/claude.pi-tin-launcher',
+        user: 'dev',
+      },
+    ]]);
   });
 
   test('uses /root as home for the root user', () => {
     const groups = planWorkspaceStateSync({
-      entries: ['.zsh_history'],
+      entries: [toolState('.zsh_history')],
       user: 'root',
       hostStateDir,
       direction: 'copy-in',
@@ -95,9 +141,9 @@ describe('planWorkspaceStateSync copy-in', () => {
 });
 
 describe('planWorkspaceStateSync copy-out', () => {
-  test('per entry: copy into a temp sibling, then swap it into place', () => {
+  test('per tool-state entry: copy into a temp sibling, then swap it into place', () => {
     const groups = planWorkspaceStateSync({
-      entries: ['.zsh_history'],
+      entries: [toolState('.zsh_history')],
       user: 'dev',
       hostStateDir,
       direction: 'copy-out',
@@ -107,14 +153,39 @@ describe('planWorkspaceStateSync copy-out', () => {
       { kind: 'ensure-host-parent', hostPath: '/host/workspace-state/myws/.zsh_history' },
       { kind: 'remove-host-path', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
       { kind: 'probe-container-path', containerPath: '/home/dev/.zsh_history' },
-      { kind: 'copy-out', containerPath: '/home/dev/.zsh_history', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp' },
+      { kind: 'copy-out', containerPath: '/home/dev/.zsh_history', hostPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp', timeoutMs: 5_000 },
       { kind: 'promote-temp', tempPath: '/host/workspace-state/myws/.zsh_history.pi-tin-tmp', hostPath: '/host/workspace-state/myws/.zsh_history' },
+    ]]);
+  });
+
+  test('launcher-managed entries record the launcher target, then skip unchanged content', () => {
+    const groups = planWorkspaceStateSync({
+      entries: [{
+        kind: 'binary',
+        path: '.local/share/claude',
+        executable: false,
+        launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
+      }],
+      user: 'dev',
+      hostStateDir,
+      direction: 'copy-out',
+    });
+
+    expect(groups).toEqual([[
+      { kind: 'ensure-host-parent', hostPath: '/host/workspace-state/myws/.local/share/claude' },
+      { kind: 'remove-host-path', hostPath: '/host/workspace-state/myws/.local/share/claude.pi-tin-tmp' },
+      { kind: 'probe-container-path', containerPath: '/home/dev/.local/share/claude' },
+      // The record refreshes even when the content copy is skipped as unchanged.
+      { kind: 'record-launcher', linkContainerPath: '/home/dev/.local/bin/claude', recordHostPath: '/host/workspace-state/myws/.local/share/claude.pi-tin-launcher' },
+      { kind: 'probe-unchanged', containerPath: '/home/dev/.local/share/claude', hostPath: '/host/workspace-state/myws/.local/share/claude', whenHostMissing: 'continue' },
+      { kind: 'copy-out', containerPath: '/home/dev/.local/share/claude', hostPath: '/host/workspace-state/myws/.local/share/claude.pi-tin-tmp', timeoutMs: 60_000 },
+      { kind: 'promote-temp', tempPath: '/host/workspace-state/myws/.local/share/claude.pi-tin-tmp', hostPath: '/host/workspace-state/myws/.local/share/claude' },
     ]]);
   });
 
   test('copies out before removing the previous snapshot, so a failed copy cannot destroy it', () => {
     const ops = planWorkspaceStateSync({
-      entries: ['.zsh_history'],
+      entries: [toolState('.zsh_history')],
       user: 'dev',
       hostStateDir,
       direction: 'copy-out',
@@ -132,7 +203,7 @@ describe('planWorkspaceStateSync copy-out', () => {
 describe('planWorkspaceStateSync ordering and edges', () => {
   test('preserves entry order across the op groups', () => {
     const ops = planWorkspaceStateSync({
-      entries: ['.zsh_history', '.local/share/zoxide'],
+      entries: [toolState('.zsh_history'), toolState('.local/share/zoxide')],
       user: 'dev',
       hostStateDir,
       direction: 'copy-in',
@@ -147,6 +218,286 @@ describe('planWorkspaceStateSync ordering and edges', () => {
   test('no entries produces no operations', () => {
     expect(planWorkspaceStateSync({ entries: [], user: 'dev', hostStateDir, direction: 'copy-in' })).toEqual([]);
     expect(planWorkspaceStateSync({ entries: [], user: 'dev', hostStateDir, direction: 'copy-out' })).toEqual([]);
+  });
+});
+
+describe('fingerprints', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('hostFingerprint of a missing path is null', () => {
+    expect(hostFingerprint(path.join(tmpDir, 'absent'))).toBeNull();
+  });
+
+  test('hostFingerprint of a single file uses "." as its path', () => {
+    const filePath = path.join(tmpDir, 'binary');
+    fs.writeFileSync(filePath, 'abcd');
+    expect(hostFingerprint(filePath)).toBe('4 .');
+  });
+
+  test('hostFingerprint of a dir lists regular files sorted, excluding symlinks', () => {
+    fs.mkdirSync(path.join(tmpDir, 'versions'));
+    fs.writeFileSync(path.join(tmpDir, 'versions', '2.1.218'), '12345');
+    fs.writeFileSync(path.join(tmpDir, 'versions', '2.1.200'), '123');
+    fs.symlinkSync(path.join(tmpDir, 'versions', '2.1.218'), path.join(tmpDir, 'launcher'));
+
+    expect(hostFingerprint(tmpDir)).toBe('3 ./versions/2.1.200\n5 ./versions/2.1.218');
+  });
+
+  test('parseContainerFingerprint matches the host form for dir listings', () => {
+    expect(parseContainerFingerprint('5 ./versions/2.1.218\n     3 ./versions/2.1.200\n'))
+      .toBe('3 ./versions/2.1.200\n5 ./versions/2.1.218');
+  });
+
+  test("parseContainerFingerprint matches the host form for a bare stat -c '%s' count", () => {
+    expect(parseContainerFingerprint('       4\n')).toBe('4 .');
+  });
+
+  test('parseContainerFingerprint rejects unexpected output', () => {
+    expect(parseContainerFingerprint('sh: find: not found')).toBeNull();
+    expect(parseContainerFingerprint('12 /etc/absolute')).toBeNull();
+  });
+});
+
+function timeoutError(): Error {
+  const error = new Error('spawnSync container ETIMEDOUT');
+  Object.assign(error, { code: 'ETIMEDOUT' });
+  return error;
+}
+
+describe('binary entry sync behaviour', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+  let stateDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  const HERDR_ENTRY: WorkspaceStateEntry = { kind: 'binary', path: '.local/bin/herdr', executable: true };
+  const CLAUDE_ENTRY: WorkspaceStateEntry = {
+    kind: 'binary',
+    path: '.local/share/claude',
+    executable: false,
+    launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
+  };
+
+  test('copy-in with no host snapshot skips the entry — the image-baked binary survives', () => {
+    const calls: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
+      { run: (_file, args): void => { calls.push(args); } },
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  test('copy-in with a matching fingerprint skips the copy', () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'bin!');
+    const calls: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (): string => '4\n',
+      },
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  test('copy-in with a differing fingerprint streams the copy in as the user and restores +x', () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'new binary');
+    const calls: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (): string => '4\n',
+      },
+    );
+
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/bin/herdr'],
+      streamInArgs(path.join(stateDir, '.local', 'bin'), 'herdr', 'dev', '/home/dev/.local/bin'),
+      ['exec', '--user', 'root', 'pi-tin-demo', 'chmod', '+x', '/home/dev/.local/bin/herdr'],
+    ]);
+  });
+
+  test('copy-in with an unreadable container fingerprint still copies', () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'new binary');
+    const calls: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (): string => { throw new Error('exec failed'); },
+      },
+    );
+
+    expect(calls.some((args) => args.includes(STREAM_SCRIPT))).toBe(true);
+  });
+
+  test('copy-out records the launcher target before skipping unchanged content', () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'share', 'claude', 'versions'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'share', 'claude', 'versions', '2.1.218'), '12345');
+    const calls: string[][] = [];
+    const captured: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [CLAUDE_ENTRY], user: 'dev', direction: 'copy-out' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (_file, args): string => {
+          captured.push(args);
+          return args.includes('readlink')
+            ? '/home/dev/.local/share/claude/versions/2.1.218\n'
+            : '5 ./versions/2.1.218\n';
+        },
+      },
+    );
+
+    // readlink recorded, fingerprints matched → no cp ran.
+    expect(captured.filter((args) => args.includes('readlink'))).toHaveLength(1);
+    expect(calls.some((args) => args[0] === 'cp')).toBe(false);
+    expect(fs.readFileSync(path.join(stateDir, '.local', 'share', 'claude.pi-tin-launcher'), 'utf-8'))
+      .toBe('/home/dev/.local/share/claude/versions/2.1.218\n');
+  });
+
+  test('copy-out drops a stale launcher record when readlink fails', () => {
+    fs.mkdirSync(path.join(stateDir, '.local', 'share'), { recursive: true });
+    const recordPath = path.join(stateDir, '.local', 'share', 'claude.pi-tin-launcher');
+    fs.writeFileSync(recordPath, '/home/dev/.local/share/claude/versions/2.1.200\n');
+    const calls: string[][] = [];
+
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [CLAUDE_ENTRY], user: 'dev', direction: 'copy-out' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (_file, args): string => {
+          if (args.includes('readlink')) throw new Error('no launcher');
+          return '5 ./versions/2.1.218\n';
+        },
+      },
+    );
+
+    expect(fs.existsSync(recordPath)).toBe(false);
+  });
+
+  const RESTORE_SCRIPT =
+    'ln -sfn "$1" "$2" && chown -h "$4:$4" "$2" && find "$3" -maxdepth 1 -type f ! -name "$5" -delete';
+
+  const runClaudeCopyIn = (calls: string[][]): void => {
+    syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [CLAUDE_ENTRY], user: 'dev', direction: 'copy-in' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        // Always mismatches the host fingerprint, so the copy proceeds.
+        capture: (): string => '1 ./versions/other\n',
+      },
+    );
+  };
+
+  const restoreArgs = (basename: string): string[] => [
+    'exec', '--user', 'root', 'pi-tin-demo', 'sh', '-c',
+    RESTORE_SCRIPT,
+    'sh',
+    `/home/dev/.local/share/claude/versions/${basename}`,
+    '/home/dev/.local/bin/claude',
+    '/home/dev/.local/share/claude/versions',
+    'dev',
+    basename,
+  ];
+
+  const versionsDir = (): string => path.join(stateDir, '.local', 'share', 'claude', 'versions');
+  const recordPath = (): string => path.join(stateDir, '.local', 'share', 'claude.pi-tin-launcher');
+
+  test('copy-in recreates the launcher at the recorded version and prunes the others', () => {
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.200'), '123');
+    fs.writeFileSync(path.join(versionsDir(), '2.1.218'), '12345');
+    fs.writeFileSync(recordPath(), '/home/dev/.local/share/claude/versions/2.1.218\n');
+    const calls: string[][] = [];
+
+    runClaudeCopyIn(calls);
+
+    expect(calls.at(-1)).toEqual(restoreArgs('2.1.218'));
+  });
+
+  test('copy-in with a record ahead of the snapshot falls back to a version the snapshot holds', () => {
+    // A copy-out that failed after record-launcher leaves the record pointing
+    // at a version the snapshot never captured; a blind restore would dangle
+    // the launcher and prune the only real binary.
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.200'), '123');
+    fs.writeFileSync(recordPath(), '/home/dev/.local/share/claude/versions/2.1.218\n');
+    const calls: string[][] = [];
+
+    runClaudeCopyIn(calls);
+
+    expect(calls.at(-1)).toEqual(restoreArgs('2.1.200'));
+  });
+
+  test('copy-in without a record links the newest snapshot version, numerically aware', () => {
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.9'), '123');
+    fs.writeFileSync(path.join(versionsDir(), '2.1.218'), '12345');
+    const calls: string[][] = [];
+
+    runClaudeCopyIn(calls);
+
+    expect(calls.at(-1)).toEqual(restoreArgs('2.1.218'));
+  });
+
+  test('copy-in never passes a record pointing outside the versions dir to the shell', () => {
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.218'), '12345');
+    fs.writeFileSync(recordPath(), '/etc/passwd\n');
+    const calls: string[][] = [];
+
+    runClaudeCopyIn(calls);
+
+    expect(calls.some((args) => args.includes('/etc/passwd'))).toBe(false);
+    expect(calls.at(-1)).toEqual(restoreArgs('2.1.218'));
+  });
+
+  test('copy-in skips the launcher restore when the snapshot holds no complete version', () => {
+    // A zero-byte version is a mid-download staging capture — never a link
+    // target; with nothing complete, neither the link nor the prune runs.
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.218'), '');
+    fs.writeFileSync(recordPath(), '/home/dev/.local/share/claude/versions/2.1.218\n');
+    const calls: string[][] = [];
+
+    runClaudeCopyIn(calls);
+
+    expect(calls.some((args) => args.includes(RESTORE_SCRIPT))).toBe(false);
   });
 });
 
@@ -176,7 +527,7 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.local/share/zoxide', '.zsh_history'],
+        entries: [toolState('.local/share/zoxide'), toolState('.zsh_history')],
         user: 'dev',
         direction: 'copy-out',
       },
@@ -206,16 +557,14 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.zsh_history', '.local/share/zoxide'],
+        entries: [toolState('.zsh_history'), toolState('.local/share/zoxide')],
         user: 'dev',
         direction: 'copy-out',
       },
       {
         run: (_file, args): void => {
           calls.push(args);
-          const error = new Error('spawnSync container ETIMEDOUT');
-          Object.assign(error, { code: 'ETIMEDOUT' });
-          throw error;
+          throw timeoutError();
         },
         warn: (message): void => {
           warnings.push(message);
@@ -239,7 +588,7 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.nuget/packages', '.zsh_history'],
+        entries: [toolState('.nuget/packages'), toolState('.zsh_history')],
         user: 'dev',
         direction: 'copy-out',
       },
@@ -248,9 +597,7 @@ describe('syncWorkspaceState timeout handling', () => {
           calls.push(args);
           const oversizedCopy = args[0] === 'cp' && args[1] === 'pi-tin-demo:/home/dev/.nuget/packages';
           if (oversizedCopy) {
-            const error = new Error('spawnSync container ETIMEDOUT');
-            Object.assign(error, { code: 'ETIMEDOUT' });
-            throw error;
+            throw timeoutError();
           }
         },
         warn: (message): void => {
@@ -270,6 +617,115 @@ describe('syncWorkspaceState timeout handling', () => {
     ]);
   });
 
+  test('a timed-out binary copy warns with the binary deadline and skips the entry\'s restore ops', () => {
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'new binary');
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: [{ kind: 'binary', path: '.local/bin/herdr', executable: true }],
+        user: 'dev',
+        direction: 'copy-in',
+      },
+      {
+        run: (_file, args): void => {
+          calls.push(args);
+          if (args.includes(STREAM_SCRIPT)) throw timeoutError();
+        },
+        capture: (): string => { throw new Error('probe fails, copy proceeds'); },
+        warn: (message): void => {
+          warnings.push(message);
+        },
+      },
+    );
+
+    // The timeout SIGKILLs only the stream's outer shell — the orphaned
+    // pipeline may still be extracting in the background, so the entry's
+    // restore-executable chmod must not run against it.
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/bin/herdr'],
+      streamInArgs(path.join(stateDir, '.local', 'bin'), 'herdr', 'dev', '/home/dev/.local/bin'),
+    ]);
+    // No host.mounts advice here: the entry is pi-tin-owned, not something the
+    // user can relocate.
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-in timed out after 1m for '/home/dev/.local/bin/herdr' in workspace 'demo' — skipping this path for now; pi-tin retries this agent-binary snapshot on the next open or close.",
+    ]);
+  });
+
+  test('copy-in: a failed stream warns — the remove already cleared the container copy', () => {
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.zsh_history'), 'snapshot');
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: [toolState('.zsh_history'), toolState('.local/share/zoxide')],
+        user: 'dev',
+        direction: 'copy-in',
+      },
+      {
+        run: (_file, args): void => {
+          calls.push(args);
+          if (args.includes(STREAM_SCRIPT)) throw new Error('tar exited with code 1');
+        },
+        warn: (message): void => {
+          warnings.push(message);
+        },
+      },
+    );
+
+    // Best-effort: the failure is warned but later entries still sync (the
+    // second entry has no host snapshot, so only its remove runs).
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
+      streamInArgs(stateDir, '.zsh_history', 'dev', '/home/dev'),
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/share/zoxide'],
+    ]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-in failed for '/home/dev/.zsh_history' in workspace 'demo' — starting without it (the container-side copy was already cleared). Common causes: a file of 8 GiB or larger or a single path component over 100 characters (ustar limits), or a container image without tar.",
+    ]);
+  });
+
+  test('a timed-out fingerprint probe is runtime-scoped and aborts the sync', () => {
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'bin!');
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    syncWorkspaceState(
+      {
+        containerName: 'pi-tin-demo',
+        workspaceName: 'demo',
+        entries: [{ kind: 'binary', path: '.local/bin/herdr', executable: true }, toolState('.zsh_history')],
+        user: 'dev',
+        direction: 'copy-in',
+      },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        capture: (): string => { throw timeoutError(); },
+        warn: (message): void => { warnings.push(message); },
+      },
+    );
+
+    // The probe is a near-instant exec, so its timeout means the runtime is
+    // wedged: nothing else runs, not even the second entry.
+    expect(calls).toEqual([]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.local/bin/herdr' in workspace 'demo' — container runtime unresponsive; skipping the rest of this sync.",
+    ]);
+  });
+
   test('copy-out: a wedged runtime stops the sync at the next probe after a timed-out copy', () => {
     const calls: string[][] = [];
     const warnings: string[] = [];
@@ -278,7 +734,7 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.nuget/packages', '.zsh_history', '.local/share/zoxide'],
+        entries: [toolState('.nuget/packages'), toolState('.zsh_history'), toolState('.local/share/zoxide')],
         user: 'dev',
         direction: 'copy-out',
       },
@@ -288,9 +744,7 @@ describe('syncWorkspaceState timeout handling', () => {
           // First probe answers before the runtime wedges; everything after
           // (the big copy, then the next entry's probe) hits the deadline.
           if (calls.length === 1) return;
-          const error = new Error('spawnSync container ETIMEDOUT');
-          Object.assign(error, { code: 'ETIMEDOUT' });
-          throw error;
+          throw timeoutError();
         },
         warn: (message): void => {
           warnings.push(message);
@@ -309,7 +763,7 @@ describe('syncWorkspaceState timeout handling', () => {
     ]);
   });
 
-  test('copy-in: still chowns the entry when its copy times out, then continues with later entries', () => {
+  test('copy-in: a timed-out copy skips only that path — later entries still sync', () => {
     const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, '.zsh_history'), 'snapshot');
@@ -321,17 +775,15 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.zsh_history', '.local/share/zoxide'],
+        entries: [toolState('.zsh_history'), toolState('.local/share/zoxide')],
         user: 'dev',
         direction: 'copy-in',
       },
       {
         run: (_file, args): void => {
           calls.push(args);
-          if (args[0] === 'cp') {
-            const error = new Error('spawnSync container ETIMEDOUT');
-            Object.assign(error, { code: 'ETIMEDOUT' });
-            throw error;
+          if (args.includes(STREAM_SCRIPT)) {
+            throw timeoutError();
           }
         },
         warn: (message): void => {
@@ -340,15 +792,12 @@ describe('syncWorkspaceState timeout handling', () => {
       },
     );
 
-    // The timed-out copy may have landed root-owned files, so the chown still
-    // runs; the second entry still syncs (it has no host snapshot, so only its
-    // remove and chown run).
+    // The second entry still syncs (it has no host snapshot, so only its
+    // remove runs).
     expect(calls).toEqual([
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
-      ['cp', path.join(stateDir, '.zsh_history'), 'pi-tin-demo:/home/dev/.zsh_history'],
-      ['exec', '--user', 'root', 'pi-tin-demo', 'chown', '-R', 'dev:dev', '/home/dev/.zsh_history'],
+      streamInArgs(stateDir, '.zsh_history', 'dev', '/home/dev'),
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/share/zoxide'],
-      ['exec', '--user', 'root', 'pi-tin-demo', 'chown', '-R', 'dev:dev', '/home/dev/.local/share/zoxide'],
     ]);
     expect(warnings).toEqual([
       "Warning: workspace_state copy-in timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
@@ -367,7 +816,7 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.zsh_history', '.local/share/zoxide'],
+        entries: [toolState('.zsh_history'), toolState('.local/share/zoxide')],
         user: 'dev',
         direction: 'copy-in',
       },
@@ -375,9 +824,7 @@ describe('syncWorkspaceState timeout handling', () => {
         run: (_file, args): void => {
           calls.push(args);
           if (args.includes('rm')) {
-            const error = new Error('spawnSync container ETIMEDOUT');
-            Object.assign(error, { code: 'ETIMEDOUT' });
-            throw error;
+            throw timeoutError();
           }
         },
         warn: (message): void => {
@@ -387,8 +834,8 @@ describe('syncWorkspaceState timeout handling', () => {
     );
 
     // A timed-out `rm` (near-instant when the runtime is healthy) means the
-    // runtime is wedged: neither the copy nor the chown is attempted and the
-    // rest of the sync is abandoned.
+    // runtime is wedged: the copy is not attempted and the rest of the sync
+    // is abandoned.
     expect(calls).toEqual([
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
     ]);
@@ -407,7 +854,7 @@ describe('syncWorkspaceState timeout handling', () => {
       {
         containerName: 'pi-tin-demo',
         workspaceName: 'demo',
-        entries: ['.zsh_history'],
+        entries: [toolState('.zsh_history')],
         user: 'dev',
         direction: 'copy-out',
       },
@@ -416,9 +863,7 @@ describe('syncWorkspaceState timeout handling', () => {
           if (args[0] !== 'cp') return;
           // Simulate a copy SIGKILLed mid-write: a partial temp exists.
           fs.writeFileSync(`${snapshotPath}.pi-tin-tmp`, 'partial');
-          const error = new Error('spawnSync container ETIMEDOUT');
-          Object.assign(error, { code: 'ETIMEDOUT' });
-          throw error;
+          throw timeoutError();
         },
         warn: (): void => {},
       },

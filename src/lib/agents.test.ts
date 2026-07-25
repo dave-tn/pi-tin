@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, nativeAgentInstalls, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
 
@@ -46,8 +46,10 @@ describe('KNOWN_AGENTS', () => {
   });
 
   test('agents with containerEnv have the expected env vars', () => {
+    // No DISABLE_AUTOUPDATER: native-installed Claude Code keeps itself fresh
+    // with its own auto-updater.
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.containerEnv).toEqual({ CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1' });
+    expect(claude?.containerEnv).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
     expect(gemini?.containerEnv).toEqual({ NO_BROWSER: 'true' });
@@ -62,6 +64,65 @@ describe('KNOWN_AGENTS', () => {
     const pi = KNOWN_AGENTS.find((a) => a.name === 'Pi');
     expect(pi?.skipPermissionsFlag).toBeUndefined();
   });
+
+  test('every agent has an install method; exactly Claude Code and OpenCode are native', () => {
+    for (const agent of KNOWN_AGENTS) {
+      expect(['npm', 'native']).toContain(agent.install.method);
+    }
+    const nativeNames = KNOWN_AGENTS.filter((a) => a.install.method === 'native').map((a) => a.name);
+    expect(nativeNames.sort()).toEqual(['Claude Code', 'OpenCode']);
+  });
+
+  test('Claude Code native install metadata is pinned', () => {
+    const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
+    expect(claude?.install).toEqual({
+      method: 'native',
+      installCommand:
+        'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
+      binDir: '.local/bin',
+      stateEntries: [
+        {
+          path: '.local/share/claude',
+          executable: false,
+          launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
+        },
+      ],
+      muslPackages: ['libgcc', 'libstdc++', 'ripgrep'],
+      muslEnv: { USE_BUILTIN_RIPGREP: '0' },
+    });
+  });
+
+  test('OpenCode native install metadata is pinned', () => {
+    const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
+    expect(opencode?.install).toEqual({
+      method: 'native',
+      installCommand:
+        'curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
+      binDir: '.opencode/bin',
+      stateEntries: [{ path: '.opencode/bin/opencode', executable: true }],
+      muslPackages: [],
+      muslEnv: {},
+    });
+  });
+});
+
+describe('install method helpers', () => {
+  const mixed: Tool[] = [
+    { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    { name: 'Codex', package: '@openai/codex@latest' },
+    { name: 'OpenCode', package: 'opencode-ai@latest' },
+    { name: 'custom', package: 'some-unknown-cli@latest' },
+  ];
+
+  test('nativeAgentInstalls returns native metadata in tool order', () => {
+    expect(nativeAgentInstalls(mixed).map((install) => install.binDir))
+      .toEqual(['.local/bin', '.opencode/bin']);
+    expect(nativeAgentInstalls([])).toEqual([]);
+  });
+
+  test('npmToolSpecs keeps npm agents and unknown packages, excluding native agents', () => {
+    expect(npmToolSpecs(mixed)).toEqual(['@openai/codex@latest', 'some-unknown-cli@latest']);
+  });
 });
 
 describe('agentContainerEnv', () => {
@@ -71,7 +132,7 @@ describe('agentContainerEnv', () => {
       { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
     ];
     const env = agentContainerEnv(packages);
-    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', DISABLE_AUTOUPDATER: '1', NO_BROWSER: 'true' });
+    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' });
   });
 
   test('includes the OpenCode external_directory sandbox config', () => {

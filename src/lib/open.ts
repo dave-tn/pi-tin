@@ -46,8 +46,8 @@ import { isRecord } from './guards.js';
 import { spawnAutoStopHelper } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
-import { combinedWorkspaceStateEntries, restoreHerdrServerExecutable, syncWorkspaceState } from './workspace-state.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, npmToolSpecs } from './agents.js';
+import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
@@ -586,13 +586,15 @@ function startWorkspaceContainer(options: {
   });
 }
 
-// Agent packages refresh in the background on every open — joins included —
-// so long-lived workspaces keep picking up new releases, not just fresh
-// starts. Detached: the refresh outlives this CLI invocation and at worst
-// dies with the container. Best effort throughout — a missed refresh (script
-// absent in a pre-upgrade image, container gone) keeps existing versions.
+// npm-installed agent packages refresh in the background on every open —
+// joins included — so long-lived workspaces keep picking up new releases, not
+// just fresh starts. Native agents are not refreshed here: their own
+// auto-updaters keep them current. Detached: the refresh outlives this CLI
+// invocation and at worst dies with the container. Best effort throughout — a
+// missed refresh (script absent in a pre-upgrade image, container gone) keeps
+// existing versions.
 function spawnAgentRefresh(context: WorkspaceContext): void {
-  if ((context.workspace.tools ?? []).length === 0) {
+  if (npmToolSpecs(context.workspace.tools ?? []).length === 0) {
     return;
   }
   try {
@@ -867,13 +869,6 @@ export async function openWorkspace(
       entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
       user: context.containerProfile.user,
       direction: 'copy-in',
-    });
-    // container cp drops the executable bit, so the copied-in herdr server needs
-    // +x restored or herdr reinstalls it every fresh start.
-    restoreHerdrServerExecutable({
-      containerName: context.containerName,
-      workspace: context.workspace,
-      user: context.containerProfile.user,
     });
   } else {
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));

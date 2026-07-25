@@ -48,10 +48,12 @@ export type ContainerSubprocessRunner = (
   options: ContainerExecFileOptions,
 ) => void;
 
-interface CopyToContainerOptions {
+interface StreamToContainerOptions {
   name: string;
   hostPath: string;
   containerPath: string;
+  user: string;
+  timeoutMs?: number | undefined;
   run?: ContainerSubprocessRunner | undefined;
 }
 
@@ -59,11 +61,23 @@ interface CopyFromContainerOptions {
   name: string;
   containerPath: string;
   hostPath: string;
+  timeoutMs?: number | undefined;
   run?: ContainerSubprocessRunner | undefined;
 }
 
 interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
   run?: ContainerSubprocessRunner | undefined;
+}
+
+/** Output-capturing sibling of ContainerSubprocessRunner. */
+export type ContainerOutputRunner = (
+  file: string,
+  args: string[],
+  options: ContainerExecFileOptions,
+) => string;
+
+interface ExecContainerCommandOutputOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
+  capture?: ContainerOutputRunner | undefined;
 }
 
 // Apple `container` subcommands can wedge indefinitely when the runtime is
@@ -76,6 +90,13 @@ export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
 // `container run` boots a VM for the container; give a cold start more
 // headroom than the flat deadline before declaring the runtime wedged.
 export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
+
+// Deadline for copies of persisted agent binaries, which are far too large for
+// the flat 5s deadline. Measured on Apple container 1.1.0: copy-in now streams
+// via tar at a stable ~275 MiB/s (256 MiB in ~0.9s); copy-out rides
+// `container cp` (~330-410 MiB/s out, but a ~500MB dir took 6-12s). 60s keeps
+// slow-machine headroom without masking a wedged runtime for long.
+export const CONTAINER_BINARY_COPY_TIMEOUT_MS = 60_000;
 
 /** Recovery steps for a wedged container runtime, shared by every timeout message. */
 export function containerSystemRecoveryHint(): string {
@@ -402,23 +423,65 @@ const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options)
 function runContainerSubprocess(
   args: string[],
   run: ContainerSubprocessRunner = execContainerSubprocess,
+  timeoutMs: number = CONTAINER_SUBPROCESS_TIMEOUT_MS,
 ): void {
-  run('container', args, containerExecFileOptions(CONTAINER_SUBPROCESS_TIMEOUT_MS));
+  run('container', args, containerExecFileOptions(timeoutMs));
 }
 
 export function isContainerSubprocessTimeout(error: unknown): boolean {
   return isRecord(error) && error['code'] === 'ETIMEDOUT';
 }
 
-// Copy a host path into the running container. Apple `container cp` addresses
-// the container side as `<id>:/absolute/path` and works only while running.
-export function copyToContainer(options: CopyToContainerOptions): void {
-  runContainerSubprocess(['cp', options.hostPath, `${options.name}:${options.containerPath}`], options.run);
+// Copy a host path into the running container by piping a host-side tar into
+// `container exec`, extracted as the target user. Not `container cp`: its
+// copy-in is slow and erratic (measured on container 1.1.0, 2026-07: 36-147
+// MiB/s run-to-run for the same 256 MiB file, vs a stable ~275 MiB/s for the
+// same bytes streamed through `container exec -i` — see
+// CONTAINER_CP_COPYIN_BUG_REPORT.md), and extraction as the user makes
+// ownership correct by construction where cp landed root-owned files. tar also
+// carries modes and in-tree symlinks intact. COPYFILE_DISABLE plus the plain
+// ustar format stop macOS bsdtar emitting AppleDouble/pax metadata entries,
+// which busybox tar mishandles and which would poison the workspace-state
+// changed-check fingerprint. A failed host tar truncates the stream, so the
+// container-side tar exits nonzero and the failure surfaces without pipefail.
+// On timeout Node SIGKILLs only the outer shell: tar and `container exec` are
+// that shell's children joined by their own pipe, so the orphaned pipeline
+// keeps extracting in the background until it finishes on its own. Callers
+// must not touch the destination after a timeout (runOpGroup skips the
+// entry's remaining ops); the next sync's probe reconciles whatever the
+// orphan left. The extracted name is the tar member — basename(hostPath) —
+// so containerPath contributes only its parent directory: both paths must
+// share a basename, which the planner guarantees by deriving them from the
+// same entry path. The `--` keeps a leading-dash basename from parsing as a
+// tar option.
+export function streamToContainer(options: StreamToContainerOptions): void {
+  const script =
+    'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+    'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
+  const run = options.run ?? execContainerSubprocess;
+  run(
+    'sh',
+    [
+      '-c',
+      script,
+      'sh',
+      path.dirname(options.hostPath),
+      path.basename(options.hostPath),
+      options.user,
+      options.name,
+      path.posix.dirname(options.containerPath),
+    ],
+    containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
+  );
 }
 
 // Copy a path out of the running container onto the host.
 export function copyFromContainer(options: CopyFromContainerOptions): void {
-  runContainerSubprocess(['cp', `${options.name}:${options.containerPath}`, options.hostPath], options.run);
+  runContainerSubprocess(
+    ['cp', `${options.name}:${options.containerPath}`, options.hostPath],
+    options.run,
+    options.timeoutMs,
+  );
 }
 
 // Run a non-interactive command in the running container (no TTY), optionally as
@@ -432,6 +495,22 @@ export function execContainerCommand(options: ExecContainerCommandOptions): void
     ...options.command,
   ];
   runContainerSubprocess(args, options.run);
+}
+
+const captureContainerSubprocess: ContainerOutputRunner = (file, args, options): string =>
+  execFileSync(file, args, options);
+
+// execContainerCommand for callers that need the command's stdout (e.g. the
+// workspace-state fingerprint probe). Same deadline and kill semantics.
+export function execContainerCommandOutput(options: ExecContainerCommandOutputOptions): string {
+  const capture = options.capture ?? captureContainerSubprocess;
+  const args = [
+    'exec',
+    ...(options.user ? ['--user', options.user] : []),
+    options.name,
+    ...options.command,
+  ];
+  return capture('container', args, containerExecFileOptions(CONTAINER_SUBPROCESS_TIMEOUT_MS));
 }
 
 export function stopContainer(name: string, run?: ContainerSubprocessRunner): void {
