@@ -48,6 +48,7 @@ import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, npmToolSpecs } from './agents.js';
 import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
+import { createSyncProgressReporter } from './sync-progress.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
@@ -692,7 +693,7 @@ async function finishWorkspaceSession(
   context: WorkspaceContext,
   sessionId: string,
 ): Promise<string> {
-  return await withWorkspaceLock(context.wsName, () => {
+  return await withWorkspaceLock(context.wsName, async () => {
     unregisterSession(context.wsName, sessionId);
 
     const containerState = getContainerState(context.containerName);
@@ -711,13 +712,16 @@ async function finishWorkspaceSession(
 
     // Container is still running: snapshot workspace state out now, before any
     // stop/delete path (auto-stop, or the next fresh start) can tear it down.
-    syncWorkspaceState({
-      containerName: context.containerName,
-      workspaceName: context.wsName,
-      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
-      user: context.containerProfile.user,
-      direction: 'copy-out',
-    });
+    await syncWorkspaceState(
+      {
+        containerName: context.containerName,
+        workspaceName: context.wsName,
+        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        user: context.containerProfile.user,
+        direction: 'copy-out',
+      },
+      { report: createSyncProgressReporter('copy-out') },
+    );
 
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
     if (runtime.runtimeState !== 'ok') {
@@ -863,13 +867,16 @@ export async function openWorkspace(
     });
     // Fresh container: restore the previous life's workspace state before the
     // interactive shell begins. Not on join — the running container already has it.
-    syncWorkspaceState({
-      containerName: context.containerName,
-      workspaceName: context.wsName,
-      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
-      user: context.containerProfile.user,
-      direction: 'copy-in',
-    });
+    await syncWorkspaceState(
+      {
+        containerName: context.containerName,
+        workspaceName: context.wsName,
+        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        user: context.containerProfile.user,
+        direction: 'copy-in',
+      },
+      { report: createSyncProgressReporter('copy-in') },
+    );
   } else {
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
   }
