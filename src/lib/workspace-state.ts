@@ -372,6 +372,10 @@ interface SyncEntryContext {
   copiedBytes: number | null;
   copyDurationMs: number | null;
   copyInFailed: boolean;
+  // Copy-in failures collected during runOpGroup and warned about by
+  // syncWorkspaceState after finishEntry closes the TTY entry line — warning
+  // mid-entry would render appended to that still-open line.
+  copyInFailureOps: WorkspaceStateOp[];
 }
 
 interface RunOpOptions {
@@ -617,7 +621,6 @@ async function runOpGroup(options: {
   capture: ContainerOutputRunner | undefined;
   copy: ContainerCopyRunner | undefined;
   report: SyncProgressReporter | undefined;
-  warnCopyInFailure: (op: WorkspaceStateOp) => void;
 }): Promise<OpGroupResult> {
   for (const op of options.group) {
     try {
@@ -632,7 +635,7 @@ async function runOpGroup(options: {
       if (options.direction === 'copy-out') return { kind: 'failed' };
       if (op.kind === 'copy-in') {
         options.ctx.copyInFailed = true;
-        options.warnCopyInFailure(op);
+        options.ctx.copyInFailureOps.push(op);
       }
     }
   }
@@ -693,10 +696,6 @@ export async function syncWorkspaceState(
     direction: options.direction,
   });
 
-  const warnCopyInFailure = (op: WorkspaceStateOp): void => {
-    warn(copyInFailureWarning(options.workspaceName, op));
-  };
-
   for (const [index, group] of groups.entries()) {
     const entry = options.entries[index];
     if (entry === undefined) continue;
@@ -706,6 +705,7 @@ export async function syncWorkspaceState(
       copiedBytes: null,
       copyDurationMs: null,
       copyInFailed: false,
+      copyInFailureOps: [],
     };
     const result = await runOpGroup({
       containerName: options.containerName,
@@ -716,9 +716,13 @@ export async function syncWorkspaceState(
       capture: dependencies.capture,
       copy: dependencies.copy,
       report: dependencies.report,
-      warnCopyInFailure,
     });
     dependencies.report?.finishEntry(entryOutcome(result, ctx));
+    // Deferred until after finishEntry closes the TTY entry line — warning
+    // from inside runOpGroup would render appended to that still-open line.
+    for (const failedOp of ctx.copyInFailureOps) {
+      warn(copyInFailureWarning(options.workspaceName, failedOp));
+    }
     if (result.kind === 'timed-out') {
       warn(timeoutWarning(options.workspaceName, options.direction, result.timeout));
       if (result.timeout.scope === 'runtime') return;

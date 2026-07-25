@@ -10,22 +10,23 @@ export type SyncEntryOutcome =
   | { kind: 'failed' }
   | { kind: 'timed-out' };
 
+// The final unit: every byte count is less than Infinity, so .find() below
+// always matches it or an earlier unit — this is also the fallback for the
+// (never-reached) undefined case that noUncheckedIndexedAccess requires
+// handling.
+const LARGEST_BYTE_UNIT = { limit: Number.POSITIVE_INFINITY, divisor: 1_000_000_000, suffix: 'GB', decimals: 1 } as const;
+
 // Decimal units to match how Finder and `container` report sizes.
 const BYTE_UNITS = [
   { limit: 1_000, divisor: 1, suffix: 'B', decimals: 0 },
   { limit: 1_000_000, divisor: 1_000, suffix: 'KB', decimals: 0 },
   { limit: 10_000_000, divisor: 1_000_000, suffix: 'MB', decimals: 1 },
   { limit: 1_000_000_000, divisor: 1_000_000, suffix: 'MB', decimals: 0 },
-  { limit: Number.POSITIVE_INFINITY, divisor: 1_000_000_000, suffix: 'GB', decimals: 1 },
+  LARGEST_BYTE_UNIT,
 ] as const;
 
 function byteUnitFor(bytes: number): (typeof BYTE_UNITS)[number] {
-  for (const unit of BYTE_UNITS) {
-    if (bytes < unit.limit) {
-      return unit;
-    }
-  }
-  return BYTE_UNITS[4];
+  return BYTE_UNITS.find((unit) => bytes < unit.limit) ?? LARGEST_BYTE_UNIT;
 }
 
 function scaleBytes(bytes: number, unit: (typeof BYTE_UNITS)[number]): string {
@@ -166,7 +167,7 @@ export function createSyncProgressReporter(
         });
         out.write(`${CLEAR_LINE}  ${entryPath}  ${live}`);
       }, LIVE_TICK_MS);
-      if (ticker !== null) ticker.unref();
+      ticker.unref();
     },
     finishEntry(outcome): void {
       stopTicker();
