@@ -30,8 +30,9 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// `shouldEmitJson` turns JSON output on automatically without a TTY, so every
-// run here emits an envelope. Capture stdout rather than letting it leak into
+// JSON mode falls back to TTY detection, so an interactive `bun test` run
+// would take the human-output path — pass --json explicitly to keep the
+// envelope deterministic. Capture stdout rather than letting it leak into
 // the test report, and assert the envelope while we hold it.
 async function runAndCatch(
   program: Command,
@@ -62,7 +63,7 @@ describe('agent-profile delete', () => {
     const program = new Command();
     registerAgentProfileDeleteCommand(program);
 
-    const { err, stdout } = await runAndCatch(program, ['delete', 'broken', '--force']);
+    const { err, stdout } = await runAndCatch(program, ['delete', 'broken', '--force', '--json']);
 
     expect(err).toBeUndefined();
     expect(fs.existsSync(profileDir)).toBe(false);
