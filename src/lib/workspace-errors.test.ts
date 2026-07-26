@@ -9,12 +9,14 @@ describe('notFoundWorkspaceError', () => {
     expect(err.detail.code).toBe('not_found');
     expect(err.detail.badInput).toBe('ghost');
     expect(err.detail.validValues).toEqual(['work', 'scratch']);
-    expect(err.message).toContain('ghost');
-    expect(err.message).toContain('work, scratch');
+    expect(err.detail.remediation).toBe('Run `pi-tin list` to see available workspaces.');
+    expect(err.message).toBe("Workspace 'ghost' not found. Available: work, scratch");
   });
 
   test('handles the no-workspaces-configured case', () => {
     const err = notFoundWorkspaceError('ghost', []);
-    expect(err.message).toContain('no workspaces configured');
+    expect(err.detail.validValues).toEqual([]);
+    expect(err.detail.remediation).toBe('Run `pi-tin list` to see available workspaces.');
+    expect(err.message).toBe("Workspace 'ghost' not found — no workspaces configured.");
   });
 });

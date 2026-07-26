@@ -14,16 +14,23 @@ describe('parseDurationMs', () => {
     expect(parseDurationMs('1h')).toBe(60 * 60 * 1000);
   });
 
-  test('rejects invalid durations', () => {
-    expect(() => parseDurationMs('0s')).toThrow();
-    expect(() => parseDurationMs('-1s')).toThrow();
-    expect(() => parseDurationMs('30')).toThrow();
-    expect(() => parseDurationMs('1d')).toThrow();
-    expect(() => parseDurationMs('')).toThrow();
+  test('rejects invalid durations, echoing the value and the accepted forms', () => {
+    expect(() => parseDurationMs('0s'))
+      .toThrow("Invalid duration '0s'. Use values like 30s, 5m, or 1h.");
+    expect(() => parseDurationMs('-1s'))
+      .toThrow("Invalid duration '-1s'. Use values like 30s, 5m, or 1h.");
+    expect(() => parseDurationMs('30'))
+      .toThrow("Invalid duration '30'. Use values like 30s, 5m, or 1h.");
+    expect(() => parseDurationMs('1d'))
+      .toThrow("Invalid duration '1d'. Use values like 30s, 5m, or 1h.");
+    expect(() => parseDurationMs(''))
+      .toThrow("Invalid duration ''. Use values like 30s, 5m, or 1h.");
   });
 
   test('rejects amounts too large to represent exactly', () => {
-    expect(() => parseDurationMs('9'.repeat(309) + 's')).toThrow();
+    const tooLarge = '9'.repeat(309) + 's';
+    expect(() => parseDurationMs(tooLarge))
+      .toThrow(`Invalid duration '${tooLarge}'. Use values like 30s, 5m, or 1h.`);
   });
 });
 

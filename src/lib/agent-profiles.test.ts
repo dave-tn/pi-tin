@@ -45,13 +45,16 @@ describe('agent-profiles', () => {
       expect(yaml).toContain('.claude');
     });
 
-    test('throws for unknown agent name', () => {
-      expect(() => createAgentProfile('test', 'Unknown Agent')).toThrow('Unknown agent');
+    test('throws for unknown agent name, quoting the name and listing known agents', () => {
+      expect(() => createAgentProfile('test', 'Unknown Agent'))
+        .toThrow("Unknown agent: 'Unknown Agent'. Known agents: ");
     });
 
-    test('throws if profile already exists', () => {
+    test('throws if profile already exists, naming the profile and its directory', () => {
       createAgentProfile('personal', 'Claude Code');
-      expect(() => createAgentProfile('personal', 'Claude Code')).toThrow('already exists');
+      const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'personal');
+      expect(() => createAgentProfile('personal', 'Claude Code'))
+        .toThrow(`Agent profile 'personal' already exists at ${profileDir}`);
     });
 
     test('recreates a profile after an interrupted creation left no profile.yaml', () => {
@@ -73,8 +76,10 @@ describe('agent-profiles', () => {
       expect(profile.mounts).toContain('.claude');
     });
 
-    test('throws for non-existent profile', () => {
-      expect(() => loadAgentProfile('missing')).toThrow('not found');
+    test('throws for non-existent profile, naming it and how to list profiles', () => {
+      expect(() => loadAgentProfile('missing')).toThrow(
+        "Agent profile 'missing' not found. Run 'pi-tin agent-profile list' to see available profiles.",
+      );
     });
   });
 
@@ -101,7 +106,13 @@ describe('agent-profiles', () => {
         const profiles = listAgentProfiles();
         expect(profiles.map((p) => p.name)).toEqual(['good']);
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn.mock.calls[0]?.[0]).toContain('broken');
+        // The warning must name the skipped profile AND carry the underlying
+        // parse failure through — a generic "invalid profile" leaves the user
+        // with nothing to fix.
+        expect(warn.mock.calls[0]?.[0]).toContain(
+          "Warning: skipping invalid agent profile 'broken': Failed to parse YAML at ",
+        );
+        expect(warn.mock.calls[0]?.[0]).toContain(path.join(badDir, 'profile.yaml'));
       } finally {
         warn.mockRestore();
       }
@@ -116,8 +127,8 @@ describe('agent-profiles', () => {
       expect(fs.existsSync(profileDir)).toBe(false);
     });
 
-    test('throws for non-existent profile', () => {
-      expect(() => deleteAgentProfile('missing')).toThrow('not found');
+    test('throws for non-existent profile, naming it', () => {
+      expect(() => deleteAgentProfile('missing')).toThrow("Agent profile 'missing' not found.");
     });
   });
 
@@ -155,14 +166,19 @@ describe('agent-profiles', () => {
       expect(() => validateAgentProfilesForWorkspace(['my-claude', 'my-codex'])).not.toThrow();
     });
 
-    test('throws for missing profile', () => {
-      expect(() => validateAgentProfilesForWorkspace(['nonexistent'])).toThrow('not found');
+    test('throws for missing profile, naming the profile that is missing', () => {
+      expect(() => validateAgentProfilesForWorkspace(['nonexistent'])).toThrow(
+        "Agent profile 'nonexistent' not found. Run 'pi-tin agent-profile list' to see available profiles.",
+      );
     });
 
-    test('throws for conflicting dot-dirs', () => {
+    test('throws for conflicting dot-dirs, naming the mount and both profiles', () => {
       createAgentProfile('claude1', 'Claude Code');
       createAgentProfile('claude2', 'Claude Code');
-      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple agent profiles');
+      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow(
+        'Workspace has multiple agent profiles for .claude: claude1, claude2. '
+        + 'Only one agent profile per mount path is allowed.',
+      );
     });
 
     test('passes with empty list', () => {
@@ -208,9 +224,10 @@ describe('agent-profiles', () => {
       expect(fs.existsSync(path.join(profileDir, '.config/opencode'))).toBe(true);
     });
 
-    test('throws when creating host profile for unsupported agent', () => {
+    test('throws when creating host profile for unsupported agent, naming the agent and why', () => {
       expect(() => createAgentProfile('test', 'Claude Code', 'host')).toThrow(
-        'does not support host mode',
+        'Claude Code does not support host mode. Its auth depends on macOS Keychain, '
+        + 'which is unavailable in containers.',
       );
     });
 
@@ -249,10 +266,13 @@ describe('agent-profiles', () => {
       ]);
     });
 
-    test('throws for conflicting mounts across profiles', () => {
+    test('throws for conflicting mounts across profiles, naming the mount and both profiles', () => {
       createAgentProfile('claude1', 'Claude Code', 'isolated');
       createAgentProfile('claude2', 'Claude Code', 'isolated');
-      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow('multiple agent profiles');
+      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow(
+        'Workspace has multiple agent profiles for .claude: claude1, claude2. '
+        + 'Only one agent profile per mount path is allowed.',
+      );
     });
   });
 });
