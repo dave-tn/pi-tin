@@ -29,6 +29,13 @@ export function formatBytes(bytes: number): string {
     value /= 1000;
     index += 1;
   }
+  // Rounding to one decimal can land back on the threshold (999_950 B →
+  // 999.95 KB → "1000.0 KB"); step up once more so the display never shows a
+  // four-digit mantissa below the TB cap.
+  if (index < units.length - 1 && Number(value.toFixed(1)) >= 1000) {
+    value /= 1000;
+    index += 1;
+  }
   const unit = units[index] ?? 'B';
   return index === 0 ? `${value} ${unit}` : `${value.toFixed(1)} ${unit}`;
 }

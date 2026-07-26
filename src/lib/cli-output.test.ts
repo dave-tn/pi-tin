@@ -12,6 +12,15 @@ describe('formatBytes', () => {
     expect(formatBytes(259_400_000)).toBe('259.4 MB');
     expect(formatBytes(2_500_000_000)).toBe('2.5 GB');
   });
+
+  test('bumps to the next unit when rounding would show 1000.0', () => {
+    expect(formatBytes(999_950)).toBe('1.0 MB');
+    expect(formatBytes(999_949)).toBe('999.9 KB');
+  });
+
+  test('the TB cap has no next unit, so its mantissa may reach four digits', () => {
+    expect(formatBytes(999_950_000_000_000)).toBe('1000.0 TB');
+  });
 });
 
 describe('resolveJsonMode', () => {
