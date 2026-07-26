@@ -24,9 +24,11 @@ describe('parseYaml', () => {
     expect(err.message).toStartWith('Failed to parse YAML at /tmp/broken.yaml:\n  ');
     // The wrapper must append the parser's own diagnostic, not replace it —
     // "failed to parse <path>" alone tells the user nothing about what to fix.
-    expect(err.message).toContain(
-      'Flow sequence in block collection must be sufficiently indented and end with a ]',
-    );
+    // The diagnostic sentence itself is owned by the third-party `yaml` parser
+    // and can be reworded by any dependency update, so it is deliberately not
+    // pinned. The contract this module owns is: wrapper prefix + source path +
+    // a preserved, non-empty parser detail + line/column.
+    expect(err.message).toMatch(/^Failed to parse YAML at \/tmp\/broken\.yaml:\n {2}\S/);
     expect(err.message).toContain('at line 2, column 1');
   });
 });

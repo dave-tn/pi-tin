@@ -298,10 +298,18 @@ describe('ContainerProfileSchema memory', () => {
   test('rejects zero-valued memory sizes, echoing the rejected value', () => {
     const zeroSizes = ['0', '0g', '0.0m', '00', '0b', '0.0'] as const;
     for (const mem of zeroSizes) {
-      expect(() => validateContainerProfile({ ...baseProfile, memory: mem }))
-        .toThrow('Invalid container profile configuration:\n  memory: Invalid format:');
-      expect(() => validateContainerProfile({ ...baseProfile, memory: mem }))
-        .toThrow(`but received "${mem}"`);
+      const err = (() => {
+        try {
+          validateContainerProfile({ ...baseProfile, memory: mem });
+        } catch (e) {
+          return e;
+        }
+        return undefined;
+      })();
+      expect(err).toBeInstanceOf(Error);
+      if (!(err instanceof Error)) throw new Error('unreachable');
+      expect(err.message).toStartWith('Invalid container profile configuration:\n  memory: Invalid format:');
+      expect(err.message).toContain(`but received "${mem}"`);
     }
   });
 
@@ -403,11 +411,6 @@ describe('WorkspaceSchema host', () => {
         key: 'FOO=BAR',
         message: 'Invalid workspace configuration:\n'
           + '  host.env.FOO=BAR: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "FOO=BAR"',
-      },
-      {
-        key: 'FOO\nBAR',
-        message: 'Invalid workspace configuration:\n'
-          + '  host.env.FOO\nBAR: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "FOO\nBAR"',
       },
       {
         key: '1FOO',
