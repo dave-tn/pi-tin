@@ -489,8 +489,8 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // `container exec`, extracted as the target user. Not `container cp`: its
 // copy-in is slow and erratic (measured on container 1.1.0, 2026-07: 36-147
 // MiB/s run-to-run for the same 256 MiB file, vs a stable ~275 MiB/s for the
-// same bytes streamed through `container exec -i` — see
-// CONTAINER_CP_COPYIN_BUG_REPORT.md), and extraction as the user makes
+// same bytes streamed through `container exec -i`), and extraction as the
+// user makes
 // ownership correct by construction where cp landed root-owned files. tar also
 // carries modes and in-tree symlinks intact. COPYFILE_DISABLE plus the plain
 // ustar format stop macOS bsdtar emitting AppleDouble/pax metadata entries,
