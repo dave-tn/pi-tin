@@ -439,7 +439,9 @@ const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options)
 // not 'close': orphans inherit the stderr pipe, and waiting for it to close
 // would block the timeout rejection until they finish. The rejection carries
 // code ETIMEDOUT so isContainerSubprocessTimeout classifies it unchanged.
-const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
+// Exported only as the default runner and for direct tests of its error
+// shapes; production callers go through streamToContainer/copyFromContainer.
+export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
   new Promise((resolve, reject) => {
     const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const stderrChunks: Buffer[] = [];
@@ -453,18 +455,21 @@ const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
       clearTimeout(deadline);
       reject(error);
     });
-    child.on('exit', (status) => {
+    child.on('exit', (code, signal) => {
       clearTimeout(deadline);
       if (timedOut) {
         reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
         return;
       }
-      if (status === 0) {
+      if (code === 0) {
         resolve();
         return;
       }
       const stderr = Buffer.concat(stderrChunks).toString('utf-8').trim();
-      reject(new Error(`'${file}' exited with status ${String(status)}${stderr === '' ? '' : `: ${stderr}`}`));
+      // A signal death reports code null; name the signal instead of the
+      // misleading 'status null'.
+      const cause = code === null ? `was killed by ${String(signal)}` : `exited with status ${String(code)}`;
+      reject(new Error(`'${file}' ${cause}${stderr === '' ? '' : `: ${stderr}`}`));
     });
   });
 

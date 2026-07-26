@@ -19,6 +19,7 @@ import {
   killContainer,
   deleteContainer,
   isContainerSubprocessTimeout,
+  spawnContainerCopy,
   type ContainerSubprocessRunner,
   type ContainerCopyRunner,
 } from './container.js';
@@ -294,6 +295,22 @@ describe('bounded container subprocess options', () => {
       caught = error;
     }
     expect(isContainerSubprocessTimeout(caught)).toBe(true);
+  });
+
+  test('the default copy runner names the fatal signal when the subprocess dies signalled', async () => {
+    let caught: unknown;
+    try {
+      await spawnContainerCopy('sh', ['-c', 'kill -TERM $$'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5_000,
+        killSignal: 'SIGKILL',
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("'sh' was killed by SIGTERM");
   });
 
   test('execContainerCommand is bounded by default', () => {
