@@ -12,10 +12,12 @@ import {
   listContainers,
   listImageNames,
   getContainerState,
+  getContainerIpv4,
   streamToContainer,
   streamFromContainer,
   copyFromContainer,
   execContainerCommand,
+  execContainerCommandOutput,
   stopContainer,
   killContainer,
   deleteContainer,
@@ -140,6 +142,26 @@ describe('listContainers failure signalling', () => {
     const listJson = JSON.stringify([{ id: 'pi-tin-demo', status: { state: 'running' } }]);
     expect(getContainerState('pi-tin-demo', () => listJson)).toBe('running');
     expect(getContainerState('pi-tin-ghost', () => listJson)).toBe('not-found');
+  });
+
+  test('getContainerIpv4 strips the CIDR suffix off the first attached network', () => {
+    const listJson = JSON.stringify([{
+      id: 'pi-tin-demo',
+      status: { state: 'running', networks: [{ ipv4Address: '192.168.64.5/24' }] },
+    }]);
+    expect(getContainerIpv4('pi-tin-demo', () => listJson)).toBe('192.168.64.5');
+  });
+
+  test('getContainerIpv4 is null for an unaddressed, unlisted, or unlistable container', () => {
+    const listJson = JSON.stringify([{ id: 'pi-tin-demo', status: { state: 'stopped' } }]);
+    expect(getContainerIpv4('pi-tin-demo', () => listJson)).toBeNull();
+    expect(getContainerIpv4('pi-tin-ghost', () => listJson)).toBeNull();
+
+    const { result } = withCapturedWarnings(() =>
+      getContainerIpv4('pi-tin-demo', () => {
+        throw new Error('boom');
+      }));
+    expect(result).toBeNull();
   });
 });
 
@@ -400,6 +422,38 @@ describe('bounded container subprocess options', () => {
       args: ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
       options: boundedOptions,
     }]);
+  });
+
+  test('execContainerCommandOutput returns captured stdout, bounded by default', () => {
+    const calls: CapturedCall[] = [];
+    const output = execContainerCommandOutput({
+      name: 'pi-tin-demo',
+      user: 'dev',
+      command: ['sh', '-c', 'sha256sum /home/dev/.local/bin/herdr'],
+      capture: (file, args, options): string => {
+        calls.push({ file, args, options });
+        return 'abc123  /home/dev/.local/bin/herdr\n';
+      },
+    });
+    expect(output).toBe('abc123  /home/dev/.local/bin/herdr\n');
+    expect(calls).toEqual([{
+      file: 'container',
+      args: ['exec', '--user', 'dev', 'pi-tin-demo', 'sh', '-c', 'sha256sum /home/dev/.local/bin/herdr'],
+      options: boundedOptions,
+    }]);
+  });
+
+  test('execContainerCommandOutput omits --user when no user is given', () => {
+    const calls: CapturedCall[] = [];
+    execContainerCommandOutput({
+      name: 'pi-tin-demo',
+      command: ['id', '-u'],
+      capture: (file, args, options): string => {
+        calls.push({ file, args, options });
+        return '0\n';
+      },
+    });
+    expect(calls[0]?.args).toEqual(['exec', 'pi-tin-demo', 'id', '-u']);
   });
 
   test('stopContainer is bounded by default', () => {
