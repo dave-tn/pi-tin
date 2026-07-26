@@ -1160,6 +1160,37 @@ describe('workspace state snapshot removal', () => {
     expect(measureWorkspaceStateSnapshot('demo')).toEqual({ path: dir, bytes: 150 });
   });
 
+  // A dangling target also proves the walk lstats the link itself — stat
+  // would throw ENOENT here — so the measurement can never pull in a target
+  // that lives outside the snapshot.
+  test('counts a symlink as its own lstat size, never its target', () => {
+    const dir = seedSnapshot('demo');
+    fs.symlinkSync('dangling-target', path.join(dir, 'link'));
+
+    expect(measureWorkspaceStateSnapshot('demo')).toEqual({
+      path: dir,
+      bytes: 150 + 'dangling-target'.length,
+    });
+  });
+
+  // Root ignores directory permissions, so the unreadable subtree would be
+  // counted and the test would fail for the wrong reason.
+  test.skipIf(process.getuid?.() === 0)(
+    'skips unreadable subtrees instead of aborting the measurement',
+    () => {
+      const dir = seedSnapshot('demo');
+      const locked = path.join(dir, 'locked');
+      fs.mkdirSync(locked);
+      fs.writeFileSync(path.join(locked, 'hidden'), 'c'.repeat(25));
+      fs.chmodSync(locked, 0o000);
+      try {
+        expect(measureWorkspaceStateSnapshot('demo')).toEqual({ path: dir, bytes: 150 });
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    },
+  );
+
   test('measures nothing for a workspace that never persisted state', () => {
     expect(measureWorkspaceStateSnapshot('demo')).toBeNull();
   });

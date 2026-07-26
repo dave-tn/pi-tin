@@ -754,16 +754,32 @@ export interface WorkspaceStateSnapshot {
   bytes: number;
 }
 
+function readEntriesSafe(dir: string): fs.Dirent[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+// Best-effort: an entry that cannot be read — unreadable subtree, or a file
+// racing away mid-walk — is skipped, so a damaged snapshot yields an
+// undercount for the preview instead of aborting the delete that follows.
 function directorySize(dir: string): number {
+  const entries = readEntriesSafe(dir);
   let total = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      total += directorySize(full);
-    } else if (entry.isFile()) {
-      // lstat, never stat: a symlink's target may live outside the snapshot,
-      // and counting it would overstate what deleting the snapshot frees.
-      total += fs.lstatSync(full).size;
+    try {
+      if (entry.isDirectory()) {
+        total += directorySize(full);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        // lstat, never stat: a symlink's target may live outside the snapshot,
+        // and counting it would overstate what deleting the snapshot frees.
+        total += fs.lstatSync(full).size;
+      }
+    } catch {
+      // Skipped, same as an unreadable directory.
     }
   }
   return total;
