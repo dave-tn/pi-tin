@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { confirm, input, select } from '@inquirer/prompts';
+import { dotDirsLabel } from '../lib/agents.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { createAgentProfile, listAgentProfiles } from '../lib/agent-profiles.js';
 import type { AgentProfileMode } from '../lib/agent-profiles.js';
@@ -28,8 +29,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
 
   console.log('Found agents on your system:\n');
   for (const agent of foundAgents) {
-    const dirs = agent.dotDirs.map((d) => `~/${d}`).join(', ');
-    console.log(`  ${agent.name} (${dirs})`);
+    console.log(`  ${agent.name} (${dotDirsLabel(agent)})`);
   }
   console.log('');
 

@@ -91,6 +91,11 @@ export function defaultProfileNameFor(agent: Pick<KnownAgent, 'name'>): string {
   return agent.name.toLowerCase().replace(/\s+/g, '-');
 }
 
+/** Human-readable list of an agent's host config directories, tilde-relative. */
+export function dotDirsLabel(agent: Pick<KnownAgent, 'dotDirs'>): string {
+  return agent.dotDirs.map((dir) => `~/${dir}`).join(', ');
+}
+
 /** Native install metadata for the workspace's tools, in tool order. */
 export function nativeAgentInstalls(packages: Tool[]): NativeAgentInstall[] {
   return packages.flatMap((pkg) => {

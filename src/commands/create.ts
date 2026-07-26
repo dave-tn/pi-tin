@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import chalk from 'chalk';
 import { select, checkbox, confirm, input } from '@inquirer/prompts';
-import { containerHomeDir, expandTilde, getWorkspacesDir, findProjectRoot, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
+import { containerHomeDir, expandTilde, getWorkspacesDir, findProjectRoot } from '../lib/paths.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { listContainerProfiles, loadContainerProfile } from '../lib/profiles.js';
 import { workspaceExists, writeWorkspace, isValidWorkspaceName, invalidWorkspaceNameMessage, WORKSPACE_NAME_RULE } from '../lib/workspaces.js';
@@ -11,6 +11,7 @@ import type { HostMount, ContainerProfile, Tool, Workspace } from '../lib/valida
 import { KNOWN_AGENTS, defaultProfileNameFor, toolDisplayName, toWorkspaceTool } from '../lib/agents.js';
 import type { KnownAgent } from '../lib/agents.js';
 import { listAgentProfiles, createAgentProfile } from '../lib/agent-profiles.js';
+import { agentProfileNameError } from '../lib/agent-discovery.js';
 import {
   ensureWorkspaceTmuxDir,
   getHostTmuxConfigPath,
@@ -160,15 +161,11 @@ async function promptAndCreateAgentProfile(agent: KnownAgent): Promise<string> {
   const profileName = await input({
     message: `${agent.name} — agent profile name:`,
     default: defaultProfileNameFor(agent),
-    validate: (value) => {
-      if (value.trim().length === 0) return 'Name is required';
-      if (!isSafePathSegment(value.trim())) return SAFE_PATH_SEGMENT_RULE;
-      const existing = listAgentProfiles();
-      if (existing.some((p) => p.name === value.trim())) {
-        return `Agent profile '${value.trim()}' already exists`;
-      }
-      return true;
-    },
+    validate: (value) =>
+      agentProfileNameError({
+        value,
+        existingProfileNames: listAgentProfiles().map((p) => p.name),
+      }) ?? true,
   });
 
   const name = profileName.trim();
