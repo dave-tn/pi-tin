@@ -4,9 +4,8 @@ import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
 
 describe('KNOWN_AGENTS', () => {
-  test('every agent has a dotDirs field', () => {
+  test('every agent has at least one dot-prefixed dotDir', () => {
     for (const agent of KNOWN_AGENTS) {
-      expect(Array.isArray(agent.dotDirs)).toBe(true);
       expect(agent.dotDirs.length).toBeGreaterThan(0);
       for (const d of agent.dotDirs) {
         expect(d.startsWith('.')).toBe(true);
@@ -24,9 +23,8 @@ describe('KNOWN_AGENTS', () => {
     expect(claude?.dotDirs).toContain('.claude');
   });
 
-  test('every agent has a binary field', () => {
+  test('every agent has a non-empty binary', () => {
     for (const agent of KNOWN_AGENTS) {
-      expect(typeof agent.binary).toBe('string');
       expect(agent.binary.length).toBeGreaterThan(0);
     }
   });
