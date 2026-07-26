@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  nextTimerChunkMs,
   queryHerdrAgentStates,
   runAutoStopHelper,
   type AutoStopDeps,
@@ -41,6 +42,18 @@ describe('queryHerdrAgentStates', () => {
       .toEqual({ kind: 'unavailable' });
     expect(queryHerdrAgentStates('pi-tin-demo', 'dev', () => JSON.stringify({ nope: true })))
       .toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('nextTimerChunkMs', () => {
+  test('clamps a wait longer than the timer ceiling', () => {
+    expect(nextTimerChunkMs(2_147_483_648)).toBe(2_147_483_647);
+    expect(nextTimerChunkMs(360_000_000_000)).toBe(2_147_483_647);
+  });
+
+  test('passes a wait inside the ceiling through unchanged', () => {
+    expect(nextTimerChunkMs(30_000)).toBe(30_000);
+    expect(nextTimerChunkMs(2_147_483_647)).toBe(2_147_483_647);
   });
 });
 

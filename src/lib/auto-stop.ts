@@ -27,6 +27,15 @@ export const AUTO_STOP_COMMAND = '__auto-stop-if-idle';
 
 const MAX_TIMER_MS = 2_147_483_647;
 
+/**
+ * A wait longer than the timer ceiling is served in chunks: `setTimeout`
+ * silently fires immediately above this bound, so a long
+ * `stopAfterLastSession` would otherwise stop the workspace at once.
+ */
+export function nextTimerChunkMs(remainingMs: number): number {
+  return Math.min(remainingMs, MAX_TIMER_MS);
+}
+
 async function sleepUntil(deadlineMs: number): Promise<void> {
   while (true) {
     const remainingMs = deadlineMs - Date.now();
@@ -35,7 +44,7 @@ async function sleepUntil(deadlineMs: number): Promise<void> {
     }
 
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(remainingMs, MAX_TIMER_MS));
+      setTimeout(resolve, nextTimerChunkMs(remainingMs));
     });
   }
 }
