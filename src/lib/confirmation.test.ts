@@ -33,7 +33,12 @@ describe('confirmDestructive', () => {
       const cliErr: CliError = err instanceof CliError ? err : (() => { throw err; })();
       expect(cliErr.exitCode).toBe(EXIT.CONFIRMATION_REQUIRED);
       expect(cliErr.detail.code).toBe('confirmation_required');
-      expect(cliErr.message).toContain("delete agent profile 'x'");
+      expect(cliErr.message).toBe(
+        "Cannot delete agent profile 'x' non-interactively without confirmation.",
+      );
+      expect(cliErr.detail.remediation).toBe(
+        "Re-run with --force to delete agent profile 'x' non-interactively (confirm with the user first).",
+      );
     }
   });
 });

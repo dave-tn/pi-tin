@@ -78,8 +78,7 @@ describe('runAddCommand — direct arg', () => {
     expect(err.exitCode).toBe(EXIT.NOT_FOUND);
     expect(err.detail.code).toBe('not_found');
     expect(err.detail.badInput).toBe('ghost');
-    expect(err.message).toContain('not found');
-    expect(err.message).toContain('Available: work');
+    expect(err.message).toBe("Workspace 'ghost' not found. Available: work");
   });
 
   test('errors and exits when the named workspace name is invalid', async () => {
@@ -94,8 +93,10 @@ describe('runAddCommand — direct arg', () => {
     });
     await expect(runAddCommand('Bad Name', deps)).rejects.toThrow('exit');
     expect(exitCode).toBe(1);
-    expect(errs.join('\n')).toContain('Invalid');
-    expect(errs.join('\n')).toContain('Bad Name');
+    expect(errs.join('\n')).toContain(
+      "Invalid workspace name 'Bad Name'. Names must be lowercase alphanumeric, "
+      + "and may contain '.', '-', or '_'. Must start with a letter or digit.",
+    );
     expect(appended).toBe(false);
   });
 
@@ -109,22 +110,25 @@ describe('runAddCommand — direct arg', () => {
     expect(err).toBeInstanceOf(CliError);
     if (!(err instanceof CliError)) throw new Error('unreachable');
     expect(err.exitCode).toBe(EXIT.NOT_FOUND);
-    expect(err.message).toContain('no workspaces configured');
+    expect(err.message).toBe("Workspace 'ghost' not found — no workspaces configured.");
     expect(appended).toBe(false);
   });
 
-  test('refuses when the directory is already in the named workspace', async () => {
+  test('refuses when the directory is already in the named workspace, naming the workspace', async () => {
     let appended = false;
     let exitCode: number | undefined;
+    const errs: string[] = [];
     const deps = createDeps({
       listWorkspaces: () => [match('work', ['/Users/dave/Dev/new-app'])],
       findWorkspacesForDirectory: () => [match('work', ['/Users/dave/Dev/new-app'])],
       appendProjectToWorkspace: () => { appended = true; },
+      error: (...a: unknown[]) => errs.push(a.join(' ')),
       exit: (code) => { exitCode = code; throw new Error('exit'); },
     });
     await expect(runAddCommand('work', deps)).rejects.toThrow('exit');
     expect(appended).toBe(false);
     expect(exitCode).toBe(1);
+    expect(errs.join('\n')).toContain("This directory is already in workspace 'work'.");
   });
 });
 

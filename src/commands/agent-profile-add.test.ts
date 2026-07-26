@@ -70,6 +70,13 @@ describe('agent-profile add', () => {
     expect(err.exitCode).toBe(EXIT.VALIDATION);
     expect(err.detail.code).toBe('validation');
     expect(err.detail.badInput).toBe('../evil');
+    expect(err.message).toBe(
+      "Invalid agent profile name '../evil'. "
+      + "Names must not be '.' or '..', and must not contain '/' or '\\'.",
+    );
+    expect(err.detail.remediation).toBe(
+      "Names must not be '.' or '..', and must not contain '/' or '\\'.",
+    );
   });
 
   test('already-exists is not a validation error and keeps its real message', async () => {

@@ -111,31 +111,48 @@ describe('container CLI JSON schemas', () => {
   });
 });
 
+// Hand-written copy of the user-facing rule text in validators.ts. Deliberately
+// not imported: an expectation derived from the module under test cannot detect
+// the message changing, because both sides move together.
+const WORKSPACE_STATE_RULE =
+  'Workspace state paths must be home-relative (e.g. ".zsh_history" or ".local/share/zoxide"): '
+  + 'no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".';
+
 describe('unknown-key rejection (typo detection)', () => {
-  test('rejects unknown top-level profile keys', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, packges: [] })).toThrow();
+  test('rejects unknown top-level profile keys, naming the offending key', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, packges: [] })).toThrow(
+      'Invalid container profile configuration:\n  packges: Invalid key: Expected never but received "packges"',
+    );
   });
 
-  test('rejects unknown top-level workspace keys', () => {
+  test('rejects unknown top-level workspace keys, naming the offending key', () => {
     expect(() =>
       validateWorkspace({ profile: 'default', projects: ['/tmp/test'], stopAfterLastSesion: '5m' }),
-    ).toThrow();
+    ).toThrow(
+      'Invalid workspace configuration:\n  stopAfterLastSesion: Invalid key: Expected never but received "stopAfterLastSesion"',
+    );
   });
 
-  test('rejects unknown nested host keys', () => {
+  test('rejects unknown nested host keys with the dotted field path', () => {
     expect(() =>
       validateWorkspace({ profile: 'default', projects: ['/tmp/test'], host: { sshAgnt: true } }),
-    ).toThrow();
+    ).toThrow(
+      'Invalid workspace configuration:\n  host.sshAgnt: Invalid key: Expected never but received "sshAgnt"',
+    );
   });
 });
 
 describe('root-level validation errors', () => {
   test('null workspace input produces a message naming the problem', () => {
-    expect(() => validateWorkspace(null)).toThrow(/Expected Object but received null/);
+    expect(() => validateWorkspace(null)).toThrow(
+      'Invalid workspace configuration:\n  Invalid type: Expected Object but received null',
+    );
   });
 
   test('non-object workspace input produces a message naming the problem', () => {
-    expect(() => validateWorkspace('hello')).toThrow(/Expected Object but received "hello"/);
+    expect(() => validateWorkspace('hello')).toThrow(
+      'Invalid workspace configuration:\n  Invalid type: Expected Object but received "hello"',
+    );
   });
 });
 
@@ -156,9 +173,15 @@ describe('ContainerProfileSchema optional collection fields', () => {
     expect(profile.env).toEqual({});
   });
 
-  test('still enforces element rules when the fields are supplied', () => {
-    expect(() => validateContainerProfile({ ...minimal, packages: ['bad name'] })).toThrow();
-    expect(() => validateContainerProfile({ ...minimal, env: { 'BAD-KEY': 'x' } })).toThrow();
+  test('still enforces element rules when the fields are supplied, naming the element', () => {
+    expect(() => validateContainerProfile({ ...minimal, packages: ['bad name'] })).toThrow(
+      'Invalid container profile configuration:\n'
+      + '  packages.0: Invalid format: Expected /^[a-zA-Z0-9][a-zA-Z0-9.+_-]*$/ but received "bad name"',
+    );
+    expect(() => validateContainerProfile({ ...minimal, env: { 'BAD-KEY': 'x' } })).toThrow(
+      'Invalid container profile configuration:\n'
+      + '  env.BAD-KEY: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "BAD-KEY"',
+    );
   });
 
   test('workspace_state defaults to empty when omitted', () => {
@@ -175,29 +198,51 @@ describe('ContainerProfileSchema workspace_state', () => {
     expect(profile.workspace_state).toEqual(['.zsh_history', '.local/share/zoxide']);
   });
 
+  // Every rejection must name the offending array element and restate the rule
+  // — a regression that collapsed these into a bare "invalid profile" would
+  // leave the user with no idea which entry to fix.
+  const expectedRejection = `Invalid container profile configuration:\n  workspace_state.0: ${WORKSPACE_STATE_RULE}`;
+
   test('rejects absolute paths', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['/etc/passwd'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['/etc/passwd'] }))
+      .toThrow(expectedRejection);
   });
 
   test('rejects paths that escape home via .. segments', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['../secrets'] })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.local/../../x'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['../secrets'] }))
+      .toThrow(expectedRejection);
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.local/../../x'] }))
+      .toThrow(expectedRejection);
   });
 
   test('rejects bare . or .. segments', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.'] })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['..'] })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['a/./b'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.'] }))
+      .toThrow(expectedRejection);
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['..'] }))
+      .toThrow(expectedRejection);
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['a/./b'] }))
+      .toThrow(expectedRejection);
   });
 
   test('rejects paths with shell metacharacters or whitespace', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/$(whoami)'] })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a b'] })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a\nb'] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/$(whoami)'] }))
+      .toThrow(expectedRejection);
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a b'] }))
+      .toThrow(expectedRejection);
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: ['.config/a\nb'] }))
+      .toThrow(expectedRejection);
   });
 
   test('rejects an empty path', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: [''] })).toThrow();
+    expect(() => validateContainerProfile({ ...baseProfile, workspace_state: [''] }))
+      .toThrow(expectedRejection);
+  });
+
+  test('names the failing element by index, not just the field', () => {
+    expect(() => validateContainerProfile({
+      ...baseProfile,
+      workspace_state: ['.zsh_history', '.config/a b'],
+    })).toThrow(`Invalid container profile configuration:\n  workspace_state.1: ${WORKSPACE_STATE_RULE}`);
   });
 });
 
@@ -210,12 +255,17 @@ describe('ContainerProfileSchema cpus', () => {
     expect(validateContainerProfile(baseProfile).cpus).toBeUndefined();
   });
 
-  test('rejects zero, negative, fractional, and non-finite cpus', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, cpus: 0 })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, cpus: -2 })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, cpus: 1.5 })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, cpus: Infinity })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, cpus: NaN })).toThrow();
+  test('rejects zero, negative, fractional, and non-finite cpus, naming the field and value', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, cpus: 0 }))
+      .toThrow('Invalid container profile configuration:\n  cpus: Invalid value: Expected >=1 but received 0');
+    expect(() => validateContainerProfile({ ...baseProfile, cpus: -2 }))
+      .toThrow('Invalid container profile configuration:\n  cpus: Invalid value: Expected >=1 but received -2');
+    expect(() => validateContainerProfile({ ...baseProfile, cpus: 1.5 }))
+      .toThrow('Invalid container profile configuration:\n  cpus: Invalid integer: Received 1.5');
+    expect(() => validateContainerProfile({ ...baseProfile, cpus: Infinity }))
+      .toThrow('Invalid container profile configuration:\n  cpus: Invalid integer: Received Infinity');
+    expect(() => validateContainerProfile({ ...baseProfile, cpus: NaN }))
+      .toThrow('Invalid container profile configuration:\n  cpus: Invalid type: Expected number but received NaN');
   });
 });
 
@@ -233,15 +283,33 @@ describe('ContainerProfileSchema memory', () => {
     }
   });
 
-  test('rejects nonsense and malformed memory values', () => {
-    expect(() => validateContainerProfile({ ...baseProfile, memory: 'banana' })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, memory: '8 g' })).toThrow();
-    expect(() => validateContainerProfile({ ...baseProfile, memory: '' })).toThrow();
+  // The size pattern itself is long and is already pinned by the accept tests
+  // above, so the wildcard covers it — what must not regress is the message
+  // naming the `memory` field and echoing the value the user actually wrote.
+  test('rejects nonsense and malformed memory values, naming the field and value', () => {
+    expect(() => validateContainerProfile({ ...baseProfile, memory: 'banana' }))
+      .toThrow(/^Invalid container profile configuration:\n {2}memory: Invalid format: .* but received "banana"$/);
+    expect(() => validateContainerProfile({ ...baseProfile, memory: '8 g' }))
+      .toThrow(/^Invalid container profile configuration:\n {2}memory: Invalid format: .* but received "8 g"$/);
+    expect(() => validateContainerProfile({ ...baseProfile, memory: '' }))
+      .toThrow(/^Invalid container profile configuration:\n {2}memory: Invalid format: .* but received ""$/);
   });
 
-  test('rejects zero-valued memory sizes', () => {
-    for (const mem of ['0', '0g', '0.0m', '00', '0b', '0.0']) {
-      expect(() => validateContainerProfile({ ...baseProfile, memory: mem })).toThrow();
+  test('rejects zero-valued memory sizes, echoing the rejected value', () => {
+    const zeroSizes = ['0', '0g', '0.0m', '00', '0b', '0.0'] as const;
+    for (const mem of zeroSizes) {
+      const err = (() => {
+        try {
+          validateContainerProfile({ ...baseProfile, memory: mem });
+        } catch (e) {
+          return e;
+        }
+        return undefined;
+      })();
+      expect(err).toBeInstanceOf(Error);
+      if (!(err instanceof Error)) throw new Error('unreachable');
+      expect(err.message).toStartWith('Invalid container profile configuration:\n  memory: Invalid format:');
+      expect(err.message).toContain(`but received "${mem}"`);
     }
   });
 
@@ -335,15 +403,38 @@ describe('WorkspaceSchema host', () => {
     expect(result.host?.env).toEqual({ ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY}' });
   });
 
-  test('rejects malformed host.env keys', () => {
-    const invalidKeys = ['FOO=BAR', 'FOO\nBAR', '1FOO', 'FOO BAR', ''];
-    for (const key of invalidKeys) {
+  test('rejects malformed host.env keys, naming the offending key', () => {
+    // Hand-written expectations: the value of these tests is that the message
+    // still points at `host.env.<key>` rather than a generic rejection.
+    const invalidKeys: ReadonlyArray<{ key: string; message: string }> = [
+      {
+        key: 'FOO=BAR',
+        message: 'Invalid workspace configuration:\n'
+          + '  host.env.FOO=BAR: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "FOO=BAR"',
+      },
+      {
+        key: '1FOO',
+        message: 'Invalid workspace configuration:\n'
+          + '  host.env.1FOO: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "1FOO"',
+      },
+      {
+        key: 'FOO BAR',
+        message: 'Invalid workspace configuration:\n'
+          + '  host.env.FOO BAR: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received "FOO BAR"',
+      },
+      {
+        key: '',
+        message: 'Invalid workspace configuration:\n'
+          + '  host.env.: Invalid format: Expected /^[A-Za-z_][A-Za-z0-9_]*$/ but received ""',
+      },
+    ];
+    for (const { key, message } of invalidKeys) {
       expect(() =>
         validateWorkspace({
           ...baseWorkspace,
           host: { env: { [key]: 'value' } },
         }),
-      ).toThrow();
+      ).toThrow(message);
     }
   });
 });
@@ -372,46 +463,70 @@ describe('WorkspaceSchema tools', () => {
     // `pi-tin create` writes a minimal {name, package} tool. Internal agent
     // metadata must not be persisted; a workspace carrying it is rejected so
     // the mismatch is surfaced rather than silently ignored.
-    const invalidTools = [
+    const invalidTools: ReadonlyArray<{ tool: Record<string, unknown>; message: string }> = [
       {
-        name: 'Claude Code',
-        package: '@anthropic-ai/claude-code@latest',
-        dotDirs: ['.claude'],
+        tool: {
+          name: 'Claude Code',
+          package: '@anthropic-ai/claude-code@latest',
+          dotDirs: ['.claude'],
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.dotDirs: Invalid key: Expected never but received "dotDirs"',
       },
       {
-        name: 'Claude Code',
-        package: '@anthropic-ai/claude-code@latest',
-        hostModeSupported: false,
+        tool: {
+          name: 'Claude Code',
+          package: '@anthropic-ai/claude-code@latest',
+          hostModeSupported: false,
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.hostModeSupported: Invalid key: Expected never but received "hostModeSupported"',
       },
       {
-        name: 'Codex',
-        package: '@openai/codex@latest',
-        hostModeWarning: 'warning',
+        tool: {
+          name: 'Codex',
+          package: '@openai/codex@latest',
+          hostModeWarning: 'warning',
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.hostModeWarning: Invalid key: Expected never but received "hostModeWarning"',
       },
       {
-        name: 'Claude Code',
-        package: '@anthropic-ai/claude-code@latest',
-        binary: 'claude',
+        tool: {
+          name: 'Claude Code',
+          package: '@anthropic-ai/claude-code@latest',
+          binary: 'claude',
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.binary: Invalid key: Expected never but received "binary"',
       },
       {
-        name: 'Claude Code',
-        package: '@anthropic-ai/claude-code@latest',
-        skipPermissionsFlag: '--dangerously-skip-permissions',
+        tool: {
+          name: 'Claude Code',
+          package: '@anthropic-ai/claude-code@latest',
+          skipPermissionsFlag: '--dangerously-skip-permissions',
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.skipPermissionsFlag: Invalid key: Expected never but received "skipPermissionsFlag"',
       },
       {
-        name: 'Claude Code',
-        package: '@anthropic-ai/claude-code@latest',
-        containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
+        tool: {
+          name: 'Claude Code',
+          package: '@anthropic-ai/claude-code@latest',
+          containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
+        },
+        message: 'Invalid workspace configuration:\n'
+          + '  tools.0.containerEnv: Invalid key: Expected never but received "containerEnv"',
       },
     ];
 
-    for (const tool of invalidTools) {
+    for (const { tool, message } of invalidTools) {
       expect(() =>
         validateWorkspace({
           ...baseWorkspace,
           tools: [tool],
         }),
-      ).toThrow();
+      ).toThrow(message);
     }
   });
 });
@@ -466,9 +581,11 @@ describe('WorkspaceSchema sshd and attach', () => {
     expect(result.attach).toBe('herdr');
   });
 
-  test('rejects an unknown attach mode naming the field', () => {
-    expect(() => validateWorkspace({ ...baseWorkspace, attach: 'tmux' }))
-      .toThrow(/attach/);
+  test('rejects an unknown attach mode, naming the field and listing the modes', () => {
+    expect(() => validateWorkspace({ ...baseWorkspace, attach: 'tmux' })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  attach: Invalid type: Expected ("shell" | "herdr") but received "tmux"',
+    );
   });
 });
 
@@ -537,21 +654,30 @@ describe('WorkspaceSchema stopAfterLastSession', () => {
     }).stopAfterLastSession).toBe('1h');
   });
 
-  test('rejects invalid stopAfterLastSession values', () => {
+  test('rejects invalid stopAfterLastSession values, naming the field and value', () => {
     expect(() => validateWorkspace({
       ...baseWorkspace,
       stopAfterLastSession: '0s',
-    })).toThrow();
+    })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  stopAfterLastSession: Invalid format: Expected /^[1-9]\\d*[smh]$/ but received "0s"',
+    );
 
     expect(() => validateWorkspace({
       ...baseWorkspace,
       stopAfterLastSession: '30',
-    })).toThrow();
+    })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  stopAfterLastSession: Invalid format: Expected /^[1-9]\\d*[smh]$/ but received "30"',
+    );
 
     expect(() => validateWorkspace({
       ...baseWorkspace,
       stopAfterLastSession: '1d',
-    })).toThrow();
+    })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  stopAfterLastSession: Invalid format: Expected /^[1-9]\\d*[smh]$/ but received "1d"',
+    );
   });
 });
 

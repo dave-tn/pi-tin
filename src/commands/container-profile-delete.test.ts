@@ -81,5 +81,6 @@ describe('container-profile delete', () => {
     if (!(err instanceof CliError)) throw new Error('unreachable');
     expect(err.exitCode).toBe(EXIT.NOT_FOUND);
     expect(err.detail.code).toBe('not_found');
+    expect(err.message).toBe("Container profile 'missing' not found.");
   });
 });

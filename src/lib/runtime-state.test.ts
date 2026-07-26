@@ -336,6 +336,11 @@ describe('runtime-state', () => {
 
     const runtime = api.reconcileWorkspaceRuntimeState('demo');
     expect(runtime.runtimeState).toBe('corrupt');
-    expect(runtime.warnings.length).toBeGreaterThan(0);
+    // Warnings are surfaced to the user, so each must name the workspace and
+    // say which file is unreadable — one generic "corrupt state" is useless.
+    expect(runtime.warnings).toEqual([
+      "Runtime metadata is invalid for workspace 'demo'.",
+      "One or more session records are invalid for workspace 'demo'.",
+    ]);
   });
 });
