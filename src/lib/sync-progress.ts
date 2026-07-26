@@ -1,4 +1,5 @@
 import type { WorkspaceStateDirection } from './workspace-state.js';
+import { formatByteProgress, formatBytes } from './cli-output.js';
 import { formatDurationMs } from './duration.js';
 
 // How a workspace-state entry's sync ended, as shown to the user. bytes and
@@ -9,34 +10,6 @@ export type SyncEntryOutcome =
   | { kind: 'skipped' }
   | { kind: 'failed' }
   | { kind: 'timed-out' };
-
-// The final unit: every byte count is less than Infinity, so .find() below
-// always matches it or an earlier unit — this is also the fallback for the
-// (never-reached) undefined case that noUncheckedIndexedAccess requires
-// handling.
-const LARGEST_BYTE_UNIT = { limit: Number.POSITIVE_INFINITY, divisor: 1_000_000_000, suffix: 'GB', decimals: 1 } as const;
-
-// Decimal units to match how Finder and `container` report sizes.
-const BYTE_UNITS = [
-  { limit: 1_000, divisor: 1, suffix: 'B', decimals: 0 },
-  { limit: 1_000_000, divisor: 1_000, suffix: 'KB', decimals: 0 },
-  { limit: 10_000_000, divisor: 1_000_000, suffix: 'MB', decimals: 1 },
-  { limit: 1_000_000_000, divisor: 1_000_000, suffix: 'MB', decimals: 0 },
-  LARGEST_BYTE_UNIT,
-] as const;
-
-function byteUnitFor(bytes: number): (typeof BYTE_UNITS)[number] {
-  return BYTE_UNITS.find((unit) => bytes < unit.limit) ?? LARGEST_BYTE_UNIT;
-}
-
-function scaleBytes(bytes: number, unit: (typeof BYTE_UNITS)[number]): string {
-  return (bytes / unit.divisor).toFixed(unit.decimals);
-}
-
-export function formatBytes(bytes: number): string {
-  const unit = byteUnitFor(bytes);
-  return `${scaleBytes(bytes, unit)} ${unit.suffix}`;
-}
 
 export function formatCopyDuration(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : formatDurationMs(ms);
@@ -75,9 +48,12 @@ function progressBar(fraction: number): string {
   return `[${`${solid}${head}`.padEnd(BAR_WIDTH)}]`;
 }
 
+// Rounded to whole bytes before formatting: the raw rate is a float, and
+// formatBytes prints its base unit verbatim (a rate of 333.33… B/s would
+// otherwise render every digit of the division).
 function speedPerSecond(bytes: number, elapsedMs: number): string {
   const perSecond = elapsedMs > 0 ? (bytes / elapsedMs) * 1000 : 0;
-  return `${formatBytes(perSecond)}/s`;
+  return `${formatBytes(Math.round(perSecond))}/s`;
 }
 
 // One in-flight line. Copy-out with a known total gets the bar; copy-out
@@ -89,9 +65,8 @@ export function formatLiveLine(state: {
   elapsedMs: number;
 }): string {
   if (state.currentBytes !== null && state.totalBytes !== null) {
-    const unit = byteUnitFor(state.totalBytes);
     const fraction = state.totalBytes > 0 ? state.currentBytes / state.totalBytes : 1;
-    return `${progressBar(fraction)}  ${scaleBytes(state.currentBytes, unit)}/${scaleBytes(state.totalBytes, unit)} ${unit.suffix}  ${speedPerSecond(state.currentBytes, state.elapsedMs)}`;
+    return `${progressBar(fraction)}  ${formatByteProgress(state.currentBytes, state.totalBytes)}  ${speedPerSecond(state.currentBytes, state.elapsedMs)}`;
   }
   if (state.currentBytes !== null) {
     return `${formatBytes(state.currentBytes)}  ${speedPerSecond(state.currentBytes, state.elapsedMs)}`;
