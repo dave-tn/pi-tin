@@ -509,6 +509,10 @@ describe('generateDockerfile sshd', () => {
     expect(dockerfile).toContain('COPY pi-tin-authorized-keys $HOME_DIR/.ssh/authorized_keys');
     expect(dockerfile).toContain('RUN chmod 600 $HOME_DIR/.ssh/authorized_keys');
     expect(dockerfile).toContain('COPY pi-tin-sshd-config $HOME_DIR/.config/pi-tin-sshd/sshd_config');
+    const redirect = 'case $- in *i*) if [ "$PWD" = "$HOME" ]; then cd /workspace; fi ;; esac';
+    expect(dockerfile).toContain(`RUN echo '${redirect}' >> $HOME_DIR/.zshrc \\`);
+    expect(dockerfile).toContain(`    && echo '${redirect}' >> $HOME_DIR/.bashrc \\`);
+    expect(dockerfile).toContain(`    && echo '${redirect}' >> $HOME_DIR/.profile`);
 
     const authorizedKeys = extras.find((extra) => extra.name === 'pi-tin-authorized-keys');
     expect(authorizedKeys?.content).toBe('ssh-ed25519 AAAATESTKEY pi-tin\n');
@@ -535,6 +539,16 @@ describe('generateDockerfile sshd', () => {
     expect(keygenIndex).toBeGreaterThan(userIndex);
   });
 
+  test('rc redirect is appended after post_setup so home-dir shell setup cannot overwrite it', () => {
+    const withPostSetup: ContainerProfile = { ...baseProfile, post_setup: ['echo "setup"'] };
+    const { dockerfile } = generateDockerfile(withPostSetup, [], sshdOpts);
+
+    const postSetupIndex = dockerfile.indexOf('RUN echo "setup"');
+    const redirectIndex = dockerfile.indexOf('cd /workspace; fi');
+    expect(postSetupIndex).toBeGreaterThan(-1);
+    expect(redirectIndex).toBeGreaterThan(postSetupIndex);
+  });
+
   test('.local/bin is on PATH with and without sshd', () => {
     const withSshd = generateDockerfile(baseProfile, [], sshdOpts).dockerfile;
     const withoutSshd = generateDockerfile(baseProfile, [], noWraps).dockerfile;
@@ -548,6 +562,7 @@ describe('generateDockerfile sshd', () => {
 
     expect(dockerfile).not.toContain('openssh-server');
     expect(dockerfile).not.toContain('ssh-keygen');
+    expect(dockerfile).not.toContain('cd /workspace; fi');
     expect(extras.map((extra) => extra.name)).toEqual([]);
   });
 

@@ -424,6 +424,23 @@ export function generateDockerfile(
     lines.push('');
   }
 
+  // ssh entry (plain ssh and herdr panes) lands in $HOME, which holds no
+  // project code. Redirect interactive shells that start there to /workspace.
+  // The $PWD guard leaves herdr's follow-cwd panes (opened from a project
+  // directory) untouched. Appended after post_install/post_setup/native
+  // installs — the writers of rc files — so a home-dir shell setup (e.g.
+  // oh-my-zsh) cannot overwrite it. .profile covers /bin/sh login shells in
+  // profiles that ship no chsh.
+  if (opts.sshd !== null) {
+    const sshLandingRedirect = 'case $- in *i*) if [ "$PWD" = "$HOME" ]; then cd /workspace; fi ;; esac';
+    lines.push(
+      `RUN echo '${sshLandingRedirect}' >> $HOME_DIR/.zshrc \\`,
+      `    && echo '${sshLandingRedirect}' >> $HOME_DIR/.bashrc \\`,
+      `    && echo '${sshLandingRedirect}' >> $HOME_DIR/.profile`,
+    );
+    lines.push('');
+  }
+
   // Workspace npm packages (as user, using npm prefix).
   // Single RUN so npm parallelises fetches across all packages.
   if (npmSpecs.length > 0) {

@@ -472,6 +472,7 @@ Then any SSH-based tool works against the alias — `ssh pi-tin-<workspace>`, `s
 - **Environment matches `container exec`.** The container start snapshots its environment (image `ENV`, `host.env` values, `GH_TOKEN`, the forwarded `SSH_AUTH_SOCK`) into `~/.ssh/environment`, so ssh sessions see what shell sessions see.
 - **Host keys** are baked per image build and pinned per workspace (`~/.config/pi-tin/ssh/known_hosts.<workspace>`, `accept-new`). A rebuild mints new host keys and clears that file, so reconnects stay prompt-free; stop/delete remove the Host block (and delete clears the pinned keys).
 - **Session accounting caveat:** raw ssh sessions are invisible to pi-tin — auto-stop counts only `pi-tin open` sessions. For VS Code or other external-client workflows, raise `stopAfterLastSession` or keep a pi-tin session open.
+- **Landing directory:** interactive ssh logins that would start in the (empty) home directory are redirected to `/workspace`. Shells already started elsewhere — herdr panes opened from a project directory, `ssh <alias> <command>` — are unaffected.
 
 ## herdr attach
 
@@ -480,7 +481,7 @@ Then any SSH-based tool works against the alias — `ssh pi-tin-<workspace>`, `s
 - **Prerequisite:** herdr installed on the Mac. The server side needs nothing: on first attach the client installs a matching server into the workspace's `~/.local/bin` (~10MB). pi-tin persists that binary across container lives via workspace state, so you're prompted to install once, not on every open — it only re-installs after you upgrade the Mac's herdr client (the persisted server must match it).
 - **Detach and auto-stop:** detaching the client ends the pi-tin session and starts the `stopAfterLastSession` countdown, but the stop is **agent-aware** — while any herdr pane reports a working agent, the countdown re-arms. Once agents are idle the workspace stops; herdr session state is snapshotted across container lives (via workspace state), so the next open restores the layout and herdr resumes supported agents (`resume_agents_on_restore`, on by default).
 - **Escape hatches:** `--attach shell` (or `pt shell`) opens a plain login shell on a herdr workspace; `sshd: true` with `attach: shell` keeps sshd in the image so `pt herdr` works ad hoc. A herdr attach on an image built without sshd is refused with the fix (`attach: herdr` or `sshd: true`, then reopen to rebuild).
-- `open`'s working-directory behaviour (`cd` into a project first) applies to shell attaches only — herdr manages its own pane cwds.
+- `open`'s working-directory behaviour (`cd` into a project first) applies to shell attaches only — herdr manages its own pane cwds. Fresh panes that would start in the home directory land in `/workspace` instead (see [SSH access to workspaces](#ssh-access-to-workspaces)); panes opened from a project directory follow it as normal.
 
 ## Git Authentication
 
