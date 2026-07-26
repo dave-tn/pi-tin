@@ -1,25 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createSyncProgressReporter,
-  formatBytes,
   formatCopyDuration,
   formatEntryOutcome,
   formatLiveLine,
   type ProgressOutput,
 } from './sync-progress.js';
-
-describe('formatBytes', () => {
-  test('uses B under 1 KB, KB under 1 MB, MB with one decimal under 10 MB', () => {
-    expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(48_000)).toBe('48 KB');
-    expect(formatBytes(1_200_000)).toBe('1.2 MB');
-  });
-
-  test('uses whole MB from 10 MB and GB with one decimal from 1 GB', () => {
-    expect(formatBytes(312_000_000)).toBe('312 MB');
-    expect(formatBytes(1_400_000_000)).toBe('1.4 GB');
-  });
-});
 
 describe('formatCopyDuration', () => {
   test('shows one decimal below 10s', () => {
@@ -35,7 +21,28 @@ describe('formatCopyDuration', () => {
 describe('formatEntryOutcome', () => {
   test('done carries size and duration when known', () => {
     expect(formatEntryOutcome({ kind: 'done', bytes: 312_000_000, durationMs: 2_100 }))
-      .toBe('done (312 MB, 2.1s)');
+      .toBe('done (312.0 MB, 2.1s)');
+  });
+
+  test('sizes step up through the decimal units', () => {
+    expect(formatEntryOutcome({ kind: 'done', bytes: 512, durationMs: null })).toBe('done (512 B)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 48_000, durationMs: null })).toBe('done (48.0 KB)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 1_200_000, durationMs: null })).toBe('done (1.2 MB)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 1_400_000_000, durationMs: null })).toBe('done (1.4 GB)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 2_000_000_000_000, durationMs: null })).toBe('done (2.0 TB)');
+  });
+
+  // Regression: sync-progress used to carry its own formatBytes, which showed
+  // a four-digit mantissa ("1000 KB", "1000 MB") when rounding landed back on
+  // the unit threshold. Sharing cli-output's implementation steps up instead.
+  test('a size that rounds onto the unit threshold steps up a unit', () => {
+    expect(formatEntryOutcome({ kind: 'done', bytes: 999_950, durationMs: null })).toBe('done (1.0 MB)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 999_950_000, durationMs: null })).toBe('done (1.0 GB)');
+  });
+
+  test('a size just below the rounding threshold keeps its unit', () => {
+    expect(formatEntryOutcome({ kind: 'done', bytes: 999_949, durationMs: null })).toBe('done (999.9 KB)');
+    expect(formatEntryOutcome({ kind: 'done', bytes: 999_949_000, durationMs: null })).toBe('done (999.9 MB)');
   });
 
   test('done without measurements is a bare done', () => {
@@ -53,17 +60,38 @@ describe('formatEntryOutcome', () => {
 describe('formatLiveLine', () => {
   test('known total and current bytes render a bar, shared-unit fraction, and speed', () => {
     expect(formatLiveLine({ totalBytes: 312_000_000, currentBytes: 148_000_000, elapsedMs: 1_000 }))
-      .toBe('[===>      ]  148/312 MB  148 MB/s');
+      .toBe('[===>      ]  148.0/312.0 MB  148.0 MB/s');
+  });
+
+  // The fraction picks its unit from the total, so a barely-started copy still
+  // reads against the same scale instead of switching to its own unit.
+  test('the fraction stays in the total\'s unit even when current is tiny', () => {
+    expect(formatLiveLine({ totalBytes: 999_950, currentBytes: 500, elapsedMs: 1_000 }))
+      .toBe('[          ]  0.0/1.0 MB  500 B/s');
   });
 
   test('current bytes without a total render size and speed only', () => {
     expect(formatLiveLine({ totalBytes: null, currentBytes: 48_000_000, elapsedMs: 2_000 }))
-      .toBe('48 MB  24 MB/s');
+      .toBe('48.0 MB  24.0 MB/s');
+  });
+
+  // Regression: the rate formatter shared sync-progress's old formatBytes, so
+  // a rate that rounds onto the unit threshold showed "1000 KB/s".
+  test('a size and rate that round onto the unit threshold step up a unit', () => {
+    expect(formatLiveLine({ totalBytes: null, currentBytes: 999_950, elapsedMs: 1_000 }))
+      .toBe('1.0 MB  1.0 MB/s');
+    expect(formatLiveLine({ totalBytes: null, currentBytes: 999_950_000, elapsedMs: 1_000 }))
+      .toBe('1.0 GB  1.0 GB/s');
+  });
+
+  test('a sub-KB rate is rounded to whole bytes rather than shown as a raw float', () => {
+    expect(formatLiveLine({ totalBytes: null, currentBytes: 1_000, elapsedMs: 3_000 }))
+      .toBe('1.0 KB  333 B/s');
   });
 
   test('no current bytes (copy-in) renders total and ticking elapsed', () => {
     expect(formatLiveLine({ totalBytes: 312_000_000, currentBytes: null, elapsedMs: 1_800 }))
-      .toBe('(312 MB) … 1.8s');
+      .toBe('(312.0 MB) … 1.8s');
   });
 
   test('no measurements at all render elapsed only', () => {
