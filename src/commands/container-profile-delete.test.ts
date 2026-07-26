@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { Command } from 'commander';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,14 +30,27 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function runAndCatch(program: Command, argv: string[]): Promise<unknown> {
+// `shouldEmitJson` turns JSON output on automatically without a TTY, so every
+// run here emits an envelope. Capture stdout rather than letting it leak into
+// the test report, and assert the envelope while we hold it.
+async function runAndCatch(
+  program: Command,
+  argv: string[],
+): Promise<{ err: unknown; stdout: string }> {
   program.exitOverride();
+  const writes: string[] = [];
+  const write = spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+    writes.push(String(chunk));
+    return true;
+  });
   try {
     await program.parseAsync(['node', 'pi-tin', ...argv]);
+    return { err: undefined, stdout: writes.join('') };
   } catch (err) {
-    return err;
+    return { err, stdout: writes.join('') };
+  } finally {
+    write.mockRestore();
   }
-  return undefined;
 }
 
 describe('container-profile delete', () => {
@@ -50,10 +63,11 @@ describe('container-profile delete', () => {
     const program = new Command();
     registerContainerProfileDeleteCommand(program);
 
-    const err = await runAndCatch(program, ['delete', 'broken', '--force']);
+    const { err, stdout } = await runAndCatch(program, ['delete', 'broken', '--force']);
 
     expect(err).toBeUndefined();
     expect(fs.existsSync(profilePath)).toBe(false);
+    expect(JSON.parse(stdout)).toEqual({ action: 'deleted', profile: 'broken' });
   });
 
   test('deletes a profile whose YAML is unparseable', async () => {
@@ -65,18 +79,22 @@ describe('container-profile delete', () => {
     const program = new Command();
     registerContainerProfileDeleteCommand(program);
 
-    const err = await runAndCatch(program, ['delete', 'garbled', '--force']);
+    const { err, stdout } = await runAndCatch(program, ['delete', 'garbled', '--force']);
 
     expect(err).toBeUndefined();
     expect(fs.existsSync(profilePath)).toBe(false);
+    expect(JSON.parse(stdout)).toEqual({ action: 'deleted', profile: 'garbled' });
   });
 
   test('throws CliError(NOT_FOUND) for a missing profile', async () => {
     const program = new Command();
     registerContainerProfileDeleteCommand(program);
 
-    const err = await runAndCatch(program, ['delete', 'missing', '--force']);
+    const { err, stdout } = await runAndCatch(program, ['delete', 'missing', '--force']);
 
+    // The failure envelope is the CliError itself — nothing is written to the
+    // data channel, so an agent never sees a half-success on stdout.
+    expect(stdout).toBe('');
     expect(err).toBeInstanceOf(CliError);
     if (!(err instanceof CliError)) throw new Error('unreachable');
     expect(err.exitCode).toBe(EXIT.NOT_FOUND);

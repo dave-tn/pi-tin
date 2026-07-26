@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { confirmCleanup, fullWipe, prunePass } from './cleanup.js';
 import { planCleanup, selectOrphanedImages } from '../lib/workspace-plans.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
@@ -69,12 +69,15 @@ describe('selectOrphanedImages', () => {
 });
 
 describe('confirmCleanup', () => {
+  // `quiet: true` where the preamble is not the subject: without it the
+  // warning block prints straight into the test report. The one test that
+  // does care about the preamble captures it instead.
   // Regression: the global prunes used to run unconditionally when no stopped
   // pi-tin workspaces existed — the confirmation must gate the whole
   // destructive phase (README: exit 4 without a TTY unless --force).
   test('refuses non-interactively without force even with no stopped workspaces', async () => {
     try {
-      await confirmCleanup({ stopped: [], force: false, isInteractive: false });
+      await confirmCleanup({ stopped: [], force: false, isInteractive: false, quiet: true });
       throw new Error('expected confirmCleanup to throw');
     } catch (err) {
       expect(err).toBeInstanceOf(CliError);
@@ -86,7 +89,7 @@ describe('confirmCleanup', () => {
 
   test('refuses non-interactively without force when stopped workspaces exist', async () => {
     try {
-      await confirmCleanup({ stopped: ['ws-a'], force: false, isInteractive: false });
+      await confirmCleanup({ stopped: ['ws-a'], force: false, isInteractive: false, quiet: true });
       throw new Error('expected confirmCleanup to throw');
     } catch (err) {
       expect(err).toBeInstanceOf(CliError);
@@ -96,12 +99,56 @@ describe('confirmCleanup', () => {
   });
 
   test('force proceeds without prompting, with or without stopped workspaces', async () => {
-    expect(await confirmCleanup({ stopped: [], force: true, isInteractive: false })).toBe(true);
-    expect(await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false })).toBe(true);
+    expect(await confirmCleanup({ stopped: [], force: true, isInteractive: false, quiet: true })).toBe(true);
+    expect(await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false, quiet: true })).toBe(true);
+  });
+
+  test('names every workspace it is about to destroy before asking', async () => {
+    const lines: string[] = [];
+    const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    try {
+      await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false });
+    } finally {
+      log.mockRestore();
+    }
+
+    const printed = lines.join('\n');
+    expect(printed).toContain('2 stopped pi-tin workspaces will be removed:');
+    expect(printed).toContain('ws-a');
+    expect(printed).toContain('ws-b');
+    expect(printed).toContain(
+      'Any in-container state (installed packages, files outside mounted volumes) will be lost.',
+    );
+    // The prunes are not pi-tin-scoped; the user has to be told before saying yes.
+    expect(printed).toContain(
+      'This removes stopped containers, dangling images, and unused volumes — not limited to pi-tin.',
+    );
+  });
+
+  test('quiet suppresses the preamble entirely', async () => {
+    const lines: string[] = [];
+    const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    try {
+      await confirmCleanup({ stopped: ['ws-a'], force: true, isInteractive: false, quiet: true });
+    } finally {
+      log.mockRestore();
+    }
+
+    // `--json` passes quiet: true — a stray human line here would corrupt the
+    // envelope on stdout.
+    expect(lines).toEqual([]);
   });
 });
 
 describe('fullWipe', () => {
+  // No exec seam: this relies on the running-workspaces guard throwing before
+  // `listImageNames()` is reached. If that guard ever moves below the image
+  // listing, this test stops being hermetic and shells out to the real
+  // `container` CLI — inject an exec seam rather than letting it.
   test('refuses with a structured error while workspaces are running', async () => {
     const err = await fullWipe(['ctwo', 'blitz'], true, false).then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(CliError);
