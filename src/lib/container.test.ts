@@ -359,6 +359,12 @@ describe('bounded container subprocess options', () => {
         // No `run` injected: exercise the real spawn path. The command is the
         // documented `sh -c 'tar … | container exec …'` pipeline; with a 1ms
         // deadline it is killed before doing anything.
+        // Caveat, deliberate: on a host with the runtime up, the shell forks
+        // both halves at once, so this really does exec `container exec`
+        // before the deadline lands — the one test here that touches the
+        // runtime. It is worth the exception because the real spawn path is
+        // the only place the interrupt listeners are installed, and the
+        // listener-count assertion below is what pins them being removed.
       });
     } catch (error) {
       caught = error;

@@ -462,7 +462,13 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   child.kill(signal);
 }
 
-const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+// SIGQUIT belongs here with the obvious three: `detached` takes the pipeline
+// out of the terminal's foreground process group, so the terminal stops
+// delivering *every* terminal-generated signal to it. Ctrl-\ kills pi-tin by
+// default disposition and would leave the host tar extracting into the temp
+// path — measured: without forwarding, the writer kept growing the file after
+// the parent died at exit 131, while SIGINT left nothing behind.
+const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
 
 // spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
 // deliberate difference: `detached` makes the child a process-group leader so
@@ -517,7 +523,12 @@ export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
     });
     child.on('exit', (code, signal) => {
       settle();
-      if (timedOut) {
+      // `code !== 0` guards a real race: the deadline fires in the timers
+      // phase, a queued-but-undelivered exit is read in the poll phase after
+      // it, so a copy that genuinely succeeded can arrive here with timedOut
+      // already set. Reporting that as a timeout would warn and skip the
+      // promote for a copy that completed.
+      if (timedOut && code !== 0) {
         reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
         return;
       }
@@ -555,8 +566,11 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // carries modes and in-tree symlinks intact. COPYFILE_DISABLE plus the plain
 // ustar format stop macOS bsdtar emitting AppleDouble/pax metadata entries,
 // which busybox tar mishandles and which would poison the workspace-state
-// changed-check fingerprint. A failed host tar truncates the stream, so the
-// container-side tar exits nonzero and the failure surfaces without pipefail.
+// changed-check fingerprint. `set -o pipefail` is load-bearing here and must
+// not be removed: measured, a host-side tar failure with a healthy
+// `container exec` exits 0 without it, silently emptying this path on every
+// start. Do not trust the intuition that truncating the stream makes the
+// container-side tar fail — it does not reliably.
 // On timeout the deadline SIGKILLs the whole process group, so the outer
 // shell, the host tar and `container exec` all die together (see
 // spawnContainerCopy). Callers still must not touch the destination after a

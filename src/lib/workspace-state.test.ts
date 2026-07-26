@@ -644,6 +644,10 @@ describe('copy-out mechanism selection', () => {
           copyCalls.push({ file, args });
           return Promise.resolve();
         },
+        // Guard the seam the sibling blocks guard: a tool-state copy-out
+        // recipe touches no `run` op today, so an unexpected subprocess here
+        // would mean the recipe grew one silently.
+        run: (): void => { throw new Error('unexpected run seam'); },
       },
     );
     expect(copyCalls).toEqual([{
@@ -981,19 +985,29 @@ describe('syncWorkspaceState timeout handling', () => {
           (args.includes('/home/dev/.config/herdr') ? 'dir\n' : 'file\n'),
         copy: (_file, args): Promise<void> => {
           copyCalls.push(args);
-          return args.includes(STREAM_OUT_SCRIPT)
-            // GNU tar's "file changed as we read it" is exit 1, and pipefail
-            // fails the whole entry on it.
-            ? Promise.reject(new Error('tar exited with status 1'))
-            : Promise.resolve();
+          if (!args.includes(STREAM_OUT_SCRIPT)) return Promise.resolve();
+          // Reproduce what a real failed stream leaves behind. The script
+          // runs `mkdir -p "$2"` before the pipeline, so a directory
+          // copy-out that fails ALWAYS leaves a temp holding however much
+          // tar had extracted. Without writing it here the assertion below
+          // would pass on promote-temp's existsSync no-op instead of on the
+          // guard it names.
+          const temp = path.join(stateDir, '.config', 'herdr.pi-tin-tmp');
+          fs.mkdirSync(temp, { recursive: true });
+          fs.writeFileSync(path.join(temp, 'torn'), 'half an archive');
+          // GNU tar's "file changed as we read it" is exit 1, and pipefail
+          // fails the whole entry on it.
+          return Promise.reject(new Error('tar exited with status 1'));
         },
         warn: (message): void => { warnings.push(message); },
       },
     );
 
     // The previous snapshot survives (promote-temp never ran) and later
-    // entries still sync.
+    // entries still sync. Size-based fingerprinting makes this the whole
+    // safety story: a promoted torn tree would read as unchanged forever.
     expect(fs.readFileSync(path.join(stateDir, '.config', 'herdr'), 'utf-8')).toBe('previous snapshot');
+    expect(fs.existsSync(path.join(stateDir, '.config', 'herdr', 'torn'))).toBe(false);
     expect(copyCalls).toHaveLength(2);
     expect(warnings).toEqual([
       "Warning: workspace_state copy-out failed for '/home/dev/.config/herdr' in workspace 'demo' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes (directories stream through tar): a container image without tar, or a file changing while the tree was being archived.",
