@@ -371,7 +371,6 @@ interface SyncEntryContext {
   copyOutTotalBytes: number | null;
   copiedBytes: number | null;
   copyDurationMs: number | null;
-  copyInFailed: boolean;
   // Copy-in failures collected during runOpGroup and warned about by
   // syncWorkspaceState after finishEntry closes the TTY entry line — warning
   // mid-entry would render appended to that still-open line.
@@ -598,11 +597,14 @@ type OpGroupResult =
   | { kind: 'failed' }
   | { kind: 'timed-out'; timeout: WorkspaceStateTimeout };
 
-// Run one entry's ops. Non-timeout failures are best-effort per op (warned
-// when the copy-in itself fails, since the remove has already cleared the
-// container-side copy by then), except during copy-out, which stops at the
-// first error so promote-temp can never swap in the partial temp a killed
-// `container cp` may have left behind. Timeouts are classified by the op
+// Run one entry's ops. Non-timeout failures are best-effort per op, except a
+// failed copy, which ends the entry in either direction: on copy-out so
+// promote-temp can never swap in the partial temp a killed `container cp` may
+// have left behind; on copy-in (warned — the recipe's remove has already
+// cleared the container-side copy) so the restore ops cannot run against the
+// incomplete destination, where restore-launcher would retarget the launcher
+// at a version that never arrived and prune whatever a partial extraction
+// left behind. Timeouts are classified by the op
 // that hit the deadline: a copy op moves real data, so its timeout is
 // entry-scoped — the entry's remaining ops are skipped (a timed-out copy-in
 // leaves an orphaned host pipeline still extracting in the background, and
@@ -634,12 +636,12 @@ async function runOpGroup(options: {
       }
       if (options.direction === 'copy-out') return { kind: 'failed' };
       if (op.kind === 'copy-in') {
-        options.ctx.copyInFailed = true;
         options.ctx.copyInFailureOps.push(op);
+        return { kind: 'failed' };
       }
     }
   }
-  return options.ctx.copyInFailed ? { kind: 'failed' } : { kind: 'completed' };
+  return { kind: 'completed' };
 }
 
 // Alongside the container profile's own tool-state entries, pi-tin persists
@@ -704,7 +706,6 @@ export async function syncWorkspaceState(
       copyOutTotalBytes: null,
       copiedBytes: null,
       copyDurationMs: null,
-      copyInFailed: false,
       copyInFailureOps: [],
     };
     const result = await runOpGroup({

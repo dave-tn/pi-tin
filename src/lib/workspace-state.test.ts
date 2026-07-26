@@ -506,6 +506,47 @@ describe('binary entry sync behaviour', () => {
 
     expect(calls.some((args) => args.includes(RESTORE_SCRIPT))).toBe(false);
   });
+
+  test('copy-in stops the entry after a failed stream — no launcher restore against the cleared destination', async () => {
+    // The snapshot holds a complete version, so only the early return keeps
+    // restore-launcher from retargeting the link at a version that never
+    // arrived and pruning whatever a partial extraction left behind.
+    fs.mkdirSync(versionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(versionsDir(), '2.1.218'), '12345');
+    fs.writeFileSync(recordPath(), '/home/dev/.local/share/claude/versions/2.1.218\n');
+    fs.mkdirSync(path.join(stateDir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.local', 'bin', 'herdr'), 'bin!');
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [CLAUDE_ENTRY, HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        copy: (_file, args): Promise<void> => {
+          calls.push(args);
+          return args.includes('claude')
+            ? Promise.reject(new Error('tar exited with code 1'))
+            : Promise.resolve();
+        },
+        // Always mismatches both host fingerprints, so both copies proceed.
+        capture: (): string => '1 ./other\n',
+        warn: (message): void => { warnings.push(message); },
+      },
+    );
+
+    // The failed entry ends at the copy; the herdr entry still syncs in full.
+    expect(calls).toEqual([
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/share/claude'],
+      streamInArgs(path.join(stateDir, '.local', 'share'), 'claude', 'dev', '/home/dev/.local/share'),
+      ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.local/bin/herdr'],
+      streamInArgs(path.join(stateDir, '.local', 'bin'), 'herdr', 'dev', '/home/dev/.local/bin'),
+      ['exec', '--user', 'root', 'pi-tin-demo', 'chmod', '+x', '/home/dev/.local/bin/herdr'],
+    ]);
+    expect(warnings).toEqual([
+      "Warning: workspace_state copy-in failed for '/home/dev/.local/share/claude' in workspace 'demo' — starting without it (the container-side copy was already cleared). Common causes: a file of 8 GiB or larger or a single path component over 100 characters (ustar limits), or a container image without tar.",
+    ]);
+  });
 });
 
 describe('syncWorkspaceState timeout handling', () => {
