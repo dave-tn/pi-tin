@@ -5,8 +5,10 @@ import path from 'node:path';
 import {
   combinedWorkspaceStateEntries,
   hostFingerprint,
+  measureWorkspaceStateSnapshot,
   parseContainerFingerprint,
   planWorkspaceStateSync,
+  removeWorkspaceStateSnapshot,
   syncWorkspaceState,
   type WorkspaceStateEntry,
 } from './workspace-state.js';
@@ -1117,5 +1119,115 @@ describe('syncWorkspaceState progress reporting', () => {
       ['exec', '--user', 'root', 'pi-tin-demo', 'rm', '-rf', '/home/dev/.zsh_history'],
       streamInArgs(stateDir, '.zsh_history', 'dev', '/home/dev'),
     ]);
+  });
+});
+
+
+// Regression: `pi-tin delete` removed the workspace, container and image but
+// left ~/.config/pi-tin/workspace-state/<name>/ behind — routinely the largest
+// artifact a workspace creates (259 MB observed). XDG_CONFIG_HOME points at a
+// temp dir so nothing here touches the real config dir.
+describe('workspace state snapshot removal', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  function seedSnapshot(workspaceName: string): string {
+    const dir = path.join(tmpDir, 'pi-tin', 'workspace-state', workspaceName);
+    fs.mkdirSync(path.join(dir, '.config', 'herdr'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.zsh_history'), 'a'.repeat(100));
+    fs.writeFileSync(path.join(dir, '.config', 'herdr', 'config.toml'), 'b'.repeat(50));
+    return dir;
+  }
+
+  test('measures the snapshot directory and its nested contents', () => {
+    const dir = seedSnapshot('demo');
+
+    expect(measureWorkspaceStateSnapshot('demo')).toEqual({ path: dir, bytes: 150 });
+  });
+
+  // A dangling target also proves the walk lstats the link itself — stat
+  // would throw ENOENT here — so the measurement can never pull in a target
+  // that lives outside the snapshot.
+  test('counts a symlink as its own lstat size, never its target', () => {
+    const dir = seedSnapshot('demo');
+    fs.symlinkSync('dangling-target', path.join(dir, 'link'));
+
+    expect(measureWorkspaceStateSnapshot('demo')).toEqual({
+      path: dir,
+      bytes: 150 + 'dangling-target'.length,
+    });
+  });
+
+  // Root ignores directory permissions, so the unreadable subtree would be
+  // counted and the test would fail for the wrong reason.
+  test.skipIf(process.getuid?.() === 0)(
+    'skips unreadable subtrees instead of aborting the measurement',
+    () => {
+      const dir = seedSnapshot('demo');
+      const locked = path.join(dir, 'locked');
+      fs.mkdirSync(locked);
+      fs.writeFileSync(path.join(locked, 'hidden'), 'c'.repeat(25));
+      fs.chmodSync(locked, 0o000);
+      try {
+        expect(measureWorkspaceStateSnapshot('demo')).toEqual({ path: dir, bytes: 150 });
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    },
+  );
+
+  test('measures nothing for a workspace that never persisted state', () => {
+    expect(measureWorkspaceStateSnapshot('demo')).toBeNull();
+  });
+
+  test('removes the whole snapshot tree from the host', () => {
+    const dir = seedSnapshot('demo');
+
+    expect(removeWorkspaceStateSnapshot(measureWorkspaceStateSnapshot('demo'))).toBe('removed');
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  test('reports absent (and removes nothing) when there is no snapshot', () => {
+    const removed: string[] = [];
+
+    const outcome = removeWorkspaceStateSnapshot(measureWorkspaceStateSnapshot('demo'), {
+      remove: (dir): void => { removed.push(dir); },
+    });
+
+    expect(outcome).toBe('absent');
+    expect(removed).toEqual([]);
+  });
+
+  // The container and image are already gone by the time this runs, so a
+  // failure must warn and report — never throw and leave a half-deleted
+  // workspace behind.
+  test('warns and reports failure instead of throwing when removal fails', () => {
+    const dir = seedSnapshot('demo');
+    const warnings: string[] = [];
+
+    const outcome = removeWorkspaceStateSnapshot(measureWorkspaceStateSnapshot('demo'), {
+      remove: (): void => { throw new Error('Permission denied'); },
+      warn: (message): void => { warnings.push(message); },
+    });
+
+    expect(outcome).toBe('failed');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(dir);
+    expect(warnings[0]).toContain('Permission denied');
   });
 });

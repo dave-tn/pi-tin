@@ -19,6 +19,27 @@ export function printJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 }
 
+// Decimal units, matching what Finder and `container` report — a size shown
+// next to a destructive action has to agree with what the user sees elsewhere.
+export function formatBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1000 && index < units.length - 1) {
+    value /= 1000;
+    index += 1;
+  }
+  // Rounding to one decimal can land back on the threshold (999_950 B →
+  // 999.95 KB → "1000.0 KB"); step up once more so the display never shows a
+  // four-digit mantissa below the TB cap.
+  if (index < units.length - 1 && Number(value.toFixed(1)) >= 1000) {
+    value /= 1000;
+    index += 1;
+  }
+  const unit = units[index] ?? 'B';
+  return index === 0 ? `${value} ${unit}` : `${value.toFixed(1)} ${unit}`;
+}
+
 // Human-readable --dry-run preview shared by the agent-profile and
 // container-profile delete commands. The impact type is derived from both
 // planners' impact shapes so drift in either breaks the build here, not at

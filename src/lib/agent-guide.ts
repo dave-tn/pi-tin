@@ -88,7 +88,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
     },
     {
       command: 'delete',
-      summary: 'Delete a workspace: container, image, and config',
+      summary: 'Delete a workspace: container, image, config, and saved workspace state',
       args: ['<workspace>'],
       flags: ['--force', '--dry-run', '--json'],
       destructive: true,
