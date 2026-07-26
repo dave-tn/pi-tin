@@ -590,7 +590,10 @@ describe('generateDockerfile native agent installs', () => {
     ).dockerfile;
 
     expect(withNative).toContain('ca-certificates');
-    expect(withNative).toContain('bash');
+    // Match bash as an indented package-list line — the bare word also
+    // appears in the native install RUN (`bash /tmp/claude-install.sh`), so
+    // `toContain('bash')` could not fail when the package is dropped.
+    expect(withNative).toContain('    bash');
     expect(withoutNative).not.toContain('ca-certificates');
     expect(withoutNative).not.toContain('bash');
   });

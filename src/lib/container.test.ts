@@ -348,32 +348,27 @@ describe('bounded container subprocess options', () => {
   });
 
   test('the default copy runner rejects with an ETIMEDOUT-shaped error on deadline', async () => {
+    // `sh -c 'sleep 10'` outlives any deadline on any platform; driving
+    // spawnContainerCopy directly (like the signal test below) keeps this off
+    // the real `container` pipeline, which does not exist on CI hosts.
+    const sigintListenersBefore = process.listenerCount('SIGINT');
     let caught: unknown;
     try {
-      await streamToContainer({
-        name: 'pi-tin-demo',
-        hostPath: '/nonexistent/never-read',
-        containerPath: '/home/dev/never-written',
-        user: 'dev',
-        timeoutMs: 1,
-        // No `run` injected: exercise the real spawn path. The command is the
-        // documented `sh -c 'tar … | container exec …'` pipeline; with a 1ms
-        // deadline it is killed before doing anything.
-        // Caveat, deliberate: on a host with the runtime up, the shell forks
-        // both halves at once, so this really does exec `container exec`
-        // before the deadline lands — the one test here that touches the
-        // runtime. It is worth the exception because the real spawn path is
-        // the only place the interrupt listeners are installed, and the
-        // listener-count assertion below is what pins them being removed.
+      await spawnContainerCopy('sh', ['-c', 'sleep 10'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 1,
+        killSignal: 'SIGKILL',
       });
     } catch (error) {
       caught = error;
     }
     expect(isContainerSubprocessTimeout(caught)).toBe(true);
+    expect((caught as Error).message).toBe("'sh' timed out after 1ms");
     // The copy runs detached, so it installs interrupt forwarders for its
     // lifetime. Leaking them would accumulate across every entry of every
     // sync until Node warns about MaxListeners — pin that they are removed.
-    expect(process.listenerCount('SIGINT')).toBe(0);
+    expect(process.listenerCount('SIGINT')).toBe(sigintListenersBefore);
   });
 
   test('the default copy runner names the fatal signal when the subprocess dies signalled', async () => {
