@@ -747,7 +747,11 @@ async function finishWorkspaceSession(
       return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
     }
 
-    return `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+    // The helper's stop decision reads attach from the workspace config (see
+    // gatherHerdrStopContext), so the message keys off the same field.
+    return context.workspace.attach === 'herdr'
+      ? 'Last session closed. Workspace will stop when agents monitored by herdr stop.'
+      : `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
   });
 }
 
