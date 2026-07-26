@@ -170,6 +170,12 @@ describe('createSyncProgressReporter', () => {
     reporter.copyStarted({ totalBytes: 200, currentBytes: (): number => 150 });
     await new Promise((resolve) => setTimeout(resolve, 250));
     reporter.finishEntry({ kind: 'done', bytes: 200, durationMs: 100 });
+    // Every tick after the replacement must read the second progress source.
+    // Without this the test only proves "no extra writes after finish", which
+    // an implementation that kept the first ticker and dropped the second
+    // would also satisfy.
+    expect(writes.some((text) => text.includes('150/200 B'))).toBe(true);
+    expect(writes.some((text) => text.includes('100/200 B'))).toBe(false);
     const writesAfterFinish = writes.length;
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(writes.length).toBe(writesAfterFinish);

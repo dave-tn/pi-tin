@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRuntimeStateApi } from './runtime-state.js';
+import { createRuntimeStateApi, type RuntimeStateApi, type RuntimeStateDeps } from './runtime-state.js';
 
 function runtimeDir(baseDir: string, workspaceName: string): string {
   return path.join(baseDir, 'runtime', workspaceName);
@@ -25,7 +25,7 @@ describe('runtime-state', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function createApi() {
+  function createApi(overrides: Partial<RuntimeStateDeps> = {}): RuntimeStateApi {
     return createRuntimeStateApi({
       getStateDir: () => tmpDir,
       now: () => 1_700_000_000_000,
@@ -37,6 +37,7 @@ describe('runtime-state', () => {
         killedPids.push(pid);
         procs.delete(pid);
       },
+      ...overrides,
     });
   }
 
@@ -102,6 +103,52 @@ describe('runtime-state', () => {
     });
 
     expect(called).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  // The blocking variant must wait out a live holder rather than reaping its
+  // lock or running the body unprotected — the retry loop is the only thing
+  // serialising two concurrent `pi-tin open`s on one workspace.
+  test('withWorkspaceLock retries while a live holder owns the lock', async () => {
+    const lockPath = path.join(runtimeDir(tmpDir, 'demo'), 'lock.json');
+    procs.set(1234, 'token-1234');
+
+    let sleeps = 0;
+    const api = createApi({
+      sleep: async () => {
+        sleeps += 1;
+        // The holder exits between retries; the next attempt reaps and wins.
+        procs.delete(1234);
+      },
+    });
+
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ ownerPid: 1234, ownerToken: 'token-1234', acquiredAt: '2026-05-25T12:00:00.000Z' }),
+    );
+
+    let heldLock: string | undefined;
+    const result = await api.withWorkspaceLock('demo', () => {
+      heldLock = fs.readFileSync(lockPath, 'utf-8');
+      return 'body-ran';
+    });
+
+    expect(sleeps).toBe(1);
+    expect(result).toBe('body-ran');
+    // The body runs under a lock this process owns, not the stale one.
+    expect(JSON.parse(heldLock ?? '{}')).toMatchObject({ ownerPid: 999, ownerToken: 'token-999' });
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  test('withWorkspaceLock releases the lock when the body throws', async () => {
+    const api = createApi();
+    const lockPath = path.join(runtimeDir(tmpDir, 'demo'), 'lock.json');
+
+    await expect(api.withWorkspaceLock('demo', () => {
+      throw new Error('body failed');
+    })).rejects.toThrow('body failed');
+
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
@@ -325,6 +372,59 @@ describe('runtime-state', () => {
 
     expect(decision).toEqual({ runtimeState: 'ok', activeSessions: 1 });
     expect(fs.existsSync(path.join(runtimeDir(tmpDir, 'demo'), 'sessions', 'stale-session.json'))).toBe(false);
+  });
+
+  // reconcile* reaps; the plain readers must not. Reaping from a read path
+  // would delete another process's session record on any status query.
+  test('readRuntimeSnapshot reports stale sessions without reaping them', () => {
+    const api = createApi();
+
+    api.writeRuntimeMeta('demo', {
+      startedAt: '2026-05-25T12:00:00.000Z',
+      buildHash: 'build-hash',
+      runtimeHash: 'runtime-hash',
+    });
+    api.registerSession('demo', {
+      sessionId: 'stale-session',
+      startedAt: '2026-05-25T12:00:00.000Z',
+      hostPid: 123,
+      state: 'active',
+    });
+
+    const runtime = api.readRuntimeSnapshot('demo');
+
+    expect(runtime.runtimeState).toBe('ok');
+    expect(runtime.activeSessions.map((session) => session.sessionId)).toEqual(['stale-session']);
+    expect(fs.existsSync(path.join(runtimeDir(tmpDir, 'demo'), 'sessions', 'stale-session.json'))).toBe(true);
+  });
+
+  test('listSessionRecords returns every record on disk without reaping', () => {
+    const api = createApi();
+
+    api.registerSession('demo', {
+      sessionId: 'live-session',
+      startedAt: '2026-05-25T12:00:00.000Z',
+      hostPid: 999,
+      state: 'active',
+    });
+    api.registerSession('demo', {
+      sessionId: 'stale-session',
+      startedAt: '2026-05-25T12:00:00.000Z',
+      hostPid: 123,
+      state: 'active',
+    });
+
+    expect(api.listSessionRecords('demo').map((session) => session.sessionId))
+      .toEqual(['live-session', 'stale-session']);
+    expect(fs.existsSync(path.join(runtimeDir(tmpDir, 'demo'), 'sessions', 'stale-session.json'))).toBe(true);
+
+    // ...and reconciliation, which does reap, then drops the stale one.
+    api.reconcileWorkspaceRuntimeState('demo');
+    expect(api.listSessionRecords('demo').map((session) => session.sessionId)).toEqual(['live-session']);
+  });
+
+  test('listSessionRecords is empty for a workspace with no runtime state', () => {
+    expect(createApi().listSessionRecords('never-opened')).toEqual([]);
   });
 
   test('reports corrupt runtime files', () => {

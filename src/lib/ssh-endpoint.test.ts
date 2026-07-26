@@ -18,6 +18,7 @@ import {
   probeSshEndpoint,
 } from './ssh-endpoint.js';
 import { getSshConfigPath, getSshKeyPath, getSshKnownHostsPath } from './paths.js';
+import { CliError, EXIT } from './cli-errors.js';
 
 let tmpDir: string;
 let originalXdg: string | undefined;
@@ -80,6 +81,34 @@ describe('ensureSshKeypair', () => {
       throw new Error('no ssh-keygen');
     };
     expect(() => ensureSshKeypair(failingKeygen)).toThrow(/ssh keypair/);
+  });
+
+  // A keygen that exits 0 without leaving a .pub behind would otherwise be
+  // read as success and hand an empty public key to the container's
+  // authorized_keys, producing an attach failure far from the cause.
+  test('refuses a keygen that succeeds without writing the public key', () => {
+    const privateOnlyKeygen = (args: string[]): void => {
+      fs.writeFileSync(args[args.length - 1] ?? '', 'PRIVATE', 'utf-8');
+    };
+    const publicKeyPath = `${getSshKeyPath()}.pub`;
+
+    const err = (() => {
+      try {
+        ensureSshKeypair(privateOnlyKeygen);
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.exitCode).toBe(EXIT.GENERAL);
+    expect(err.detail.code).toBe('ssh_keygen_failed');
+    expect(err.message).toBe(`ssh public key missing: ${publicKeyPath}`);
+    expect(err.detail.remediation).toBe(
+      `Delete ${getSshKeyPath()} and retry to regenerate the pair.`,
+    );
   });
 });
 
@@ -168,7 +197,7 @@ describe('appendSshInclude', () => {
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
   });
 
-  test('prepends before existing content and backs the file up once', () => {
+  test('prepends before existing content and backs the original up', () => {
     const configPath = userConfigPathIn(tmpDir);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, 'Host existing\n  User me\n', 'utf-8');
@@ -179,6 +208,21 @@ describe('appendSshInclude', () => {
     expect(content.startsWith(`${sshIncludeLine()}\n`)).toBe(true);
     expect(content).toContain('Host existing');
     expect(fs.readFileSync(`${configPath}.pi-tin.bak`, 'utf-8')).toBe('Host existing\n  User me\n');
+  });
+
+  // The backup is the user's pre-pi-tin config. Re-running must not overwrite
+  // it with an already-modified file, or the only copy of the original is lost.
+  test('never overwrites an existing backup on a later run', () => {
+    const configPath = userConfigPathIn(tmpDir);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'Host existing\n  User me\n', 'utf-8');
+
+    appendSshInclude(configPath);
+    fs.appendFileSync(configPath, 'Host later\n  User someone-else\n', 'utf-8');
+    appendSshInclude(configPath);
+
+    expect(fs.readFileSync(`${configPath}.pi-tin.bak`, 'utf-8')).toBe('Host existing\n  User me\n');
+    expect(fs.readFileSync(configPath, 'utf-8')).toContain('Host later');
   });
 });
 
