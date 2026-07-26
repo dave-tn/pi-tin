@@ -139,7 +139,7 @@ describe('runUpdateCheckHelper', () => {
     process.env['XDG_CONFIG_HOME'] = path.join(tmpDir, 'blocker');
     fs.writeFileSync(path.join(tmpDir, 'blocker'), 'not a directory', 'utf-8');
     mockFetch(() => Promise.resolve(new Response(JSON.stringify({ latest: '9.9.9' }), { status: 200 })));
-    await runUpdateCheckHelper();
+    await expect(runUpdateCheckHelper()).resolves.toBeUndefined();
   });
 
   test('an unexpected programming error propagates instead of being swallowed', async () => {

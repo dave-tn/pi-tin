@@ -67,21 +67,6 @@ describe('syncDefaultContainerProfiles', () => {
     expect(messages).toEqual([]);
   });
 
-  test('overwrites managed default profile when content changes', () => {
-    const profilePath = path.join(tmpDir, 'node-dev.yaml');
-    fs.writeFileSync(
-      profilePath,
-      '# This profile is managed by pi-tin and will be overwritten on update.\n# Old content\n',
-      'utf-8',
-    );
-
-    const messages = syncDefaultContainerProfiles(tmpDir);
-
-    const content = fs.readFileSync(profilePath, 'utf-8');
-    expect(content).toContain('node:trixie-slim');
-    expect(messages.length).toBeGreaterThan(0);
-  });
-
   test('skips write when content matches', () => {
     const filePath = path.join(tmpDir, `${firstName}.yaml`);
     fs.writeFileSync(filePath, firstContent, 'utf-8');

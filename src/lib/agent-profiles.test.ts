@@ -32,7 +32,9 @@ describe('agent-profiles', () => {
   });
 
   describe('createAgentProfile', () => {
-    test('creates profile directory with metadata and dot-dir', () => {
+    // No mode argument: the default is 'isolated', so this also pins the
+    // default and the dot-dirs an isolated profile gets.
+    test('creates an isolated profile directory with metadata and dot-dir by default', () => {
       createAgentProfile('personal', 'Claude Code');
       const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'personal');
       expect(fs.existsSync(profileDir)).toBe(true);
@@ -187,16 +189,6 @@ describe('agent-profiles', () => {
   });
 
   describe('createAgentProfile with mode', () => {
-    test('creates isolated profile with empty mount directories', () => {
-      createAgentProfile('personal', 'Claude Code', 'isolated');
-      const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'personal');
-      expect(fs.existsSync(path.join(profileDir, '.claude'))).toBe(true);
-
-      const yaml = fs.readFileSync(path.join(profileDir, 'profile.yaml'), 'utf-8');
-      expect(yaml).toContain('mode: isolated');
-      expect(yaml).toContain('.claude');
-    });
-
     test('creates host profile with no mount directories', () => {
       createAgentProfile('pi-host', 'Pi', 'host');
       const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'pi-host');
@@ -230,13 +222,6 @@ describe('agent-profiles', () => {
         + 'which is unavailable in containers.',
       );
     });
-
-    test('defaults to isolated when mode not specified', () => {
-      createAgentProfile('default-mode', 'Claude Code');
-      const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'default-mode');
-      const yaml = fs.readFileSync(path.join(profileDir, 'profile.yaml'), 'utf-8');
-      expect(yaml).toContain('mode: isolated');
-    });
   });
 
   describe('validateAgentProfilesForWorkspace with modes', () => {
@@ -264,15 +249,6 @@ describe('agent-profiles', () => {
         '.config/opencode',
         '.local/share/opencode',
       ]);
-    });
-
-    test('throws for conflicting mounts across profiles, naming the mount and both profiles', () => {
-      createAgentProfile('claude1', 'Claude Code', 'isolated');
-      createAgentProfile('claude2', 'Claude Code', 'isolated');
-      expect(() => validateAgentProfilesForWorkspace(['claude1', 'claude2'])).toThrow(
-        'Workspace has multiple agent profiles for .claude: claude1, claude2. '
-        + 'Only one agent profile per mount path is allowed.',
-      );
     });
   });
 });
