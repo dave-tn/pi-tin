@@ -329,7 +329,13 @@ describe('binary entry sync behaviour', () => {
 
     await syncWorkspaceState(
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [HERDR_ENTRY], user: 'dev', direction: 'copy-in' },
-      { run: (_file, args): void => { calls.push(args); } },
+      {
+        run: (_file, args): void => { calls.push(args); },
+        // Guard the seam the sibling blocks guard for `run`: the skip means no
+        // copy runs, so an uninjected copy seam would let a regression spawn a
+        // real `container` pipeline from the unit suite.
+        copy: (): Promise<void> => { throw new Error('unexpected copy seam'); },
+      },
     );
 
     expect(calls).toEqual([]);
@@ -345,6 +351,7 @@ describe('binary entry sync behaviour', () => {
       {
         run: (_file, args): void => { calls.push(args); },
         capture: (): string => '4\n',
+        copy: (): Promise<void> => { throw new Error('unexpected copy seam'); },
       },
     );
 
@@ -1360,6 +1367,9 @@ describe('syncWorkspaceState progress reporting', () => {
       { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-in' },
       {
         run: (_file, args): void => { calls.push(args); },
+        // Nothing to send means nothing to copy; without the guard a regression
+        // that copied anyway would spawn a real `container` from the suite.
+        copy: (): Promise<void> => { throw new Error('unexpected copy seam'); },
         report,
       },
     );
@@ -1393,6 +1403,29 @@ describe('syncWorkspaceState progress reporting', () => {
     expect(events.at(-1)).toBe('finish timed-out');
     // The warning text itself is pinned once, in the timeout-handling block —
     // what this test adds is that the reporter closes the entry as well.
+    expect(warnings).toHaveLength(1);
+  });
+
+  // The 'failed' outcome closes the entry line before the deferred warning
+  // prints; nothing asserted it, so a reporter that silently dropped failures
+  // would leave the entry hanging mid-render with no failing test.
+  test('a failed copy reports failed and still warns', async () => {
+    const { events, report } = createReporterCapture();
+    const warnings: string[] = [];
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.zsh_history'), 'snapshot');
+
+    await syncWorkspaceState(
+      { containerName: 'pi-tin-demo', workspaceName: 'demo', entries: [toolState('.zsh_history')], user: 'dev', direction: 'copy-in' },
+      {
+        run: (): void => {},
+        copy: (): Promise<void> => Promise.reject(new Error('tar exited with code 1')),
+        warn: (message): void => { warnings.push(message); },
+        report,
+      },
+    );
+
+    expect(events.at(-1)).toBe('finish failed');
     expect(warnings).toHaveLength(1);
   });
 
