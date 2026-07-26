@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,6 +77,14 @@ interface CopyFromContainerOptions {
   run?: ContainerCopyRunner | undefined;
 }
 
+interface StreamFromContainerOptions {
+  name: string;
+  containerPath: string;
+  hostPath: string;
+  timeoutMs?: number | undefined;
+  run?: ContainerCopyRunner | undefined;
+}
+
 interface ExecContainerCommandOptions extends Pick<ExecOptions, 'name' | 'command' | 'user'> {
   run?: ContainerSubprocessRunner | undefined;
 }
@@ -104,10 +112,15 @@ export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
 export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
 
 // Deadline for copies of persisted agent binaries, which are far too large for
-// the flat 5s deadline. Measured on Apple container 1.1.0: copy-in now streams
-// via tar at a stable ~275 MiB/s (256 MiB in ~0.9s); copy-out rides
-// `container cp` (~330-410 MiB/s out, but a ~500MB dir took 6-12s). 60s keeps
-// slow-machine headroom without masking a wedged runtime for long.
+// the flat 5s deadline. Measured on Apple container 1.1.0 (M1 Max, 256 MiB
+// payloads): copy-in streams via tar at a stable ~275 MiB/s. Copy-out splits by
+// shape — `container cp` carries a flat directory penalty of ~55 MiB/s
+// regardless of file count (1 file and 2048 files both ~4.6-5.0s), while the
+// same bytes as a bare file go at ~474 MiB/s. Directories therefore stream via
+// tar at ~341 MiB/s, which is the `container exec` stdout ceiling: a bare
+// `exec cat` measures ~337 MiB/s, so tar itself costs nothing and no blocking
+// or buffering knob improves on it. 60s keeps slow-machine headroom without
+// masking a wedged runtime for long.
 export const CONTAINER_BINARY_COPY_TIMEOUT_MS = 60_000;
 
 /** Recovery steps for a wedged container runtime, shared by every timeout message. */
@@ -432,32 +445,90 @@ const execContainerSubprocess: ContainerSubprocessRunner = (file, args, options)
   execFileSync(file, args, options);
 };
 
-// spawn-based equivalent of execFileSync + timeout + SIGKILL: the deadline
-// kills only the direct child (for streamToContainer, the outer sh — its
-// tar/`container exec` children are orphaned and finish on their own,
-// exactly as under spawnSync; see streamToContainer). Settled on 'exit',
-// not 'close': orphans inherit the stderr pipe, and waiting for it to close
-// would block the timeout rejection until they finish. The rejection carries
-// code ETIMEDOUT so isContainerSubprocessTimeout classifies it unchanged.
+// Signal a detached child's whole process group. `child.pid` is undefined when
+// the spawn itself failed, and the negative-pid kill throws once the group has
+// already exited — both fall back to signalling the child handle, which is a
+// no-op in exactly those cases.
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid !== undefined) {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // Group already gone, or not a group leader — fall through.
+    }
+  }
+  child.kill(signal);
+}
+
+// SIGQUIT belongs here with the obvious three: `detached` takes the pipeline
+// out of the terminal's foreground process group, so the terminal stops
+// delivering *every* terminal-generated signal to it. Ctrl-\ kills pi-tin by
+// default disposition and would leave the host tar extracting into the temp
+// path — measured: without forwarding, the writer kept growing the file after
+// the parent died at exit 131, while SIGINT left nothing behind.
+const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
+
+// spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
+// deliberate difference: `detached` makes the child a process-group leader so
+// the deadline can signal the whole group (`kill(-pid)`) rather than just the
+// outer sh. Both copy pipelines are `sh -c '… | …'`, so the processes doing
+// the real work — host tar and `container exec` — are grandchildren; killing
+// only the shell would orphan a host-side tar that keeps writing into the
+// destination long after the caller has given up on it. Group kill stops the
+// writers with the shell. It is best-effort: the group may already be gone
+// (ESRCH), in which case fall back to signalling the child directly.
+// Settled on 'exit', not 'close': anything that did survive inherits the
+// stderr pipe, and waiting for it to close would block the timeout rejection.
+// The rejection carries code ETIMEDOUT so isContainerSubprocessTimeout
+// classifies it unchanged.
+//
+// Its own process group also means the terminal no longer delivers Ctrl-C to
+// the pipeline, so the interrupt is forwarded by hand and then re-raised with
+// the default disposition — otherwise a ^C mid-copy would leave exactly the
+// orphaned writer the group kill exists to prevent.
 // Exported only as the default runner and for direct tests of its error
 // shapes; production callers go through streamToContainer/copyFromContainer.
 export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
   new Promise((resolve, reject) => {
-    const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
     let timedOut = false;
     const deadline = setTimeout(() => {
       timedOut = true;
-      child.kill(options.killSignal);
+      killProcessGroup(child, options.killSignal);
     }, options.timeout);
-    child.on('error', (error) => {
+    const listeners = new Map<NodeJS.Signals, () => void>();
+    const settle = (): void => {
       clearTimeout(deadline);
+      for (const [signal, listener] of listeners) process.removeListener(signal, listener);
+      listeners.clear();
+    };
+    for (const signal of COPY_INTERRUPTS) {
+      const listener = (): void => {
+        killProcessGroup(child, 'SIGKILL');
+        // Removing our listeners first restores the default disposition, so
+        // the re-raise terminates pi-tin exactly as an unhandled signal would.
+        settle();
+        process.kill(process.pid, signal);
+      };
+      listeners.set(signal, listener);
+      process.on(signal, listener);
+    }
+    child.on('error', (error) => {
+      settle();
       reject(error);
     });
     child.on('exit', (code, signal) => {
-      clearTimeout(deadline);
-      if (timedOut) {
+      settle();
+      // `code !== 0` guards a real race: the deadline fires in the timers
+      // phase, a queued-but-undelivered exit is read in the poll phase after
+      // it, so a copy that genuinely succeeded can arrive here with timedOut
+      // already set. Reporting that as a timeout would warn and skip the
+      // promote for a copy that completed.
+      if (timedOut && code !== 0) {
         reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
         return;
       }
@@ -495,26 +566,29 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // carries modes and in-tree symlinks intact. COPYFILE_DISABLE plus the plain
 // ustar format stop macOS bsdtar emitting AppleDouble/pax metadata entries,
 // which busybox tar mishandles and which would poison the workspace-state
-// changed-check fingerprint. A failed host tar truncates the stream, so the
-// container-side tar exits nonzero and the failure surfaces without pipefail.
-// On timeout Node SIGKILLs only the outer shell: tar and `container exec` are
-// that shell's children joined by their own pipe, so the orphaned pipeline
-// keeps extracting in the background until it finishes on its own. Callers
-// must not touch the destination after a timeout (runOpGroup skips the
-// entry's remaining ops); the next sync's probe reconciles whatever the
-// orphan left. The extracted name is the tar member — basename(hostPath) —
+// changed-check fingerprint. `set -o pipefail` is load-bearing here and must
+// not be removed: measured, a host-side tar failure with a healthy
+// `container exec` exits 0 without it, silently emptying this path on every
+// start. Do not trust the intuition that truncating the stream makes the
+// container-side tar fail — it does not reliably.
+// On timeout the deadline SIGKILLs the whole process group, so the outer
+// shell, the host tar and `container exec` all die together (see
+// spawnContainerCopy). Callers still must not touch the destination after a
+// timeout (runOpGroup skips the entry's remaining ops): the container-side
+// tar is the runtime's process, not ours, and may still be flushing whatever
+// bytes it already received. The next sync's probe reconciles whatever is
+// left. The extracted name is the tar member — basename(hostPath) —
 // so containerPath contributes only its parent directory: both paths must
 // share a basename, which the planner guarantees by deriving them from the
 // same entry path. The `--` keeps a leading-dash basename from parsing as a
-// tar option. The async conversion preserves the kill target (the outer
-// sh) and therefore the documented orphan semantics above.
+// tar option.
 export async function streamToContainer(options: StreamToContainerOptions): Promise<void> {
   const script =
-    'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+    'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
     'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"';
   const run = options.run ?? spawnContainerCopy;
   await run(
-    'sh',
+    '/bin/sh',
     [
       '-c',
       script,
@@ -535,6 +609,42 @@ export async function copyFromContainer(options: CopyFromContainerOptions): Prom
   await run(
     'container',
     ['cp', `${options.name}:${options.containerPath}`, options.hostPath],
+    containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
+  );
+}
+
+// Copy a directory out of the running container as a single tar stream.
+// `container cp` carries a flat directory-path penalty — ~55 MiB/s whether the
+// directory holds one file or two thousand, against ~341 MiB/s here — so
+// directories stream and single files stay on cp (~474 MiB/s, which beats
+// this). Taring the directory's *contents* (`cd … && tar -cf - .`) reproduces
+// the destination layout `container cp` produces, with no path rewriting.
+// Runs as root, not the workspace user: this matches the privilege
+// `container cp` had (it is executed by the runtime with full privilege) and
+// grants nothing new, since probeContainerPathShape, containerFingerprint,
+// restore-executable and remove-container-path already operate as root
+// against this same tree. A user-scoped tar would instead fail permanently
+// against any root-owned file underneath — worse, containerFingerprint
+// enumerates as root and would keep seeing that file as changed while the
+// user-scoped copy kept failing to read it, a permanent per-session loop.
+// pipefail is load-bearing: without it a guest failure that still emits a
+// well-formed empty archive exits 0 and a bad copy looks like a good one.
+export async function streamFromContainer(options: StreamFromContainerOptions): Promise<void> {
+  const script =
+    'set -o pipefail; mkdir -p "$2" && ' +
+    'container exec --user root "$3" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+    'tar -xf - -C "$2"';
+  const run = options.run ?? spawnContainerCopy;
+  await run(
+    '/bin/sh',
+    [
+      '-c',
+      script,
+      'sh',
+      options.containerPath,
+      options.hostPath,
+      options.name,
+    ],
     containerExecFileOptions(options.timeoutMs ?? CONTAINER_SUBPROCESS_TIMEOUT_MS),
   );
 }

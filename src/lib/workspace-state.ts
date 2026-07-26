@@ -10,6 +10,7 @@ import {
   execContainerCommand,
   execContainerCommandOutput,
   isContainerSubprocessTimeout,
+  streamFromContainer,
   streamToContainer,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
@@ -79,13 +80,13 @@ export interface WorkspaceStateSyncDependencies {
 // restore), then streams the snapshot in as a tar extracted by the container
 // user — ownership is correct by construction, and the stream avoids
 // `container cp`'s slow, erratic copy-in path (see streamToContainer).
-// Copy-out copies into a temp
-// sibling and only swaps it into place if the copy produced it, so a session
-// that never recreated the source (copy fails) leaves the previous snapshot
-// intact rather than destroying it. Copying to a fresh temp path also sidesteps
-// the nesting trap without a pre-emptive delete. Copy-out probes source
-// existence first: Apple `container cp` can wedge on a missing container path,
-// so an absent source must be skipped before attempting the copy. Both
+// Copy-out copies into a temp sibling and only swaps it into place if the copy
+// produced it, so a session that never recreated the source (copy fails)
+// leaves the previous snapshot intact rather than destroying it. Copying to a
+// fresh temp path also sidesteps the nesting trap without a pre-emptive
+// delete. Copy-out probes source existence first: Apple `container cp` can
+// wedge on a missing container path, so an absent source must be skipped
+// before attempting the copy. Both
 // directions are best-effort at execution time — a missing source just yields
 // nothing. Ops are grouped per entry so the executor can reason about one
 // entry's recipe as a unit, and each op maps to at most one subprocess so a
@@ -166,25 +167,38 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
 
 // --- Effectful executor (thin switch over the planned ops) ------------------
 
-function containerPathExists(
+type ContainerPathShape = 'dir' | 'file' | 'absent';
+
+// One exec round-trip answers both "is it there" and "which copy mechanism",
+// so shape costs nothing over the existence check it replaces. Absence stays
+// on the *exit status*, as the `test -e` probe this replaces did: an absent
+// path must not be reachable through stdout, or noisy container output would
+// send a missing path down the `container cp` route, which can wedge (see
+// planWorkspaceStateSync) and would cost a deadline plus a warning every
+// sync. Untrusted output otherwise: anything unrecognised falls back to
+// 'file', whose `container cp` path is correct for every shape and merely
+// slower for directories — guessing 'dir' for a real file would fail the copy
+// outright.
+function probeContainerPathShape(
   containerName: string,
   containerPath: string,
-  run: ContainerSubprocessRunner | undefined,
-): boolean {
+  capture: ContainerOutputRunner | undefined,
+): ContainerPathShape {
+  const script = 'if [ -d "$1" ]; then echo dir; elif [ -e "$1" ]; then echo file; else exit 3; fi';
   try {
-    execContainerCommand({
+    const output = execContainerCommandOutput({
       name: containerName,
       user: 'root',
-      command: ['test', '-e', containerPath],
-      run,
-    });
-    return true;
+      command: ['sh', '-c', script, 'sh', containerPath],
+      capture,
+    }).trim();
+    return output === 'dir' ? 'dir' : 'file';
   } catch (error) {
     if (isContainerSubprocessTimeout(error)) {
       throw error;
     }
-
-    return false;
+    // Matches the previous probe: a failed existence check skips the entry.
+    return 'absent';
   }
 }
 
@@ -371,10 +385,13 @@ interface SyncEntryContext {
   copyOutTotalBytes: number | null;
   copiedBytes: number | null;
   copyDurationMs: number | null;
-  // Copy-in failures collected during runOpGroup and warned about by
+  // Copy failures collected during runOpGroup and warned about by
   // syncWorkspaceState after finishEntry closes the TTY entry line — warning
   // mid-entry would render appended to that still-open line.
   copyInFailureOps: WorkspaceStateOp[];
+  copyOutFailureOps: WorkspaceStateOp[];
+  // Set by probe-container-path; read by copy-out to pick the mechanism.
+  copyOutIsDirectory: boolean;
 }
 
 interface RunOpOptions {
@@ -423,8 +440,12 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
     case 'remove-host-path':
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       return 'continue';
-    case 'probe-container-path':
-      return containerPathExists(containerName, op.containerPath, options.run) ? 'continue' : 'skip-absent';
+    case 'probe-container-path': {
+      const shape = probeContainerPathShape(containerName, op.containerPath, options.capture);
+      if (shape === 'absent') return 'skip-absent';
+      ctx.copyOutIsDirectory = shape === 'dir';
+      return 'continue';
+    }
     case 'probe-unchanged': {
       const host = hostFingerprint(op.hostPath);
       if (host === null) return op.whenHostMissing === 'skip-entry' ? 'skip-absent' : 'continue';
@@ -438,21 +459,39 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
         currentBytes: () => hostSnapshotBytes(op.hostPath),
       });
       const startedMs = Date.now();
-      await copyFromContainer({
-        name: containerName,
-        containerPath: op.containerPath,
-        hostPath: op.hostPath,
-        timeoutMs: op.timeoutMs,
-        run: options.copy,
-      });
+      if (ctx.copyOutIsDirectory) {
+        await streamFromContainer({
+          name: containerName,
+          containerPath: op.containerPath,
+          hostPath: op.hostPath,
+          timeoutMs: op.timeoutMs,
+          run: options.copy,
+        });
+      } else {
+        await copyFromContainer({
+          name: containerName,
+          containerPath: op.containerPath,
+          hostPath: op.hostPath,
+          timeoutMs: op.timeoutMs,
+          run: options.copy,
+        });
+      }
       ctx.copiedBytes = hostSnapshotBytes(op.hostPath);
       ctx.copyDurationMs = Date.now() - startedMs;
       return 'continue';
     }
     case 'promote-temp':
-      // Only swap when the copy actually produced the temp. If copy-out failed,
-      // the temp is absent and the previous snapshot is left untouched — a bad
-      // session never destroys good state.
+      // Only swap when the copy actually produced the temp. Not because a
+      // failed copy-out leaves no temp — streamFromContainer's mkdir -p runs
+      // before the pipeline, so a failed directory copy can leave an
+      // existing, possibly partial, temp behind. The previous snapshot
+      // survives regardless: runOpGroup returns at the first copy-out error
+      // or timeout, so this op never runs in a failing group, and the
+      // planner's remove-host-path clears any stale temp before the next
+      // attempt's copy-out even starts. That clear is only sound because a
+      // timed-out copy leaves nothing writing: the deadline kills the host
+      // pipeline's whole process group (see spawnContainerCopy), so there is
+      // no surviving extractor to race the unlink and blend two snapshots.
       if (!fs.existsSync(op.tempPath)) return 'continue';
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       fs.renameSync(op.tempPath, op.hostPath);
@@ -587,6 +626,15 @@ function copyInFailureWarning(workspaceName: string, op: WorkspaceStateOp): stri
   return `Warning: workspace_state copy-in failed for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — starting without it (the container-side copy was already cleared). Common causes: a file of 8 GiB or larger or a single path component over 100 characters (ustar limits), or a container image without tar.`;
 }
 
+// A failed copy-out is the quieter but more consequential half: nothing is
+// destroyed, but this workspace's saved state stops advancing, and the
+// auto-stop helper syncs with no reporter at all, so without this warning the
+// failure has no surface whatsoever. Directory copy-out streams through tar
+// under `set -o pipefail`, so any guest-side non-zero fails the whole entry.
+function copyOutFailureWarning(workspaceName: string, op: WorkspaceStateOp): string {
+  return `Warning: workspace_state copy-out failed for '${workspaceStateOpPath(op)}' in workspace '${workspaceName}' — the previous snapshot was left intact, so this session's changes to that path are not saved. Common causes: the path vanishing mid-sync, or, for directory copies (streamed through tar), a container image without tar or a file changing while the tree was being archived.`;
+}
+
 // Outcome of one entry's op group. Mirrors WorkspaceStateOpResult's
 // skip-absent/skip-unchanged split, plus 'failed' (a non-timeout error during
 // copy-out, or a warned copy-in failure) and 'timed-out' (carrying which op
@@ -599,21 +647,23 @@ type OpGroupResult =
 
 // Run one entry's ops. Non-timeout failures are best-effort per op, except a
 // failed copy, which ends the entry in either direction: on copy-out so
-// promote-temp can never swap in the partial temp a killed `container cp` may
-// have left behind; on copy-in (warned — the recipe's remove has already
-// cleared the container-side copy) so the restore ops cannot run against the
-// incomplete destination, where restore-launcher would retarget the launcher
-// at a version that never arrived and prune whatever a partial extraction
-// left behind. Timeouts are classified by the op
-// that hit the deadline: a copy op moves real data, so its timeout is
-// entry-scoped — the entry's remaining ops are skipped (a timed-out copy-in
-// leaves an orphaned host pipeline still extracting in the background, and
+// promote-temp can never swap in the partial temp a killed copy may have left
+// behind; on copy-in so the restore ops cannot run against the incomplete
+// destination, where restore-launcher would retarget the launcher at a
+// version that never arrived and prune whatever a partial extraction left
+// behind. Both copy directions collect their failing op for a warning:
+// copy-in because the recipe's remove has already cleared the container-side
+// copy, copy-out because the workspace's saved state silently stops advancing
+// otherwise. Timeouts are classified by the op that hit the deadline: a copy
+// op moves real data, so its timeout is entry-scoped — the entry's remaining
+// ops are skipped (the deadline kills the host pipeline's whole process group,
+// but the container-side tar belongs to the runtime and may still be flushing, so
 // restore ops must not race it — see streamToContainer) but later entries
 // still sync. Every other subprocess runs a near-instant command
 // (probe/rm/chmod/readlink/ln), so its timeout is runtime-scoped and the
-// caller abandons the sync. The copy-out
-// probe doubles as a per-entry health check: a genuinely wedged runtime costs
-// at most one extra copy deadline before the next probe stops the sync.
+// caller abandons the sync. The copy-out probe doubles as a per-entry health
+// check: a genuinely wedged runtime costs at most one extra copy deadline
+// before the next probe stops the sync.
 async function runOpGroup(options: {
   containerName: string;
   group: WorkspaceStateOp[];
@@ -634,7 +684,10 @@ async function runOpGroup(options: {
         const scope = op.kind === 'copy-in' || op.kind === 'copy-out' ? 'entry' : 'runtime';
         return { kind: 'timed-out', timeout: { scope, op } };
       }
-      if (options.direction === 'copy-out') return { kind: 'failed' };
+      if (options.direction === 'copy-out') {
+        if (op.kind === 'copy-out') options.ctx.copyOutFailureOps.push(op);
+        return { kind: 'failed' };
+      }
       if (op.kind === 'copy-in') {
         options.ctx.copyInFailureOps.push(op);
         return { kind: 'failed' };
@@ -707,6 +760,8 @@ export async function syncWorkspaceState(
       copiedBytes: null,
       copyDurationMs: null,
       copyInFailureOps: [],
+      copyOutFailureOps: [],
+      copyOutIsDirectory: false,
     };
     const result = await runOpGroup({
       containerName: options.containerName,
@@ -723,6 +778,9 @@ export async function syncWorkspaceState(
     // from inside runOpGroup would render appended to that still-open line.
     for (const failedOp of ctx.copyInFailureOps) {
       warn(copyInFailureWarning(options.workspaceName, failedOp));
+    }
+    for (const failedOp of ctx.copyOutFailureOps) {
+      warn(copyOutFailureWarning(options.workspaceName, failedOp));
     }
     if (result.kind === 'timed-out') {
       warn(timeoutWarning(options.workspaceName, options.direction, result.timeout));

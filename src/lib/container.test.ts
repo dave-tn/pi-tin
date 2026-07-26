@@ -13,6 +13,7 @@ import {
   listImageNames,
   getContainerState,
   streamToContainer,
+  streamFromContainer,
   copyFromContainer,
   execContainerCommand,
   stopContainer,
@@ -219,10 +220,10 @@ describe('bounded container subprocess options', () => {
       run,
     });
     expect(calls).toEqual([{
-      file: 'sh',
+      file: '/bin/sh',
       args: [
         '-c',
-        'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+        'set -o pipefail; COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
           'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"',
         'sh',
         '/tmp/host-state',
@@ -278,6 +279,74 @@ describe('bounded container subprocess options', () => {
     expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
   });
 
+  test('streamFromContainer tars the directory contents out through container exec as root', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await streamFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.local/share/claude',
+      hostPath: '/tmp/host-state/.local/share/claude.pi-tin-tmp',
+      run,
+    });
+    expect(calls).toEqual([{
+      file: '/bin/sh',
+      args: [
+        '-c',
+        'set -o pipefail; mkdir -p "$2" && ' +
+          'container exec --user root "$3" sh -c \'cd "$1" && tar -cf - .\' sh "$1" | ' +
+          'tar -xf - -C "$2"',
+        'sh',
+        '/home/dev/.local/share/claude',
+        '/tmp/host-state/.local/share/claude.pi-tin-tmp',
+        'pi-tin-demo',
+      ],
+      options: boundedOptions,
+    }]);
+  });
+
+  // The deadline is worthless if it never reaches the subprocess: dropping the
+  // pass-through would leave every binary copy on the 5s default.
+  test('streamFromContainer passes an explicit timeoutMs through to the subprocess', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await streamFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.local/share/claude',
+      hostPath: '/tmp/host-state/claude.pi-tin-tmp',
+      timeoutMs: 60_000,
+      run,
+    });
+    expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
+  });
+
+  // Without pipefail the pipeline's status is the last command's, so a guest
+  // failure that still emits a well-formed (empty) archive exits 0 and a
+  // truncated copy would look like a success. This test is intentionally kept
+  // even though it cannot fail independently of the two script-assertion
+  // tests above: it exists to catch the case where someone drops pipefail
+  // from the source *and* updates both pinned script expectations to match
+  // (the "just make the tests green" edit) — this is the only test left that
+  // would still fail.
+  test('both copy pipelines set pipefail', async () => {
+    const out = createCopyRunCapture();
+    await streamFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.config/herdr',
+      hostPath: '/tmp/host-state/.config/herdr.pi-tin-tmp',
+      run: out.run,
+    });
+    const into = createCopyRunCapture();
+    await streamToContainer({
+      name: 'pi-tin-demo',
+      hostPath: '/tmp/host-state/.zsh_history',
+      containerPath: '/home/dev/.zsh_history',
+      user: 'dev',
+      run: into.run,
+    });
+    for (const calls of [out.calls, into.calls]) {
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.args[1]).toStartWith('set -o pipefail; ');
+    }
+  });
+
   test('the default copy runner rejects with an ETIMEDOUT-shaped error on deadline', async () => {
     let caught: unknown;
     try {
@@ -290,11 +359,21 @@ describe('bounded container subprocess options', () => {
         // No `run` injected: exercise the real spawn path. The command is the
         // documented `sh -c 'tar … | container exec …'` pipeline; with a 1ms
         // deadline it is killed before doing anything.
+        // Caveat, deliberate: on a host with the runtime up, the shell forks
+        // both halves at once, so this really does exec `container exec`
+        // before the deadline lands — the one test here that touches the
+        // runtime. It is worth the exception because the real spawn path is
+        // the only place the interrupt listeners are installed, and the
+        // listener-count assertion below is what pins them being removed.
       });
     } catch (error) {
       caught = error;
     }
     expect(isContainerSubprocessTimeout(caught)).toBe(true);
+    // The copy runs detached, so it installs interrupt forwarders for its
+    // lifetime. Leaking them would accumulate across every entry of every
+    // sync until Node warns about MaxListeners — pin that they are removed.
+    expect(process.listenerCount('SIGINT')).toBe(0);
   });
 
   test('the default copy runner names the fatal signal when the subprocess dies signalled', async () => {
