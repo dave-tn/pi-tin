@@ -14,6 +14,7 @@ import { listAgentProfiles, createAgentProfile } from '../lib/agent-profiles.js'
 import {
   ensureWorkspaceTmuxDir,
   getHostTmuxConfigPath,
+  getLegacyHostTmuxConfigPath,
   hostTmuxConfigExists,
   hostTmuxConfigUsesPluginsDir,
   hostTmuxPluginsDirExists,
@@ -295,7 +296,7 @@ async function ensureHostTmuxConfigReady(): Promise<boolean> {
     return true;
   }
 
-  const legacyPath = path.join(os.homedir(), '.tmux.conf');
+  const legacyPath = getLegacyHostTmuxConfigPath();
   const moveLegacyConfig = await confirm({
     message: `Move ${legacyPath} to ${getHostTmuxConfigPath()} now?`,
     default: true,

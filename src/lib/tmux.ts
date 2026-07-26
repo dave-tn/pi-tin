@@ -3,41 +3,41 @@ import os from 'node:os';
 import path from 'node:path';
 import { getTmuxConfigsDir } from './paths.js';
 
-export function getHostTmuxConfigDir(): string {
-  return path.join(os.homedir(), '.config', 'tmux');
+export function getHostTmuxConfigDir(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, '.config', 'tmux');
 }
 
-export function getHostTmuxConfigPath(): string {
-  return path.join(getHostTmuxConfigDir(), 'tmux.conf');
+export function getHostTmuxConfigPath(homeDir: string = os.homedir()): string {
+  return path.join(getHostTmuxConfigDir(homeDir), 'tmux.conf');
 }
 
-export function getLegacyHostTmuxConfigPath(): string {
-  return path.join(os.homedir(), '.tmux.conf');
+export function getLegacyHostTmuxConfigPath(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, '.tmux.conf');
 }
 
-export function getHostTmuxPluginsDir(): string {
-  return path.join(os.homedir(), '.tmux');
+export function getHostTmuxPluginsDir(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, '.tmux');
 }
 
-export function hostTmuxConfigExists(): boolean {
-  const configPath = getHostTmuxConfigPath();
+export function hostTmuxConfigExists(homeDir: string = os.homedir()): boolean {
+  const configPath = getHostTmuxConfigPath(homeDir);
   return fs.existsSync(configPath) && fs.statSync(configPath).isFile();
 }
 
-export function legacyHostTmuxConfigExists(): boolean {
-  const configPath = getLegacyHostTmuxConfigPath();
+export function legacyHostTmuxConfigExists(homeDir: string = os.homedir()): boolean {
+  const configPath = getLegacyHostTmuxConfigPath(homeDir);
   return fs.existsSync(configPath) && fs.statSync(configPath).isFile();
 }
 
-export function hostTmuxPluginsDirExists(): boolean {
-  const dir = getHostTmuxPluginsDir();
+export function hostTmuxPluginsDirExists(homeDir: string = os.homedir()): boolean {
+  const dir = getHostTmuxPluginsDir(homeDir);
   return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
 }
 
-export function moveLegacyHostTmuxConfig(): string {
-  const source = getLegacyHostTmuxConfigPath();
-  const destinationDir = getHostTmuxConfigDir();
-  const destination = getHostTmuxConfigPath();
+export function moveLegacyHostTmuxConfig(homeDir: string = os.homedir()): string {
+  const source = getLegacyHostTmuxConfigPath(homeDir);
+  const destinationDir = getHostTmuxConfigDir(homeDir);
+  const destination = getHostTmuxConfigPath(homeDir);
 
   if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
     throw new Error(`Legacy tmux config not found at ${source}`);
@@ -51,11 +51,11 @@ export function moveLegacyHostTmuxConfig(): string {
   return destination;
 }
 
-export function hostTmuxConfigUsesPluginsDir(): boolean {
-  if (!hostTmuxConfigExists()) {
+export function hostTmuxConfigUsesPluginsDir(homeDir: string = os.homedir()): boolean {
+  if (!hostTmuxConfigExists(homeDir)) {
     return false;
   }
-  return fs.readFileSync(getHostTmuxConfigPath(), 'utf-8').includes('.tmux/');
+  return fs.readFileSync(getHostTmuxConfigPath(homeDir), 'utf-8').includes('.tmux/');
 }
 
 export function getWorkspaceTmuxDir(workspaceName: string): string {
