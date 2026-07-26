@@ -18,11 +18,20 @@ export function findConfiguredAgents(home: string = os.homedir()): KnownAgent[] 
   // configured here. Host-mode mounting asks a different question — it needs
   // every dir to exist — and answers it separately in create.ts.
   return KNOWN_AGENTS.filter((agent) =>
-    agent.dotDirs.some((dir) => {
-      const dotPath = path.join(home, dir);
-      return fs.existsSync(dotPath) && fs.statSync(dotPath).isDirectory();
-    }),
+    agent.dotDirs.some((dir) => isExistingDirectory(path.join(home, dir))),
   );
+}
+
+// One stat rather than existsSync + statSync: the path can vanish between the
+// two calls, and an unreadable parent throws EACCES either way. A stat that
+// fails tells us nothing about the agent, so it counts as not-configured — a
+// throw here would abort the whole scan over one unreadable dot-dir.
+function isExistingDirectory(dotPath: string): boolean {
+  try {
+    return fs.statSync(dotPath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export type DiscoveredAgentPlan =

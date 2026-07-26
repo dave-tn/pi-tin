@@ -46,6 +46,21 @@ describe('findConfiguredAgents', () => {
     expect(findConfiguredAgents(fakeHome).map((a) => a.name)).toEqual(['OpenCode']);
   });
 
+  // The scan stats the dot-path directly, so an unreadable parent makes the
+  // stat throw EACCES. One unreadable dot-dir must not abort discovery for
+  // every other agent. Void under uid 0, which ignores the mode bits.
+  test.skipIf(process.getuid?.() === 0)('treats a dot-directory it cannot stat as not configured', () => {
+    const blockedHome = path.join(fakeHome, 'blocked');
+    fs.mkdirSync(path.join(blockedHome, '.claude'), { recursive: true });
+    fs.chmodSync(blockedHome, 0o000);
+    try {
+      expect(findConfiguredAgents(blockedHome)).toEqual([]);
+    } finally {
+      // Restore before afterEach removes the temp home, or the rm fails too.
+      fs.chmodSync(blockedHome, 0o700);
+    }
+  });
+
   test('returns multiple found agents in KNOWN_AGENTS order', () => {
     mkdir('.gemini');
     mkdir('.claude');
