@@ -102,7 +102,7 @@ export function queryHerdrAgentStates(
   }
 }
 
-type HerdrStopContext =
+export type HerdrStopContext =
   | { herdrAttach: false }
   | {
     herdrAttach: true;
@@ -130,21 +130,63 @@ function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
   }
 }
 
+// Seams for the detached helper: every effect it performs is injectable so the
+// branch logic can be tested without containers, timers, or runtime state.
+export interface AutoStopDeps {
+  sleepUntil: typeof sleepUntil;
+  withWorkspaceLock: typeof withWorkspaceLock;
+  readShutdown: typeof readShutdown;
+  reconcileWorkspaceRuntimeState: typeof reconcileWorkspaceRuntimeState;
+  gatherHerdrStopContext: typeof gatherHerdrStopContext;
+  getContainerState: typeof getContainerState;
+  queryHerdrAgentStates: typeof queryHerdrAgentStates;
+  spawnAutoStopHelper: typeof spawnAutoStopHelper;
+  armShutdown: typeof armShutdown;
+  // Deliberately one-parameter: the helper never injects sync dependencies.
+  syncWorkspaceState: (options: Parameters<typeof syncWorkspaceState>[0]) => Promise<void>;
+  stopContainer: typeof stopContainer;
+  deleteContainer: typeof deleteContainer;
+  clearWorkspaceRuntimeState: typeof clearWorkspaceRuntimeState;
+  removeWorkspaceSshArtifacts: typeof removeWorkspaceSshArtifacts;
+  now: () => number;
+}
+
+const defaultAutoStopDeps: AutoStopDeps = {
+  sleepUntil,
+  withWorkspaceLock,
+  readShutdown,
+  reconcileWorkspaceRuntimeState,
+  gatherHerdrStopContext,
+  getContainerState,
+  queryHerdrAgentStates,
+  spawnAutoStopHelper,
+  armShutdown,
+  syncWorkspaceState,
+  stopContainer,
+  deleteContainer,
+  clearWorkspaceRuntimeState,
+  removeWorkspaceSshArtifacts,
+  now: () => Date.now(),
+};
+
 export async function runAutoStopHelper(
   workspaceName: string,
   deadlineMs: number,
+  overrides: Partial<AutoStopDeps> = {},
 ): Promise<void> {
-  await sleepUntil(deadlineMs);
+  const deps = { ...defaultAutoStopDeps, ...overrides };
 
-  await withWorkspaceLock(workspaceName, async () => {
-    const shutdown = readShutdown(workspaceName);
-    const runtime = reconcileWorkspaceRuntimeState(workspaceName);
+  await deps.sleepUntil(deadlineMs);
+
+  await deps.withWorkspaceLock(workspaceName, async () => {
+    const shutdown = deps.readShutdown(workspaceName);
+    const runtime = deps.reconcileWorkspaceRuntimeState(workspaceName);
     const containerName = containerNameFor(workspaceName);
-    const state = getContainerState(containerName);
-    const herdrContext = gatherHerdrStopContext(workspaceName);
+    const state = deps.getContainerState(containerName);
+    const herdrContext = deps.gatherHerdrStopContext(workspaceName);
 
     const agentStates: HerdrAgentStates = herdrContext.herdrAttach && state === 'running'
-      ? queryHerdrAgentStates(containerName, herdrContext.containerProfile.user)
+      ? deps.queryHerdrAgentStates(containerName, herdrContext.containerProfile.user)
       : { kind: 'not-applicable' };
 
     // 'unknown' container state also bails: when listing containers fails, do
@@ -165,10 +207,10 @@ export async function runAutoStopHelper(
       if (!herdrContext.herdrAttach) {
         return;
       }
-      const nextDeadlineMs = Date.now() + herdrContext.stopAfterMs;
-      const helperPid = spawnAutoStopHelper(workspaceName, nextDeadlineMs);
-      armShutdown(workspaceName, {
-        armedAt: new Date().toISOString(),
+      const nextDeadlineMs = deps.now() + herdrContext.stopAfterMs;
+      const helperPid = deps.spawnAutoStopHelper(workspaceName, nextDeadlineMs);
+      deps.armShutdown(workspaceName, {
+        armedAt: new Date(deps.now()).toISOString(),
         deadlineMs: nextDeadlineMs,
         helperPid,
       });
@@ -179,7 +221,7 @@ export async function runAutoStopHelper(
     // session's copy-out — snapshot once more so restore-and-resume picks up
     // the latest state. Best-effort like every sync.
     if (herdrContext.herdrAttach) {
-      await syncWorkspaceState({
+      await deps.syncWorkspaceState({
         containerName,
         workspaceName,
         entries: combinedWorkspaceStateEntries(herdrContext.containerProfile, herdrContext.workspace),
@@ -191,15 +233,15 @@ export async function runAutoStopHelper(
     // Deliberately not stopAndRemoveContainer: this detached helper runs while holding
     // the workspace lock, so it must stay best-effort — never poll and never throw.
     try {
-      stopContainer(containerName);
+      deps.stopContainer(containerName);
     } catch {
       // Best effort only.
     }
 
-    const postState = getContainerState(containerName);
+    const postState = deps.getContainerState(containerName);
     if (postState === 'stopped') {
       try {
-        deleteContainer(containerName);
+        deps.deleteContainer(containerName);
       } catch {
         // Best effort only.
       }
@@ -208,8 +250,8 @@ export async function runAutoStopHelper(
     // Clear only on a confirmed non-running state — an 'unknown' post-state
     // must leave the runtime records for the next invocation to reconcile.
     if (postState === 'stopped' || postState === 'not-found') {
-      clearWorkspaceRuntimeState(workspaceName);
-      removeWorkspaceSshArtifacts(workspaceName, { clearKnownHosts: false });
+      deps.clearWorkspaceRuntimeState(workspaceName);
+      deps.removeWorkspaceSshArtifacts(workspaceName, { clearKnownHosts: false });
     }
   });
 }
