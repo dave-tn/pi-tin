@@ -216,10 +216,13 @@ export async function runAutoStopHelper(
       if (!herdrContext.herdrAttach) {
         return;
       }
-      const nextDeadlineMs = deps.now() + herdrContext.stopAfterMs;
+      // One clock read: two would let armedAt and the deadline it is measured
+      // against come from different instants.
+      const armNow = deps.now();
+      const nextDeadlineMs = armNow + herdrContext.stopAfterMs;
       const helperPid = deps.spawnAutoStopHelper(workspaceName, nextDeadlineMs);
       deps.armShutdown(workspaceName, {
-        armedAt: new Date(deps.now()).toISOString(),
+        armedAt: new Date(armNow).toISOString(),
         deadlineMs: nextDeadlineMs,
         helperPid,
       });
