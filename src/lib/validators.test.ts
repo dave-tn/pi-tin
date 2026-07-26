@@ -9,6 +9,7 @@ import {
   NpmDistTagsSchema,
   UpdateCheckCacheSchema,
   parseAttachMode,
+  validateAgentProfileMeta,
   validateWorkspace,
   validateContainerProfile,
 } from './validators.js';
@@ -246,6 +247,50 @@ describe('ContainerProfileSchema workspace_state', () => {
   });
 });
 
+// base_image and user are interpolated straight into the generated Dockerfile
+// (`FROM <base_image>`, `USER <user>`), so their patterns are the only thing
+// standing between a malformed profile field and a malformed build.
+describe('ContainerProfileSchema base_image', () => {
+  test('accepts registry, tag, and path forms', () => {
+    for (const image of ['node', 'node:22', 'debian:trixie-slim', 'ghcr.io/apple/builder:1.0.0']) {
+      expect(validateContainerProfile({ ...baseProfile, base_image: image }).base_image).toBe(image);
+    }
+  });
+
+  test('rejects images carrying whitespace, shell syntax, or newlines, echoing the value', () => {
+    const rejections: ReadonlyArray<{ image: string; received: string }> = [
+      { image: 'node:22 && rm -rf /', received: '"node:22 && rm -rf /"' },
+      { image: '-evil', received: '"-evil"' },
+      { image: 'node\nRUN echo pwned', received: '"node\nRUN echo pwned"' },
+      { image: '', received: '""' },
+    ];
+    for (const { image, received } of rejections) {
+      expect(() => validateContainerProfile({ ...baseProfile, base_image: image })).toThrow(
+        'Invalid container profile configuration:\n'
+        + '  base_image: Invalid format: Expected /^[a-zA-Z0-9][a-zA-Z0-9._\\/-]*(:[a-zA-Z0-9._-]+)?$/ '
+        + `but received ${received}`,
+      );
+    }
+  });
+});
+
+describe('ContainerProfileSchema user', () => {
+  test('accepts posix account names', () => {
+    for (const user of ['dev', 'root', '_service', 'build-bot', 'u2']) {
+      expect(validateContainerProfile({ ...baseProfile, user }).user).toBe(user);
+    }
+  });
+
+  test('rejects non-posix account names, echoing the value', () => {
+    for (const user of ['Dev', '1dev', 'dev user', 'dev;whoami', '']) {
+      expect(() => validateContainerProfile({ ...baseProfile, user })).toThrow(
+        'Invalid container profile configuration:\n'
+        + `  user: Invalid format: Expected /^[a-z_][a-z0-9_-]*$/ but received "${user}"`,
+      );
+    }
+  });
+});
+
 describe('ContainerProfileSchema cpus', () => {
   test('accepts a positive integer', () => {
     expect(validateContainerProfile({ ...baseProfile, cpus: 4 }).cpus).toBe(4);
@@ -383,14 +428,54 @@ describe('WorkspaceSchema host', () => {
     expect(result.host?.githubCLI).toBe(false);
   });
 
-  test('validates host.mounts', () => {
+  test('validates host.mounts, carrying every field through unchanged', () => {
     const result = validateWorkspace({
       ...baseWorkspace,
       host: {
-        mounts: [{ host: '~/.aws', container: '/home/dev/.aws', readonly: true }],
+        mounts: [
+          { host: '~/.aws', container: '/home/dev/.aws', readonly: true },
+          { host: '/srv/data', container: '/mnt/data', readonly: false },
+        ],
       },
     });
-    expect(result.host?.mounts).toHaveLength(1);
+    expect(result.host?.mounts).toEqual([
+      { host: '~/.aws', container: '/home/dev/.aws', readonly: true },
+      { host: '/srv/data', container: '/mnt/data', readonly: false },
+    ]);
+  });
+
+  test('defaults host.mounts to empty when omitted', () => {
+    expect(validateWorkspace({ ...baseWorkspace, host: {} }).host?.mounts).toEqual([]);
+  });
+
+  // readonly is not optional by design: a mount silently defaulting to
+  // read-write is the kind of thing a user must state explicitly.
+  test('rejects malformed host.mounts entries, naming the field by index', () => {
+    const invalidMounts: ReadonlyArray<{ mount: Record<string, unknown>; message: string }> = [
+      {
+        mount: { host: '~/.aws', container: '/home/dev/.aws' },
+        message: 'Invalid workspace configuration:\n'
+          + '  host.mounts.0.readonly: Invalid key: Expected "readonly" but received undefined',
+      },
+      {
+        mount: { host: '~/.aws', container: '/home/dev/.aws', readonly: 'yes' },
+        message: 'Invalid workspace configuration:\n'
+          + '  host.mounts.0.readonly: Invalid type: Expected boolean but received "yes"',
+      },
+      {
+        mount: { host: 1, container: '/home/dev/.aws', readonly: true },
+        message: 'Invalid workspace configuration:\n'
+          + '  host.mounts.0.host: Invalid type: Expected string but received 1',
+      },
+      {
+        mount: { host: '~/.aws', container: '/home/dev/.aws', readonly: true, mode: 'rw' },
+        message: 'Invalid workspace configuration:\n'
+          + '  host.mounts.0.mode: Invalid key: Expected never but received "mode"',
+      },
+    ];
+    for (const { mount, message } of invalidMounts) {
+      expect(() => validateWorkspace({ ...baseWorkspace, host: { mounts: [mount] } })).toThrow(message);
+    }
   });
 
   test('validates host.env', () => {
@@ -455,8 +540,35 @@ describe('WorkspaceSchema tools', () => {
       ...baseWorkspace,
       tools: [{ name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' }],
     });
-    expect(result.tools).toHaveLength(1);
-    expect(result.tools[0]?.name).toBe('Claude Code');
+    expect(result.tools).toEqual([
+      { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+    ]);
+  });
+
+  test('accepts scoped, unscoped, and version-pinned npm specs', () => {
+    for (const pkg of ['@openai/codex', '@openai/codex@latest', 'pi-tin', 'pi-tin@0.2.0']) {
+      const result = validateWorkspace({ ...baseWorkspace, tools: [{ name: 'T', package: pkg }] });
+      expect(result.tools[0]?.package).toBe(pkg);
+    }
+  });
+
+  // The package spec reaches `npm install -g <package>` in the generated
+  // Dockerfile, so a spec carrying whitespace or shell syntax must not parse.
+  test('rejects malformed package specs, naming the tool by index', () => {
+    for (const pkg of ['foo bar', 'pkg; rm -rf /', '']) {
+      expect(() => validateWorkspace({ ...baseWorkspace, tools: [{ name: 'T', package: pkg }] })).toThrow(
+        'Invalid workspace configuration:\n'
+        + '  tools.0.package: Invalid format: '
+        + `Expected /^[@a-zA-Z0-9][a-zA-Z0-9._\\/-]*(@[a-zA-Z0-9._-]+)?$/i but received "${pkg}"`,
+      );
+    }
+  });
+
+  test('rejects a tool without a package', () => {
+    expect(() => validateWorkspace({ ...baseWorkspace, tools: [{ name: 'T' }] })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  tools.0.package: Invalid key: Expected "package" but received undefined',
+    );
   });
 
   test('rejects internal agent metadata fields (workspaces must persist only name/package)', () => {
@@ -560,6 +672,79 @@ describe('WorkspaceSchema tmux', () => {
       tmux: { mode: 'isolated' },
     });
     expect(result.tmux?.mode).toBe('isolated');
+  });
+
+  test('rejects an unknown tmux mode, naming the field and listing the modes', () => {
+    expect(() => validateWorkspace({ ...baseWorkspace, tmux: { mode: 'shared' } })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  tmux.mode: Invalid type: Expected ("host" | "isolated") but received "shared"',
+    );
+  });
+
+  test('rejects a tmux section without a mode', () => {
+    expect(() => validateWorkspace({ ...baseWorkspace, tmux: {} })).toThrow(
+      'Invalid workspace configuration:\n'
+      + '  tmux.mode: Invalid key: Expected "mode" but received undefined',
+    );
+  });
+});
+
+describe('validateAgentProfileMeta', () => {
+  test('accepts a profile.yaml payload verbatim', () => {
+    expect(validateAgentProfileMeta({
+      agent: 'claude',
+      mode: 'isolated',
+      mounts: ['.claude', '.claude.json'],
+    })).toEqual({ agent: 'claude', mode: 'isolated', mounts: ['.claude', '.claude.json'] });
+  });
+
+  // 'shared' is the pre-rename spelling of 'host' and still exists in profiles
+  // written by older pi-tin versions; it must keep loading as 'host' rather
+  // than becoming a third mode downstream.
+  test("migrates the legacy 'shared' mode to 'host'", () => {
+    expect(validateAgentProfileMeta({ agent: 'claude', mode: 'shared', mounts: [] }))
+      .toEqual({ agent: 'claude', mode: 'host', mounts: [] });
+    expect(validateAgentProfileMeta({ agent: 'codex', mode: 'host', mounts: ['.codex'] }).mode)
+      .toBe('host');
+  });
+
+  test('rejects an unknown mode, naming the field and listing the accepted modes', () => {
+    expect(() => validateAgentProfileMeta({ agent: 'claude', mode: 'sandbox', mounts: [] })).toThrow(
+      'Invalid agent profile configuration:\n'
+      + '  mode: Invalid type: Expected ("host" | "shared" | "isolated") but received "sandbox"',
+    );
+  });
+
+  test('rejects a payload missing mounts', () => {
+    expect(() => validateAgentProfileMeta({ agent: 'claude', mode: 'host' })).toThrow(
+      'Invalid agent profile configuration:\n'
+      + '  mounts: Invalid key: Expected "mounts" but received undefined',
+    );
+  });
+
+  test('rejects a non-string mount entry, naming it by index', () => {
+    expect(() => validateAgentProfileMeta({ agent: 'claude', mode: 'host', mounts: [1] })).toThrow(
+      'Invalid agent profile configuration:\n'
+      + '  mounts.0: Invalid type: Expected string but received 1',
+    );
+  });
+
+  test('rejects unknown keys, naming the offending key', () => {
+    expect(() => validateAgentProfileMeta({
+      agent: 'claude',
+      mode: 'host',
+      mounts: [],
+      name: 'personal',
+    })).toThrow(
+      'Invalid agent profile configuration:\n'
+      + '  name: Invalid key: Expected never but received "name"',
+    );
+  });
+
+  test('rejects a non-object payload', () => {
+    expect(() => validateAgentProfileMeta(null)).toThrow(
+      'Invalid agent profile configuration:\n  Invalid type: Expected Object but received null',
+    );
   });
 });
 

@@ -90,7 +90,27 @@ describe('runDefaultAction', () => {
     });
   });
 
-  test('ignores --build when no workspace matches and runs create flow', async () => {
+  // `attach` is asserted explicitly rather than through the `opened` toEqual
+  // above: toEqual treats a missing key and an undefined one as equal, so
+  // dropping the attach passthrough fails nothing there.
+  test('passes the attach override through to openWorkspace', async () => {
+    const attachArgs: Array<Workspace['attach'] | undefined> = [];
+
+    const deps = createDeps({
+      findWorkspacesForDirectory: () => [
+        { name: 'my-app', workspace: createWorkspace(['/Users/dave/Dev/my-app']) },
+      ],
+      openWorkspace: (_name, opts) => {
+        attachArgs.push(opts.attach);
+      },
+    });
+
+    await runDefaultAction({ attach: 'herdr' }, deps);
+
+    expect(attachArgs).toEqual(['herdr']);
+  });
+
+  test('offers to create a workspace when none matches and none exist', async () => {
     let createCalls = 0;
     let openCalls = 0;
     let confirmMessage: string | undefined;

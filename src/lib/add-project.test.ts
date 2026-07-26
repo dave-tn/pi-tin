@@ -1,5 +1,12 @@
 import { describe, test, expect } from 'bun:test';
-import { addableWorkspaces, handleWorkspaceSelection, type WorkspaceMatch, type WorkspaceSelectionDeps } from './add-project.js';
+import {
+  addProjectToChosenWorkspace,
+  addableWorkspaces,
+  handleActionError,
+  handleWorkspaceSelection,
+  type WorkspaceMatch,
+  type WorkspaceSelectionDeps,
+} from './add-project.js';
 import type { Workspace } from './validators.js';
 
 function ws(projects: string[]): Workspace {
@@ -22,6 +29,75 @@ describe('addableWorkspaces', () => {
   test('returns empty when every workspace covers the directory', () => {
     const all = [match('work', ['/a'])];
     expect(addableWorkspaces(all, [match('work', ['/a'])])).toEqual([]);
+  });
+});
+
+describe('handleActionError', () => {
+  test('prints the error message and exits 1', () => {
+    const errors: string[] = [];
+    let exitCode: number | undefined;
+    handleActionError(new Error("Workspace 'work' not found."), {
+      error: (...a: unknown[]) => errors.push(a.join(' ')),
+      exit: (code: number) => { exitCode = code; },
+    });
+    expect(errors.join('\n')).toContain("Workspace 'work' not found.");
+    expect(exitCode).toBe(1);
+  });
+
+  test('stringifies a non-Error throw rather than printing [object Object]', () => {
+    const errors: string[] = [];
+    handleActionError('container system offline', {
+      error: (...a: unknown[]) => errors.push(a.join(' ')),
+      exit: () => {},
+    });
+    expect(errors.join('\n')).toContain('container system offline');
+  });
+});
+
+describe('addProjectToChosenWorkspace', () => {
+  function executorDeps(overrides: Partial<WorkspaceSelectionDeps> = {}) {
+    return {
+      countSharedDirectories: () => 1,
+      getContainerStateFor: () => 'stopped' as const,
+      isInteractiveSession: () => true,
+      appendProjectToWorkspace: () => {},
+      computeContainerWorkdir: () => undefined,
+      openWorkspace: () => {},
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+      ...overrides,
+    };
+  }
+
+  test('a rejected plan reports the reason, exits 1, and writes nothing', async () => {
+    const errors: string[] = [];
+    let exitCode: number | undefined;
+    let appended = false;
+
+    await addProjectToChosenWorkspace(match('work', ['/a']), '/a', executorDeps({
+      appendProjectToWorkspace: () => { appended = true; },
+      error: (...a: unknown[]) => errors.push(a.join(' ')),
+      exit: (code: number) => { exitCode = code; },
+    }));
+
+    expect(errors.join('\n')).toContain("Project is already in workspace 'work': /a");
+    expect(exitCode).toBe(1);
+    expect(appended).toBe(false);
+  });
+
+  test('a throwing dependency is reported through handleActionError, not propagated', async () => {
+    const errors: string[] = [];
+    let exitCode: number | undefined;
+
+    await addProjectToChosenWorkspace(match('work', ['/a']), '/x', executorDeps({
+      appendProjectToWorkspace: () => { throw new Error('EACCES: permission denied'); },
+      error: (...a: unknown[]) => errors.push(a.join(' ')),
+      exit: (code: number) => { exitCode = code; },
+    }));
+
+    expect(errors.join('\n')).toContain('EACCES: permission denied');
+    expect(exitCode).toBe(1);
   });
 });
 

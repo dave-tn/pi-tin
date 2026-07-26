@@ -94,10 +94,18 @@ describe('findProjectRoot', () => {
 });
 
 describe('getAgentProfilesDir', () => {
-  test('returns agent-profiles subdirectory of config dir', () => {
-    const dir = getAgentProfilesDir();
-    expect(dir).toContain('pi-tin');
-    expect(dir.endsWith('/agent-profiles')).toBe(true);
+  const original = process.env['XDG_CONFIG_HOME'];
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = original;
+    }
+  });
+
+  test('lives under the config dir honoring XDG_CONFIG_HOME', () => {
+    process.env['XDG_CONFIG_HOME'] = '/tmp/xdg-example';
+    expect(getAgentProfilesDir()).toBe('/tmp/xdg-example/pi-tin/agent-profiles');
   });
 });
 

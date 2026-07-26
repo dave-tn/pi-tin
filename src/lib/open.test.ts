@@ -15,6 +15,7 @@ import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginSh
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
+import { containerHomeDir, getHostGhConfigDir } from './paths.js';
 import { CliError, EXIT } from './cli-errors.js';
 
 describe('openWorkspace workspace loading errors', () => {
@@ -262,6 +263,145 @@ describe('computeRuntimeStartPlan sshd', () => {
   });
 });
 
+// The runtime hash is the sole drift signal: a running workspace only restarts
+// when it moves. A dimension silently dropped from the hash disables the
+// restart for that dimension with no other symptom, so each one gets its own
+// "a change moves the hash" pin.
+describe('computeRuntimeStartPlan runtime hash drift', () => {
+  let tmpDir: string;
+  let projectDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    projectDir = path.join(tmpDir, 'proj');
+    fs.mkdirSync(projectDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  const planFor = (
+    workspaceExtra: Record<string, unknown> = {},
+    containerProfileExtra: Record<string, unknown> = {},
+  ): ReturnType<typeof computeRuntimeStartPlan> => {
+    const workspace = validateWorkspace({
+      profile: 'node-dev',
+      projects: [projectDir],
+      ...workspaceExtra,
+    });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+      ...containerProfileExtra,
+    });
+    return computeRuntimeStartPlan({
+      wsName: 'demo',
+      containerName: containerNameFor('demo'),
+      imageTag: imageTagFor('demo'),
+      workspace,
+      containerProfile,
+      resources: resolveResources(containerProfile),
+    });
+  };
+
+  test('an unchanged workspace hashes identically across calls', () => {
+    expect(planFor().runtimeHash).toBe(planFor().runtimeHash);
+  });
+
+  test('a new project mount moves the hash', () => {
+    const second = path.join(tmpDir, 'other-proj');
+    fs.mkdirSync(second, { recursive: true });
+
+    const before = planFor();
+    const after = planFor({ projects: [projectDir, second] });
+
+    expect(after.volumes.length).toBe(before.volumes.length + 1);
+    expect(after.runtimeHash).not.toBe(before.runtimeHash);
+  });
+
+  test('mount ordering alone does not move the hash', () => {
+    const second = path.join(tmpDir, 'other-proj');
+    fs.mkdirSync(second, { recursive: true });
+
+    expect(planFor({ projects: [projectDir, second] }).runtimeHash)
+      .toBe(planFor({ projects: [second, projectDir] }).runtimeHash);
+  });
+
+  test('a readonly flip on the same mount moves the hash', () => {
+    const shared = path.join(tmpDir, 'shared');
+    fs.mkdirSync(shared, { recursive: true });
+    const mount = (readonly: boolean): Record<string, unknown> => ({
+      host: { mounts: [{ host: shared, container: '/mnt/shared', readonly }] },
+    });
+
+    expect(planFor(mount(true)).runtimeHash).not.toBe(planFor(mount(false)).runtimeHash);
+  });
+
+  test('changed cpu and memory resources move the hash', () => {
+    const base = planFor({}, { cpus: 4, memory: '8g' });
+
+    expect(planFor({}, { cpus: 8, memory: '8g' }).runtimeHash).not.toBe(base.runtimeHash);
+    expect(planFor({}, { cpus: 4, memory: '16g' }).runtimeHash).not.toBe(base.runtimeHash);
+  });
+
+  test('host.sshAgent moves the hash', () => {
+    const withAgent = planFor({ host: { sshAgent: true } });
+    const withoutAgent = planFor({ host: { sshAgent: false } });
+
+    expect(withAgent.ssh).toBe(true);
+    expect(withoutAgent.ssh).toBe(false);
+    expect(withoutAgent.runtimeHash).not.toBe(withAgent.runtimeHash);
+  });
+
+  // githubCLI also adds a ~/.config/gh mount when that directory exists on the
+  // host, so a bare toggle would move the hash through `volumes` on some
+  // machines and prove nothing about the field. Pairing the toggle against an
+  // explicit host.mount of the same directory keeps `volumes` identical either
+  // way (asserted below), leaving githubCLI as the only hashed difference.
+  test('host.githubCLI moves the hash independently of the gh mount it adds', () => {
+    const withFlag = planFor({ host: { githubCLI: true } });
+    const withMountOnly = planFor({
+      host: {
+        githubCLI: false,
+        mounts: [{
+          host: getHostGhConfigDir(),
+          container: `${containerHomeDir('dev')}/.config/gh`,
+          readonly: true,
+        }],
+      },
+    });
+
+    expect(withMountOnly.volumes).toEqual(withFlag.volumes);
+    expect(withFlag.runtimeHash).not.toBe(withMountOnly.runtimeHash);
+  });
+
+  test('host.env keys and values both move the hash', () => {
+    const none = planFor({ host: { env: {} } });
+    const oneKey = planFor({ host: { env: { FOO: 'a' } } });
+    const changedValue = planFor({ host: { env: { FOO: 'b' } } });
+    const extraKey = planFor({ host: { env: { FOO: 'a', BAR: 'a' } } });
+
+    expect(oneKey.runtimeHash).not.toBe(none.runtimeHash);
+    expect(changedValue.runtimeHash).not.toBe(oneKey.runtimeHash);
+    expect(extraKey.runtimeHash).not.toBe(oneKey.runtimeHash);
+  });
+
+  test('host.env key ordering alone does not move the hash', () => {
+    expect(planFor({ host: { env: { AAA: '1', ZZZ: '2' } } }).runtimeHash)
+      .toBe(planFor({ host: { env: { ZZZ: '2', AAA: '1' } } }).runtimeHash);
+  });
+});
+
 describe('planAttachPreflight', () => {
   const base = {
     workspaceName: 'demo',
@@ -449,6 +589,29 @@ describe('planWorkspaceOpen', () => {
     });
   });
 
+  // The refuse branch has two independent triggers. Without this case the
+  // hasRuntimeMeta check could be deleted outright and every test would still
+  // pass, because 'corrupt' already satisfies the runtimeState half.
+  test('refuses when runtime state reads ok but the runtime metadata is gone', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: false,
+      activeSessions: 0,
+      buildRequested: false,
+      hasDrift: false,
+    })).toEqual({
+      action: 'refuse',
+      message: [
+        "Workspace 'demo' is running, but its runtime state could not be read.",
+        'pi-tin cannot safely join or restart it in this state.',
+        'To reset it: pi-tin stop demo',
+        'If needed: pi-tin stop demo --force',
+      ].join('\n'),
+    });
+  });
+
   test('refuses --build while active sessions exist', () => {
     expect(planWorkspaceOpen({
       workspaceName: 'demo',
@@ -480,7 +643,7 @@ describe('planWorkspaceOpen', () => {
     });
   });
 
-  test('restarts during grace when drift or build is requested', () => {
+  test('restarts during grace when config drift is detected', () => {
     expect(planWorkspaceOpen({
       workspaceName: 'demo',
       containerState: 'running',
@@ -489,6 +652,24 @@ describe('planWorkspaceOpen', () => {
       activeSessions: 0,
       buildRequested: false,
       hasDrift: true,
+    })).toEqual({
+      action: 'restart',
+      activeSessionsAfterOpen: 1,
+    });
+  });
+
+  // The other half of the restart condition: --build during the grace window
+  // restarts even with no drift. Without this, dropping buildRequested from
+  // the restart check would silently turn --build into a plain rejoin.
+  test('restarts during grace when --build is requested without drift', () => {
+    expect(planWorkspaceOpen({
+      workspaceName: 'demo',
+      containerState: 'running',
+      runtimeState: 'ok',
+      hasRuntimeMeta: true,
+      activeSessions: 0,
+      buildRequested: true,
+      hasDrift: false,
     })).toEqual({
       action: 'restart',
       activeSessionsAfterOpen: 1,

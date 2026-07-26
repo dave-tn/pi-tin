@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { CliError, EXIT } from './cli-errors.js';
-import { parseJsonInput, toValidationError } from './apply-input.js';
+import { loadApplyDiffBase, parseJsonInput, toValidationError } from './apply-input.js';
 
 describe('parseJsonInput', () => {
   test('parses valid JSON', () => {
@@ -36,6 +36,56 @@ describe('parseJsonInput', () => {
         expect(err.message).toEndWith('.');
         expect(err.message.length).toBeGreaterThan('Input on stdin is not valid JSON: .'.length);
       }
+    }
+  });
+});
+
+describe('loadApplyDiffBase', () => {
+  test('passes a loadable existing document straight through', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const existing = { profile: 'node-dev', projects: ['/a'] };
+      expect(loadApplyDiffBase('workspace', 'work', () => existing)).toBe(existing);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // apply is a full replace, so a corrupt existing document must degrade the
+  // diff base rather than abort the write — and the real parse error has to
+  // reach stderr, since stdout stays pure JSON for the agent surface.
+  test('degrades a corrupt existing document to {} and warns with the real parse error', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const base = loadApplyDiffBase('container profile', 'node-dev', () => {
+        throw new Error('Failed to parse YAML at /x/node-dev.yaml:\n  bad indentation');
+      });
+
+      expect(base).toEqual({});
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [message] = warn.mock.calls[0] ?? [];
+      expect(message).toBe(
+        "Warning: existing container profile 'node-dev' could not be parsed; apply replaces it: "
+        + 'Failed to parse YAML at /x/node-dev.yaml:\n  bad indentation',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('warns with a stringified non-Error throw rather than swallowing it', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(loadApplyDiffBase('workspace', 'work', () => {
+        throw 'disk on fire';
+      })).toEqual({});
+      const [message] = warn.mock.calls[0] ?? [];
+      expect(message).toBe(
+        "Warning: existing workspace 'work' could not be parsed; apply replaces it: disk on fire",
+      );
+    } finally {
+      warn.mockRestore();
     }
   });
 });

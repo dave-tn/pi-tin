@@ -55,6 +55,20 @@ describe('formatDurationMs', () => {
     expect(formatDurationMs(60 * 60 * 1000)).toBe('1h');
     expect(formatDurationMs((60 * 60 + 60) * 1000)).toBe('1h 1m');
   });
+
+  // Sub-second remainders round up: this renders a countdown, and "0s" for a
+  // deadline that has not passed reads as expired. A floor would print '0s'.
+  test('rounds a part-second up to a whole second', () => {
+    expect(formatDurationMs(1)).toBe('1s');
+    expect(formatDurationMs(500)).toBe('1s');
+    expect(formatDurationMs(1_500)).toBe('2s');
+  });
+
+  test('drops the seconds component once hours are shown', () => {
+    expect(formatDurationMs(3_601_000)).toBe('1h');
+    expect(formatDurationMs((60 * 60 + 59) * 1000)).toBe('1h');
+    expect(formatDurationMs((2 * 60 * 60 + 30 * 60 + 59) * 1000)).toBe('2h 30m');
+  });
 });
 
 describe('remainingDurationMs', () => {
