@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { defaultProfileNameFor } from './agents.js';
+import { defaultProfileNameFor, dotDirsLabel } from './agents.js';
 import type { KnownAgent } from './agents.js';
 import type { AgentProfileEntry } from './agent-profiles.js';
 import type { HostMount, Tool, Workspace } from './validators.js';
@@ -51,9 +51,8 @@ export function planAgentProfileSelection(
   const choices: Choice<AgentProfileChoice>[] = [];
 
   if (hostConfigExists) {
-    const dirs = agent.dotDirs.map((d) => `~/${d}`).join(', ');
     choices.push({
-      name: `Use host config (${dirs}) [host]`,
+      name: `Use host config (${dotDirsLabel(agent)}) [host]`,
       value: { kind: 'use-host', existingProfileName: hostProfile?.name },
     });
   }
