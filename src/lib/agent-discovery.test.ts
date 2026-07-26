@@ -103,6 +103,14 @@ describe('planDiscoveredAgentProfile', () => {
     expect(plan.suggestedName).toBe('claude-code-2');
   });
 
+  test('counts past every taken suffix', () => {
+    const plan = planDiscoveredAgentProfile({
+      agent: keychainOnly,
+      existingProfileNames: ['claude-code', 'claude-code-2'],
+    });
+    expect(plan.suggestedName).toBe('claude-code-3');
+  });
+
   test('ignores existing names unrelated to the agent', () => {
     const plan = planDiscoveredAgentProfile({
       agent: keychainOnly,

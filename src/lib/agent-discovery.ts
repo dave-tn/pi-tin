@@ -78,5 +78,10 @@ export function agentProfileNameError(options: {
 }
 
 function suggestAgentProfileName(defaultName: string, taken: readonly string[]): string {
-  return taken.includes(defaultName) ? `${defaultName}-2` : defaultName;
+  if (!taken.includes(defaultName)) return defaultName;
+  // Count up rather than stopping at -2: a single-shot suffix pre-fills the
+  // prompt with a name its own validator then rejects, once -2 is taken too.
+  let suffix = 2;
+  while (taken.includes(`${defaultName}-${suffix}`)) suffix += 1;
+  return `${defaultName}-${suffix}`;
 }
