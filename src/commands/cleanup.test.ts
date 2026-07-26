@@ -103,7 +103,7 @@ describe('confirmCleanup', () => {
     expect(await confirmCleanup({ stopped: ['ws-a', 'ws-b'], force: true, isInteractive: false, quiet: true })).toBe(true);
   });
 
-  test('names every workspace it is about to destroy before asking', async () => {
+  test('prints the destructive preamble naming every workspace and the global-prune warning', async () => {
     const lines: string[] = [];
     const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(' '));
