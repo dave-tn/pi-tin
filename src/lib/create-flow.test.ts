@@ -12,7 +12,7 @@ import {
   planAgentProfileSelection,
   timezoneEnv,
   tmuxModeChoices,
-} from '../lib/create-flow.js';
+} from './create-flow.js';
 
 describe('planAgentProfileSelection', () => {
   const agent = { dotDirs: ['.claude'] };
