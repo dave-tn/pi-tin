@@ -1391,9 +1391,9 @@ describe('syncWorkspaceState progress reporting', () => {
     );
 
     expect(events.at(-1)).toBe('finish timed-out');
-    expect(warnings).toEqual([
-      "Warning: workspace_state copy-out timed out after 5s for '/home/dev/.zsh_history' in workspace 'demo' — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).",
-    ]);
+    // The warning text itself is pinned once, in the timeout-handling block —
+    // what this test adds is that the reporter closes the entry as well.
+    expect(warnings).toHaveLength(1);
   });
 
   test('no reporter injected is silent and still syncs', async () => {

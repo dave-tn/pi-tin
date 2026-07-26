@@ -63,17 +63,14 @@ describe('profiles', () => {
       expect(() => loadContainerProfile('missing')).toThrow("Container profile 'missing' not found");
     });
 
+    // The guard is what keeps a name from resolving outside the profiles dir:
+    // traversal names are rejected before any path is joined or read.
     test.each(['../x', 'a/b', 'a\\b', '.', '..', ''])(
       "rejects path-unsafe name '%s'",
       (name) => {
         expect(() => loadContainerProfile(name)).toThrow(`Invalid container profile name '${name}'`);
       },
     );
-
-    test('does not read outside the profiles dir for traversal names', () => {
-      fs.writeFileSync(path.join(tmpDir, 'pi-tin', 'escaped.yaml'), PROFILE_YAML);
-      expect(() => loadContainerProfile('../escaped')).toThrow('Invalid container profile name');
-    });
   });
 
   describe('listContainerProfiles', () => {

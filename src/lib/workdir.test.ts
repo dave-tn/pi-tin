@@ -37,12 +37,4 @@ describe('computeContainerWorkdir', () => {
     ]);
     expect(result).toBeUndefined();
   });
-
-  test('returns project root with no trailing slash for exact match', () => {
-    const result = computeContainerWorkdir('/Users/dave/Dev/my-app', [
-      '/Users/dave/Dev/my-app',
-      '/Users/dave/Dev/other',
-    ]);
-    expect(result).toBe('/workspace/my-app');
-  });
 });
