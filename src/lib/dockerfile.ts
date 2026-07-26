@@ -1,3 +1,4 @@
+import { nativeAgentInstalls, npmToolSpecs } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -228,15 +229,22 @@ export function generateDockerfile(
   const extras: Array<{ name: string; content: string }> = [];
 
   const pm = resolvePackageManager(profile);
+  const nativeInstalls = nativeAgentInstalls(packages);
+  const npmSpecs = npmToolSpecs(packages);
 
   lines.push(`FROM ${profile.base_image}`);
   lines.push('');
 
+  // Native install scripts need curl+bash (same package names across
+  // apt/apk/dnf); musl bases additionally need each agent's runtime libs.
+  const nativeMuslPackages =
+    pm === 'apk' ? [...new Set(nativeInstalls.flatMap((install) => install.muslPackages))] : [];
   const allPackages = [
     ...profile.packages,
     ...profile.extra_packages,
     // Same package name across apt/apk/dnf; each pulls its ssh-keygen dependency.
     ...(opts.sshd !== null ? ['openssh-server'] : []),
+    ...(nativeInstalls.length > 0 ? ['curl', 'ca-certificates', 'bash', ...nativeMuslPackages] : []),
   ];
   if (allPackages.length > 0) {
     lines.push(...installPackagesLines(pm, allPackages));
@@ -271,14 +279,25 @@ export function generateDockerfile(
 
   lines.push(`ENV HOME=$HOME_DIR`);
   // Wrapper launchers first, then the refresh prefix, then the baked prefix —
-  // missing dirs are inert, so the line is unconditional. With sshd, .local/bin
-  // joins the image PATH: non-interactive ssh reads no .zshrc, and remote
-  // clients (herdr) locate/auto-install their server binary there.
-  const sshdPathSuffix = opts.sshd !== null ? ':$HOME_DIR/.local/bin' : '';
-  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin${sshdPathSuffix}:$PATH`);
+  // missing dirs are inert, so the line is unconditional. .local/bin joins the
+  // image PATH unconditionally: native agents install there, non-interactive
+  // ssh reads no .zshrc, and remote clients (herdr) locate/auto-install their
+  // server binary there. Native agents with their own bin dir (opencode)
+  // append it only when present.
+  const nativeBinDirs = [...new Set(nativeInstalls.map((install) => install.binDir))]
+    .filter((binDir) => binDir !== '.local/bin');
+  const nativeBinSuffix = nativeBinDirs.map((binDir) => `:$HOME_DIR/${binDir}`).join('');
+  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin${nativeBinSuffix}:$PATH`);
   const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
+  }
+  if (pm === 'apk') {
+    for (const install of nativeInstalls) {
+      for (const [key, value] of Object.entries(install.muslEnv)) {
+        lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
+      }
+    }
   }
   for (const [key, value] of Object.entries(profile.env)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
@@ -309,17 +328,22 @@ export function generateDockerfile(
     extras.push({ name: 'claude-config.json', content: `${claudeConfig}\n` });
   }
 
-  // Entrypoint, refresh script, and agent wrappers (copied as root before user switch)
-  const packageSpecs = packages.map((pkg) => pkg.package);
+  // Entrypoint, refresh script, and agent wrappers (copied as root before user
+  // switch). The refresh script exists only for npm-installed agents — native
+  // agents keep themselves fresh with their own auto-updaters.
   if (packages.length > 0) {
     lines.push(
       'COPY pi-tin-entrypoint /usr/local/bin/pi-tin-entrypoint',
       'RUN chmod +x /usr/local/bin/pi-tin-entrypoint',
-      `COPY pi-tin-refresh-agents ${REFRESH_SCRIPT_PATH}`,
-      `RUN chmod +x ${REFRESH_SCRIPT_PATH}`,
     );
     extras.push({ name: 'pi-tin-entrypoint', content: generateEntrypoint() });
-    extras.push({ name: 'pi-tin-refresh-agents', content: generateRefreshScript(packageSpecs) });
+    if (npmSpecs.length > 0) {
+      lines.push(
+        `COPY pi-tin-refresh-agents ${REFRESH_SCRIPT_PATH}`,
+        `RUN chmod +x ${REFRESH_SCRIPT_PATH}`,
+      );
+      extras.push({ name: 'pi-tin-refresh-agents', content: generateRefreshScript(npmSpecs) });
+    }
 
     if (agentWraps.length > 0) {
       lines.push(`RUN mkdir -p ${AGENT_WRAPPER_BIN_DIR}`);
@@ -369,7 +393,7 @@ export function generateDockerfile(
   }
 
   // Fail early and clearly if the image has no npm but the workspace needs it.
-  if (profile.global_tools.length > 0 || packages.length > 0) {
+  if (profile.global_tools.length > 0 || npmSpecs.length > 0) {
     lines.push(NPM_PREFLIGHT);
     lines.push('');
   }
@@ -389,11 +413,22 @@ export function generateDockerfile(
     lines.push('');
   }
 
+  // Native agent installs (as user; self-updating in-container, with the
+  // updated binaries persisted across container lives via workspace state).
+  // One RUN per agent for layer-cache granularity and error attribution.
+  if (nativeInstalls.length > 0) {
+    lines.push('# Native agent installs');
+    for (const install of nativeInstalls) {
+      lines.push(`RUN ${install.installCommand}`);
+    }
+    lines.push('');
+  }
+
   // Workspace npm packages (as user, using npm prefix).
   // Single RUN so npm parallelises fetches across all packages.
-  if (packages.length > 0) {
+  if (npmSpecs.length > 0) {
     lines.push('# Workspace packages');
-    lines.push(`RUN npm install -g ${packageSpecs.join(' ')}`);
+    lines.push(`RUN npm install -g ${npmSpecs.join(' ')}`);
     lines.push('');
   }
 

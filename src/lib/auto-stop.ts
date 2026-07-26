@@ -136,7 +136,7 @@ export async function runAutoStopHelper(
 ): Promise<void> {
   await sleepUntil(deadlineMs);
 
-  await withWorkspaceLock(workspaceName, () => {
+  await withWorkspaceLock(workspaceName, async () => {
     const shutdown = readShutdown(workspaceName);
     const runtime = reconcileWorkspaceRuntimeState(workspaceName);
     const containerName = containerNameFor(workspaceName);
@@ -179,7 +179,7 @@ export async function runAutoStopHelper(
     // session's copy-out — snapshot once more so restore-and-resume picks up
     // the latest state. Best-effort like every sync.
     if (herdrContext.herdrAttach) {
-      syncWorkspaceState({
+      await syncWorkspaceState({
         containerName,
         workspaceName,
         entries: combinedWorkspaceStateEntries(herdrContext.containerProfile, herdrContext.workspace),

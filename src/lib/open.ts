@@ -46,8 +46,9 @@ import { isRecord } from './guards.js';
 import { spawnAutoStopHelper } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson } from './agents.js';
-import { combinedWorkspaceStateEntries, restoreHerdrServerExecutable, syncWorkspaceState } from './workspace-state.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, npmToolSpecs } from './agents.js';
+import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
+import { createSyncProgressReporter } from './sync-progress.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
 import {
@@ -586,13 +587,15 @@ function startWorkspaceContainer(options: {
   });
 }
 
-// Agent packages refresh in the background on every open — joins included —
-// so long-lived workspaces keep picking up new releases, not just fresh
-// starts. Detached: the refresh outlives this CLI invocation and at worst
-// dies with the container. Best effort throughout — a missed refresh (script
-// absent in a pre-upgrade image, container gone) keeps existing versions.
+// npm-installed agent packages refresh in the background on every open —
+// joins included — so long-lived workspaces keep picking up new releases, not
+// just fresh starts. Native agents are not refreshed here: their own
+// auto-updaters keep them current. Detached: the refresh outlives this CLI
+// invocation and at worst dies with the container. Best effort throughout — a
+// missed refresh (script absent in a pre-upgrade image, container gone) keeps
+// existing versions.
 function spawnAgentRefresh(context: WorkspaceContext): void {
-  if ((context.workspace.tools ?? []).length === 0) {
+  if (npmToolSpecs(context.workspace.tools ?? []).length === 0) {
     return;
   }
   try {
@@ -690,7 +693,7 @@ async function finishWorkspaceSession(
   context: WorkspaceContext,
   sessionId: string,
 ): Promise<string> {
-  return await withWorkspaceLock(context.wsName, () => {
+  return await withWorkspaceLock(context.wsName, async () => {
     unregisterSession(context.wsName, sessionId);
 
     const containerState = getContainerState(context.containerName);
@@ -709,13 +712,16 @@ async function finishWorkspaceSession(
 
     // Container is still running: snapshot workspace state out now, before any
     // stop/delete path (auto-stop, or the next fresh start) can tear it down.
-    syncWorkspaceState({
-      containerName: context.containerName,
-      workspaceName: context.wsName,
-      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
-      user: context.containerProfile.user,
-      direction: 'copy-out',
-    });
+    await syncWorkspaceState(
+      {
+        containerName: context.containerName,
+        workspaceName: context.wsName,
+        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        user: context.containerProfile.user,
+        direction: 'copy-out',
+      },
+      { report: createSyncProgressReporter('copy-out') },
+    );
 
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
     if (runtime.runtimeState !== 'ok') {
@@ -861,20 +867,16 @@ export async function openWorkspace(
     });
     // Fresh container: restore the previous life's workspace state before the
     // interactive shell begins. Not on join — the running container already has it.
-    syncWorkspaceState({
-      containerName: context.containerName,
-      workspaceName: context.wsName,
-      entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
-      user: context.containerProfile.user,
-      direction: 'copy-in',
-    });
-    // container cp drops the executable bit, so the copied-in herdr server needs
-    // +x restored or herdr reinstalls it every fresh start.
-    restoreHerdrServerExecutable({
-      containerName: context.containerName,
-      workspace: context.workspace,
-      user: context.containerProfile.user,
-    });
+    await syncWorkspaceState(
+      {
+        containerName: context.containerName,
+        workspaceName: context.wsName,
+        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        user: context.containerProfile.user,
+        direction: 'copy-in',
+      },
+      { report: createSyncProgressReporter('copy-in') },
+    );
   } else {
     console.log(chalk.green(`Joining existing workspace '${context.wsName}'`));
   }

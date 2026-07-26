@@ -12,13 +12,16 @@ import {
   listContainers,
   listImageNames,
   getContainerState,
-  copyToContainer,
+  streamToContainer,
   copyFromContainer,
   execContainerCommand,
   stopContainer,
   killContainer,
   deleteContainer,
+  isContainerSubprocessTimeout,
+  spawnContainerCopy,
   type ContainerSubprocessRunner,
+  type ContainerCopyRunner,
 } from './container.js';
 
 function withCapturedWarnings<T>(fn: () => T): { result: T; warnings: string[] } {
@@ -192,24 +195,49 @@ describe('bounded container subprocess options', () => {
     };
   }
 
-  test('copyToContainer is bounded by default', () => {
-    const { calls, run } = createRunCapture();
-    copyToContainer({
+  function createCopyRunCapture(): {
+    calls: CapturedCall[];
+    run: ContainerCopyRunner;
+  } {
+    const calls: CapturedCall[] = [];
+    return {
+      calls,
+      run: (file, args, options): Promise<void> => {
+        calls.push({ file, args, options });
+        return Promise.resolve();
+      },
+    };
+  }
+
+  test('streamToContainer pipes a host tar into container exec as the target user, bounded by default', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await streamToContainer({
       name: 'pi-tin-demo',
-      hostPath: '/tmp/host-state',
+      hostPath: '/tmp/host-state/.zsh_history',
       containerPath: '/home/dev/.zsh_history',
+      user: 'dev',
       run,
     });
     expect(calls).toEqual([{
-      file: 'container',
-      args: ['cp', '/tmp/host-state', 'pi-tin-demo:/home/dev/.zsh_history'],
+      file: 'sh',
+      args: [
+        '-c',
+        'COPYFILE_DISABLE=1 tar -cf - --format ustar -C "$1" -- "$2" | ' +
+          'container exec --interactive --user "$3" "$4" sh -c \'mkdir -p "$1" && tar -xf - -C "$1"\' sh "$5"',
+        'sh',
+        '/tmp/host-state',
+        '.zsh_history',
+        'dev',
+        'pi-tin-demo',
+        '/home/dev',
+      ],
       options: boundedOptions,
     }]);
   });
 
-  test('copyFromContainer is bounded by default', () => {
-    const { calls, run } = createRunCapture();
-    copyFromContainer({
+  test('copyFromContainer is bounded by default', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await copyFromContainer({
       name: 'pi-tin-demo',
       containerPath: '/home/dev/.zsh_history',
       hostPath: '/tmp/host-state',
@@ -220,6 +248,69 @@ describe('bounded container subprocess options', () => {
       args: ['cp', 'pi-tin-demo:/home/dev/.zsh_history', '/tmp/host-state'],
       options: boundedOptions,
     }]);
+  });
+
+  // The binary-copy deadline is worthless if it never reaches the subprocess:
+  // dropping the timeoutMs pass-through would leave every binary copy on the
+  // 5s default and time out in production while the whole suite stays green.
+  test('streamToContainer passes an explicit timeoutMs through to the subprocess', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await streamToContainer({
+      name: 'pi-tin-demo',
+      hostPath: '/tmp/host-state/.local/bin/herdr',
+      containerPath: '/home/dev/.local/bin/herdr',
+      user: 'dev',
+      timeoutMs: 60_000,
+      run,
+    });
+    expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
+  });
+
+  test('copyFromContainer passes an explicit timeoutMs through to the subprocess', async () => {
+    const { calls, run } = createCopyRunCapture();
+    await copyFromContainer({
+      name: 'pi-tin-demo',
+      containerPath: '/home/dev/.local/bin/herdr',
+      hostPath: '/tmp/host-state',
+      timeoutMs: 60_000,
+      run,
+    });
+    expect(calls.map((call) => call.options)).toEqual([{ ...boundedOptions, timeout: 60_000 }]);
+  });
+
+  test('the default copy runner rejects with an ETIMEDOUT-shaped error on deadline', async () => {
+    let caught: unknown;
+    try {
+      await streamToContainer({
+        name: 'pi-tin-demo',
+        hostPath: '/nonexistent/never-read',
+        containerPath: '/home/dev/never-written',
+        user: 'dev',
+        timeoutMs: 1,
+        // No `run` injected: exercise the real spawn path. The command is the
+        // documented `sh -c 'tar … | container exec …'` pipeline; with a 1ms
+        // deadline it is killed before doing anything.
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isContainerSubprocessTimeout(caught)).toBe(true);
+  });
+
+  test('the default copy runner names the fatal signal when the subprocess dies signalled', async () => {
+    let caught: unknown;
+    try {
+      await spawnContainerCopy('sh', ['-c', 'kill -TERM $$'], {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5_000,
+        killSignal: 'SIGKILL',
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("'sh' was killed by SIGTERM");
   });
 
   test('execContainerCommand is bounded by default', () => {
