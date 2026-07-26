@@ -1,5 +1,18 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveJsonMode } from './cli-output.js';
+import { formatBytes, resolveJsonMode } from './cli-output.js';
+
+describe('formatBytes', () => {
+  test('reports small sizes in whole bytes', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(999)).toBe('999 B');
+  });
+
+  test('steps up through decimal units with one decimal place', () => {
+    expect(formatBytes(1_000)).toBe('1.0 KB');
+    expect(formatBytes(259_400_000)).toBe('259.4 MB');
+    expect(formatBytes(2_500_000_000)).toBe('2.5 GB');
+  });
+});
 
 describe('resolveJsonMode', () => {
   test('explicit --json forces JSON even on a TTY', () => {

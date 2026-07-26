@@ -747,3 +747,67 @@ function entryOutcome(result: OpGroupResult, ctx: SyncEntryContext): SyncEntryOu
     }
   }
 }
+
+/** A workspace's host snapshot directory and what it occupies on disk. */
+export interface WorkspaceStateSnapshot {
+  path: string;
+  bytes: number;
+}
+
+function directorySize(dir: string): number {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += directorySize(full);
+    } else if (entry.isFile()) {
+      // lstat, never stat: a symlink's target may live outside the snapshot,
+      // and counting it would overstate what deleting the snapshot frees.
+      total += fs.lstatSync(full).size;
+    }
+  }
+  return total;
+}
+
+/**
+ * The host snapshot for `workspaceName`, or null when the workspace never
+ * persisted any state. Callers measure before acting so a delete can show what
+ * it is about to destroy — the snapshot is routinely the largest artifact a
+ * workspace leaves behind.
+ */
+export function measureWorkspaceStateSnapshot(workspaceName: string): WorkspaceStateSnapshot | null {
+  const dir = getWorkspaceStateDir(workspaceName);
+  if (!fs.existsSync(dir)) return null;
+  return { path: dir, bytes: directorySize(dir) };
+}
+
+export type WorkspaceStateRemoval = 'absent' | 'removed' | 'failed';
+
+/**
+ * Remove a workspace's host snapshot. Best-effort like the rest of the snapshot
+ * machinery: a failure warns and is reported back, never aborts a delete that
+ * has already removed the container and image.
+ */
+export function removeWorkspaceStateSnapshot(
+  snapshot: WorkspaceStateSnapshot | null,
+  dependencies: {
+    remove?: ((dir: string) => void) | undefined;
+    warn?: ((message: string) => void) | undefined;
+  } = {},
+): WorkspaceStateRemoval {
+  if (snapshot === null) return 'absent';
+
+  const remove = dependencies.remove ?? ((dir: string): void => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  try {
+    remove(snapshot.path);
+    return 'removed';
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    (dependencies.warn ?? defaultWarn)(
+      `Warning: failed to remove workspace state '${snapshot.path}': ${message}`,
+    );
+    return 'failed';
+  }
+}
