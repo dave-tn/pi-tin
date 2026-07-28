@@ -116,6 +116,19 @@ export const WORKSPACE_SSHD_PORT = 2222;
 
 const SSHD_CONFIG_DIR_RELATIVE = '.config/pi-tin-sshd';
 
+// herdr binds its API sockets and then chmods them to 0600, and virtiofs
+// rejects chmod on a socket inode (EINVAL) — so with ~/.config/herdr mounted
+// from the host, the server would crash on startup if its sockets lived
+// there. Redirect both sockets to the ephemeral rootfs: they die with the
+// container, which also rules out stale-socket collisions after a hard kill.
+// Baked as image ENV so both `container exec` (auto-stop's `herdr agent
+// list`) and ssh sessions (via the sshd launcher's env snapshot, where the
+// herdr server is spawned) see them.
+const HERDR_SOCKET_ENV = {
+  HERDR_SOCKET_PATH: '/tmp/herdr.sock',
+  HERDR_CLIENT_SOCKET_PATH: '/tmp/herdr-client.sock',
+} as const;
+
 const AGENT_WRAPPER_BIN_DIR = '/usr/local/pi-tin/bin';
 
 // Launcher baked at build time, first on PATH. Tries the refresh prefix, then
@@ -299,6 +312,12 @@ export function generateDockerfile(
       }
     }
   }
+  if (opts.sshd !== null) {
+    for (const [key, value] of Object.entries(HERDR_SOCKET_ENV)) {
+      lines.push(`ENV ${key}=${value}`);
+    }
+  }
+  // Profile env last: explicit profile config outranks pi-tin's defaults.
   for (const [key, value] of Object.entries(profile.env)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
   }

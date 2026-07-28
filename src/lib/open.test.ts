@@ -261,6 +261,44 @@ describe('computeRuntimeStartPlan sshd', () => {
   test('attach: herdr alone enables sshd', () => {
     expect(planFor({ attach: 'herdr' }).sshdEnabled).toBe(true);
   });
+
+  test('attach: herdr mounts ~/.config/herdr from the workspace-state dir and creates it', () => {
+    const runtimePlan = planFor({ attach: 'herdr' });
+
+    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.config', 'herdr');
+    expect(runtimePlan.volumes).toContainEqual({
+      host: stateDir,
+      container: '/home/dev/.config/herdr',
+    });
+    expect(fs.existsSync(stateDir)).toBe(true);
+  });
+
+  test('shell attach gets no herdr state mount', () => {
+    const runtimePlan = planFor({ sshd: true });
+    expect(runtimePlan.volumes.some(
+      (volume) => volume.container === '/home/dev/.config/herdr',
+    )).toBe(false);
+  });
+
+  test('an existing host.mounts entry at ~/.config/herdr overrides the managed mount', () => {
+    const userDir = path.join(tmpDir, 'my-herdr');
+    fs.mkdirSync(userDir, { recursive: true });
+    const runtimePlan = planFor({
+      attach: 'herdr',
+      host: { mounts: [{ host: userDir, container: '/home/dev/.config/herdr', readonly: false }] },
+    });
+
+    const herdrVolumes = runtimePlan.volumes.filter(
+      (volume) => volume.container === '/home/dev/.config/herdr',
+    );
+    expect(herdrVolumes).toEqual([
+      { host: userDir, container: '/home/dev/.config/herdr', readonly: false },
+    ]);
+    expect(runtimePlan.notices).toContainEqual({
+      kind: 'info',
+      text: 'herdr state uses the host.mounts entry at /home/dev/.config/herdr instead of the managed workspace-state mount.',
+    });
+  });
 });
 
 // The runtime hash is the sole drift signal: a running workspace only restarts

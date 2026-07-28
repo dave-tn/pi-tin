@@ -40,6 +40,9 @@ function createHarness(options: {
       options.onPoll?.(polls, setState);
       return state;
     },
+    captureContainerDmesg: () => {
+      record('capture-dmesg');
+    },
     stopContainer: () => {
       record('stop');
       options.onStop?.(setState);
@@ -102,7 +105,7 @@ describe('container-lifecycle', () => {
     await expect(harness.api.stopAndRemoveContainer('demo', { force: true }))
       .rejects.toThrow("Could not determine the state of container 'demo'.");
 
-    expect(harness.calls).toEqual(['stop']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop']);
   });
 
   test('stops a running container and removes it once stopped', async () => {
@@ -118,7 +121,7 @@ describe('container-lifecycle', () => {
 
     await harness.api.stopAndRemoveContainer('demo');
 
-    expect(harness.calls).toEqual(['stop', 'delete']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop', 'delete']);
   });
 
   test('throws without killing when the container will not stop and force is off', async () => {
@@ -127,7 +130,7 @@ describe('container-lifecycle', () => {
     await expect(harness.api.stopAndRemoveContainer('demo'))
       .rejects.toThrow("Failed to stop workspace container 'demo'.");
 
-    expect(harness.calls).toEqual(['stop']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop']);
   });
 
   test('surfaces a restart hint when container stop itself times out', async () => {
@@ -145,7 +148,7 @@ describe('container-lifecycle', () => {
         "Apple 'container stop' did not respond within 5s for container 'demo'. Restart the container system with 'container system stop' and then 'container system start'.",
       );
 
-    expect(harness.calls).toEqual(['stop']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop']);
   });
 
   test('escalates to kill after the timeout when forced, then removes', async () => {
@@ -159,7 +162,7 @@ describe('container-lifecycle', () => {
 
     await harness.api.stopAndRemoveContainer('demo', { force: true });
 
-    expect(harness.calls).toEqual(['stop', 'kill', 'delete']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop', 'kill', 'delete']);
     expect(harness.clockAt('kill')).toBe(5000);
   });
 
@@ -179,7 +182,7 @@ describe('container-lifecycle', () => {
 
     await harness.api.stopAndRemoveContainer('demo');
 
-    expect(harness.calls).toEqual(['stop', 'delete']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop', 'delete']);
   });
 
   test('treats deleteContainer failures as best-effort', async () => {

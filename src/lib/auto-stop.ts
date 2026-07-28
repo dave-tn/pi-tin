@@ -20,6 +20,7 @@ import { loadWorkspace } from './workspaces.js';
 import { loadContainerProfile } from './profiles.js';
 import { parseDurationMs } from './duration.js';
 import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
+import { captureContainerDmesg } from './container-lifecycle.js';
 import { removeWorkspaceSshArtifacts } from './ssh-endpoint.js';
 
 // Hidden CLI sentinel used to re-invoke pi-tin as a detached auto-stop helper.
@@ -153,6 +154,7 @@ export interface AutoStopDeps {
   armShutdown: typeof armShutdown;
   // Deliberately one-parameter: the helper never injects sync dependencies.
   syncWorkspaceState: (options: Parameters<typeof syncWorkspaceState>[0]) => Promise<void>;
+  captureContainerDmesg: typeof captureContainerDmesg;
   stopContainer: typeof stopContainer;
   deleteContainer: typeof deleteContainer;
   clearWorkspaceRuntimeState: typeof clearWorkspaceRuntimeState;
@@ -171,6 +173,7 @@ const defaultAutoStopDeps: AutoStopDeps = {
   spawnAutoStopHelper,
   armShutdown,
   syncWorkspaceState,
+  captureContainerDmesg,
   stopContainer,
   deleteContainer,
   clearWorkspaceRuntimeState,
@@ -241,6 +244,10 @@ export async function runAutoStopHelper(
         direction: 'copy-out',
       });
     }
+
+    // A 'stop' plan implies the container was running, so the guest kernel
+    // log still exists to capture.
+    deps.captureContainerDmesg(containerName);
 
     // Deliberately not stopAndRemoveContainer: this detached helper runs while holding
     // the workspace lock, so it must stay best-effort — never poll and never throw.
