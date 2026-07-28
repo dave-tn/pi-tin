@@ -8,7 +8,7 @@ import {
 } from './auto-stop.js';
 import type { ContainerState } from './container.js';
 import type { RuntimeStateStatus, SessionRecord, ShutdownRecord } from './runtime-state.js';
-import { validateContainerProfile, validateWorkspace } from './validators.js';
+import { validateContainerProfile } from './validators.js';
 import type { HerdrAgentStates } from './workspace-plans.js';
 
 // Verified live output of `herdr agent list` (herdr 0.7.x).
@@ -82,12 +82,7 @@ const herdrStopContext: HerdrStopContext = {
     base_image: 'debian:trixie-slim',
     user: 'dev',
   }),
-  workspace: validateWorkspace({
-    profile: 'default',
-    projects: [],
-    attach: 'herdr',
-    stopAfterLastSession: '5m',
-  }),
+  statePaths: ['.zsh_history'],
   stopAfterMs: STOP_AFTER_MS,
 };
 
@@ -321,9 +316,7 @@ describe('runAutoStopHelper', () => {
     expect(harness.syncOptions).toEqual([{
       containerName: 'pi-tin-demo',
       workspaceName: 'demo',
-      entries: [
-        { kind: 'binary', path: '.local/bin/herdr', executable: true },
-      ],
+      paths: ['.zsh_history'],
       user: 'dev',
       direction: 'copy-out',
     }]);

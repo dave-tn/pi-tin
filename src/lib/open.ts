@@ -46,8 +46,17 @@ import { isRecord } from './guards.js';
 import { spawnAutoStopHelper } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, npmToolSpecs } from './agents.js';
-import { combinedWorkspaceStateEntries, ensureHerdrConfigStateDir, syncWorkspaceState } from './workspace-state.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs } from './agents.js';
+import {
+  chmodSeededHerdrBinary,
+  ensureWorkspaceStateMountDir,
+  managedInstallMountPaths,
+  syncableWorkspaceStatePaths,
+  syncWorkspaceState,
+  workspaceStateMountDir,
+  type SyncableWorkspaceStatePaths,
+} from './workspace-state.js';
+import { runAgentInstallStep } from './agent-install.js';
 import { createSyncProgressReporter } from './sync-progress.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
@@ -129,6 +138,8 @@ interface MountNotice {
 interface RuntimeStartPlan {
   volumes: VolumeMount[];
   notices: MountNotice[];
+  /** Home-relative managed workspace-state mounts that made it into volumes. */
+  managedStateMountPaths: string[];
   runtimeHash: string;
   ssh: boolean;
   sshdEnabled: boolean;
@@ -248,7 +259,7 @@ function validateProjects(projects: string[]): void {
 
 function resolveWorkspaceVolumes(
   context: WorkspaceContext,
-): { volumes: VolumeMount[]; notices: MountNotice[] } {
+): { volumes: VolumeMount[]; notices: MountNotice[]; managedStateMountPaths: string[] } {
   const { workspace, containerProfile, wsName } = context;
   const homeContainer = containerHomeDir(containerProfile.user);
   const volumes = resolveProjectVolumes(workspace.projects);
@@ -363,27 +374,32 @@ function resolveWorkspaceVolumes(
     }
   }
 
-  // herdr session/restore state is a live mount, not a copy-out entry: it
-  // survives hard kills and wedged runtimes, where a teardown-time snapshot
-  // does not. An explicit host.mounts entry that landed at the same container
-  // path is an opt-out — the user's own mount serves the same durability
-  // purpose.
-  if (workspace.attach === 'herdr') {
-    const herdrConfigContainer = `${homeContainer}/.config/herdr`;
-    if (volumes.some((volume) => volume.container === herdrConfigContainer)) {
+  // Managed workspace-state mounts (native-agent install dirs, herdr session
+  // state): live mounts, not copy entries — agent updates and herdr state
+  // survive hard kills and wedged runtimes, where a teardown-time snapshot
+  // does not. Appended last: any already-resolved volume at the same
+  // container path (host.mounts, an agent profile, tmux) is an opt-out — the
+  // user's own mount serves the same durability purpose. Host dirs are only
+  // created when a container actually starts (see prepareManagedStateMounts),
+  // never here — this resolver also runs for joins and refusals.
+  const managedStateMountPaths: string[] = [];
+  for (const relPath of managedInstallMountPaths(workspace)) {
+    const containerPath = `${homeContainer}/${relPath}`;
+    if (volumes.some((volume) => volume.container === containerPath)) {
       notices.push({
         kind: 'info',
-        text: `herdr state uses the host.mounts entry at ${herdrConfigContainer} instead of the managed workspace-state mount.`,
+        text: `~/${relPath} uses the existing mount at ${containerPath} instead of the managed workspace-state mount.`,
       });
-    } else {
-      volumes.push({
-        host: ensureHerdrConfigStateDir(wsName),
-        container: herdrConfigContainer,
-      });
+      continue;
     }
+    volumes.push({
+      host: workspaceStateMountDir(wsName, relPath),
+      container: containerPath,
+    });
+    managedStateMountPaths.push(relPath);
   }
 
-  return { volumes, notices };
+  return { volumes, notices, managedStateMountPaths };
 }
 
 export function countSharedDirectories(wsName: string, projects: string[]): number {
@@ -464,7 +480,7 @@ function computeRuntimeHash(
 export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
   validateProjects(context.workspace.projects);
 
-  const { volumes, notices } = resolveWorkspaceVolumes(context);
+  const { volumes, notices, managedStateMountPaths } = resolveWorkspaceVolumes(context);
   const sharedDirectoryCount = countUniqueVolumeSources(volumes);
   if (sharedDirectoryCount > MAX_SHARED_DIRECTORIES) {
     throw new Error(sharedDirectoryLimitMessage(context.wsName, sharedDirectoryCount));
@@ -474,6 +490,7 @@ export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStart
   return {
     volumes,
     notices,
+    managedStateMountPaths,
     runtimeHash: computeRuntimeHash(context, volumes, sshdEnabled),
     ssh: context.workspace.host?.sshAgent ?? true,
     sshdEnabled,
@@ -571,6 +588,43 @@ async function ensureImageBuiltIfNeeded(
   } catch {
     await handleBuildFailure(context);
   }
+}
+
+// The managed mounts' host dirs must exist before `container run`. Called
+// only when a container actually starts — joins, refusals, and the `pi-tin
+// add` preflight (countSharedDirectories) never create state dirs as a side
+// effect. The herdr chmod is one-time seeding insurance for snapshots taken
+// by the old copy-out machinery.
+function prepareManagedStateMounts(context: WorkspaceContext, runtimePlan: RuntimeStartPlan): void {
+  for (const relPath of runtimePlan.managedStateMountPaths) {
+    ensureWorkspaceStateMountDir(context.wsName, relPath);
+  }
+  if (context.workspace.attach === 'herdr') {
+    chmodSeededHerdrBinary(context.wsName);
+  }
+}
+
+// workspace_state paths that may actually sync: anything overlapping a
+// managed mount is dropped — the copy-in recipe's root `rm -rf` against a
+// live mount would destroy the host-side contents through virtiofs, and the
+// snapshot would be redundant anyway.
+function syncableStatePaths(context: WorkspaceContext): SyncableWorkspaceStatePaths {
+  return syncableWorkspaceStatePaths(
+    context.containerProfile.workspace_state,
+    managedInstallMountPaths(context.workspace),
+  );
+}
+
+// Warned about once per session, at the fresh-start restore. Repeating it at
+// session close would just say the same thing again about the same config.
+function syncableStatePathsWarningOnce(context: WorkspaceContext): string[] {
+  const { syncable, dropped } = syncableStatePaths(context);
+  for (const drop of dropped) {
+    console.warn(chalk.yellow(
+      `Warning: workspace_state path '${drop.statePath}' overlaps the managed mount at ~/${drop.mountPath} — skipping the snapshot; that path already persists via the live mount.`,
+    ));
+  }
+  return syncable;
 }
 
 function startWorkspaceContainer(options: {
@@ -736,7 +790,7 @@ async function finishWorkspaceSession(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        paths: syncableStatePaths(context).syncable,
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
@@ -848,6 +902,7 @@ export async function openWorkspace(
           forceBuild: opts.build === true,
           driftDetected: hasBuildDrift,
         });
+        prepareManagedStateMounts(context, runtimePlan);
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
@@ -873,6 +928,7 @@ export async function openWorkspace(
           forceBuild: opts.build === true,
           driftDetected: hasBuildDrift,
         });
+        prepareManagedStateMounts(context, runtimePlan);
         startWorkspaceContainer({ context, runtimePlan, buildPlan, runtimeEnv });
         await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
@@ -895,7 +951,7 @@ export async function openWorkspace(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        entries: combinedWorkspaceStateEntries(context.containerProfile, context.workspace),
+        paths: syncableStatePathsWarningOnce(context),
         user: context.containerProfile.user,
         direction: 'copy-in',
       },
@@ -909,6 +965,18 @@ export async function openWorkspace(
   const containerIpv4 = runtimePlan.sshdEnabled
     ? await publishSshEndpoint(context)
     : null;
+
+  // Install any missing native agents. On every open — started and joined —
+  // so a failed install retries without a restart. Pinned after
+  // publishSshEndpoint (it can prompt interactively, and a prompt must not
+  // sit behind a long install) and before attach (herdr must find the
+  // binary). Best-effort: a failure warns and the open continues agent-less.
+  await runAgentInstallStep({
+    workspaceName: context.wsName,
+    containerName: context.containerName,
+    user: context.containerProfile.user,
+    targets: nativeInstallTargets(context.workspace.tools ?? []),
+  });
 
   spawnAgentRefresh(context);
 

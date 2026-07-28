@@ -16,43 +16,36 @@ export interface KnownAgent {
   isolatedSeedFiles?: Array<{ path: string; content: string }>;
 }
 
-export interface NativeStateEntry {
-  /**
-   * Home-relative path persisted across container lives. Must never itself be
-   * a symlink: `container cp` of a bare symlink as the source hangs and wedges
-   * the container's exec channel (see docs/bug-fixing.md).
-   */
-  path: string;
-  /** Re-apply +x after copy-in — `container cp` exec-bit preservation has varied across Apple container releases. */
-  executable: boolean;
-  /**
-   * Launcher symlink the agent's updater manages around this entry. The bare
-   * symlink cannot go through `container cp`, so pi-tin records its target at
-   * copy-out, then recreates the link after copy-in and prunes `versionsDir`
-   * to exactly that target (the updater keeps old versions forever, and a
-   * copy-out taken mid-update can capture a truncated newer entry — the
-   * recorded target is always a complete binary).
-   */
-  launcher?: { link: string; versionsDir: string };
-}
-
 /**
  * How an agent is installed and kept fresh. `npm` agents are baked with
  * `npm install -g` and refreshed into the shadow prefix on every open.
- * `native` agents run their official install script at image build, keep
- * themselves current in-container via their own auto-updater, and have the
- * updated binaries persisted across container lives via workspace state.
+ * `native` agents run their official install script in-container at first
+ * open, onto live host mounts (`persistDirs`) backed by the workspace-state
+ * dir — so their own auto-updaters keep them current and every update
+ * persists across container lives, exactly as on a plain host.
  */
 export type AgentInstall = { method: 'npm' } | NativeAgentInstall;
 
 export interface NativeAgentInstall {
   method: 'native';
-  /** Shell command run as a Dockerfile RUN line in the user phase. */
+  /**
+   * Shell command run in-container (under the host-side install lock) when
+   * `installedPath` probes absent.
+   */
   installCommand: string;
-  /** Home-relative bin dir appended to the image PATH. */
+  /**
+   * Home-relative path checked in-container with `test -x` — for Claude the
+   * launcher symlink, so a dangling link or non-executable target reads as
+   * "not installed" and self-heals via reinstall.
+   */
+  installedPath: string;
+  /** Home-relative dirs live-mounted from the workspace-state dir. */
+  persistDirs: string[];
+  /**
+   * Home-relative bin dir appended to the image PATH. Duplicates an element
+   * of persistDirs deliberately; the invariant is tested.
+   */
   binDir: string;
-  /** Home-relative paths persisted across container lives via workspace state. */
-  stateEntries: NativeStateEntry[];
   /** Extra apk packages the binary needs on musl bases. */
   muslPackages: string[];
   /** Extra image ENV on musl bases. */
@@ -96,11 +89,23 @@ export function dotDirsLabel(agent: Pick<KnownAgent, 'dotDirs'>): string {
   return agent.dotDirs.map((dir) => `~/${dir}`).join(', ');
 }
 
-/** Native install metadata for the workspace's tools, in tool order. */
-export function nativeAgentInstalls(packages: Tool[]): NativeAgentInstall[] {
-  return packages.flatMap((pkg) => {
-    const install = knownAgentForPackage(pkg)?.install;
-    return install?.method === 'native' ? [install] : [];
+/**
+ * A native-install agent paired with its identity: the install step names
+ * what it installs (progress line, lock key), and `NativeAgentInstall`
+ * deliberately carries no identity fields of its own — `KnownAgent` does.
+ * `binary` is the lock key (unique and filesystem-safe); `name` is display.
+ */
+export type NativeInstallTarget = Pick<KnownAgent, 'name' | 'binary'> & {
+  install: NativeAgentInstall;
+};
+
+/** Native-install agents among the workspace's tools, in tool order. */
+export function nativeInstallTargets(packages: Tool[]): NativeInstallTarget[] {
+  return packages.flatMap((pkg): NativeInstallTarget[] => {
+    const agent = knownAgentForPackage(pkg);
+    return agent !== undefined && agent.install.method === 'native'
+      ? [{ name: agent.name, binary: agent.binary, install: agent.install }]
+      : [];
   });
 }
 
@@ -221,25 +226,17 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
     // Native layout: ~/.local/bin/claude is a symlink into
     // ~/.local/share/claude/versions/<v>; the auto-updater swaps it atomically,
-    // so freshness comes from the agent itself and the versions dir persists
-    // across container lives. Only the versions tree is a state entry — the
-    // launcher symlink rides the `launcher` metadata instead (bare-symlink cp
-    // is forbidden).
-    // Download-then-run, not `curl | bash`: a Dockerfile RUN has no pipefail,
-    // so a piped curl failure would bake a "successful" image with no agent —
-    // and buildHash would then pin that broken image until a manual --build.
+    // so freshness comes from the agent itself, and both dirs are live host
+    // mounts so every update persists across container lives.
+    // Download-then-run, not `curl | bash`: plain `sh -c` has no pipefail, so
+    // a piped curl failure would still look like a successful install.
     install: {
       method: 'native',
       installCommand:
         'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
+      installedPath: '.local/bin/claude',
+      persistDirs: ['.local/share/claude', '.local/bin'],
       binDir: '.local/bin',
-      stateEntries: [
-        {
-          path: '.local/share/claude',
-          executable: false,
-          launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
-        },
-      ],
       muslPackages: ['libgcc', 'libstdc++', 'ripgrep'],
       muslEnv: { USE_BUILTIN_RIPGREP: '0' },
     },
@@ -274,14 +271,16 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     dotDirs: ['.local/share/opencode', '.config/opencode'],
     hostModeSupported: true,
     // Flat single binary; opencode replaces it by rename when it auto-updates
-    // on startup. --no-modify-path: the image ENV PATH covers ~/.opencode/bin.
+    // on startup, and the bin dir is a live host mount so the update persists.
+    // --no-modify-path: the image ENV PATH covers ~/.opencode/bin.
     // Download-then-run for the same no-pipefail reason as Claude above.
     install: {
       method: 'native',
       installCommand:
         'curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
+      installedPath: '.opencode/bin/opencode',
+      persistDirs: ['.opencode/bin'],
       binDir: '.opencode/bin',
-      stateEntries: [{ path: '.opencode/bin/opencode', executable: true }],
       muslPackages: [],
       muslEnv: {},
     },

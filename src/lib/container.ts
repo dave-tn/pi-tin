@@ -111,18 +111,6 @@ export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
 // headroom than the flat deadline before declaring the runtime wedged.
 export const CONTAINER_RUN_TIMEOUT_MS = 15_000;
 
-// Deadline for copies of persisted agent binaries, which are far too large for
-// the flat 5s deadline. Measured on Apple container 1.1.0 (M1 Max, 256 MiB
-// payloads): copy-in streams via tar at a stable ~275 MiB/s. Copy-out splits by
-// shape — `container cp` carries a flat directory penalty of ~55 MiB/s
-// regardless of file count (1 file and 2048 files both ~4.6-5.0s), while the
-// same bytes as a bare file go at ~474 MiB/s. Directories therefore stream via
-// tar at ~341 MiB/s, which is the `container exec` stdout ceiling: a bare
-// `exec cat` measures ~337 MiB/s, so tar itself costs nothing and no blocking
-// or buffering knob improves on it. 60s keeps slow-machine headroom without
-// masking a wedged runtime for long.
-export const CONTAINER_BINARY_COPY_TIMEOUT_MS = 60_000;
-
 /** Recovery steps for a wedged container runtime, shared by every timeout message. */
 export function containerSystemRecoveryHint(): string {
   return "Restart the container system with 'container system stop' and then 'container system start'. If those commands hang too, restart the launchd service with 'launchctl kickstart -k gui/$(id -u)/com.apple.container.apiserver', or log out and back in.";
@@ -462,53 +450,83 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   child.kill(signal);
 }
 
-// SIGQUIT belongs here with the obvious three: `detached` takes the pipeline
+// SIGQUIT belongs here with the obvious three: `detached` takes the child
 // out of the terminal's foreground process group, so the terminal stops
 // delivering *every* terminal-generated signal to it. Ctrl-\ kills pi-tin by
-// default disposition and would leave the host tar extracting into the temp
-// path — measured: without forwarding, the writer kept growing the file after
-// the parent died at exit 131, while SIGINT left nothing behind.
-const COPY_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
+// default disposition and would leave the child's workers running — measured
+// with the copy pipelines: without forwarding, the host tar kept growing the
+// destination file after the parent died at exit 131, while a forwarded
+// SIGINT left nothing behind.
+const SPAWN_INTERRUPTS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
+
+export interface SpawnDeadlineOptions {
+  timeoutMs: number;
+  // Disposition when the terminal interrupts pi-tin mid-run: 'die' forwards
+  // a SIGKILL to the child's group and re-raises the signal against pi-tin —
+  // a ^C mid-copy must kill the CLI, or a killed copy could look completed.
+  // 'abort' answers SIGINT by killing the group and rejecting with code
+  // EABORTED so the caller can continue (the agent-install step treats ^C as
+  // "skip the install", not "kill the open"); the deliberate-termination
+  // signals (SIGTERM/SIGHUP/SIGQUIT) still die.
+  onInterrupt: 'die' | 'abort';
+}
 
 // spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
 // deliberate difference: `detached` makes the child a process-group leader so
 // the deadline can signal the whole group (`kill(-pid)`) rather than just the
-// outer sh. Both copy pipelines are `sh -c '… | …'`, so the processes doing
-// the real work — host tar and `container exec` — are grandchildren; killing
-// only the shell would orphan a host-side tar that keeps writing into the
-// destination long after the caller has given up on it. Group kill stops the
-// writers with the shell. It is best-effort: the group may already be gone
-// (ESRCH), in which case fall back to signalling the child directly.
+// direct child. The copy pipelines are `sh -c '… | …'`, so the processes
+// doing the real work — host tar and `container exec` — are grandchildren;
+// killing only the shell would orphan a host-side tar that keeps writing into
+// the destination long after the caller has given up on it. Group kill stops
+// the workers with the shell. It is best-effort: the group may already be
+// gone (ESRCH), in which case fall back to signalling the child directly.
 // Settled on 'exit', not 'close': anything that did survive inherits the
 // stderr pipe, and waiting for it to close would block the timeout rejection.
-// The rejection carries code ETIMEDOUT so isContainerSubprocessTimeout
-// classifies it unchanged.
+// The timeout rejection carries code ETIMEDOUT so
+// isContainerSubprocessTimeout classifies it unchanged.
 //
 // Its own process group also means the terminal no longer delivers Ctrl-C to
-// the pipeline, so the interrupt is forwarded by hand and then re-raised with
-// the default disposition — otherwise a ^C mid-copy would leave exactly the
-// orphaned writer the group kill exists to prevent.
-// Exported only as the default runner and for direct tests of its error
-// shapes; production callers go through streamToContainer/copyFromContainer.
-export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
-  new Promise((resolve, reject) => {
+// the child, so interrupts are forwarded by hand per onInterrupt above.
+// Exported only as the default runner for the two wrappers below and for
+// direct tests of its error shapes; production callers go through
+// streamToContainer/copyFromContainer/execContainerCommandWithDeadline.
+export function spawnProcessGroupWithDeadline(
+  file: string,
+  args: string[],
+  options: SpawnDeadlineOptions,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
     const child = spawn(file, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
     let timedOut = false;
+    let aborted = false;
     const deadline = setTimeout(() => {
       timedOut = true;
-      killProcessGroup(child, options.killSignal);
-    }, options.timeout);
+      killProcessGroup(child, 'SIGKILL');
+    }, options.timeoutMs);
     const listeners = new Map<NodeJS.Signals, () => void>();
     const settle = (): void => {
       clearTimeout(deadline);
       for (const [signal, listener] of listeners) process.removeListener(signal, listener);
       listeners.clear();
     };
-    for (const signal of COPY_INTERRUPTS) {
+    for (const signal of SPAWN_INTERRUPTS) {
       const listener = (): void => {
         killProcessGroup(child, 'SIGKILL');
+        if (options.onInterrupt === 'abort' && signal === 'SIGINT') {
+          aborted = true;
+          // Drop only this listener, so a second ^C reaches the default
+          // disposition and still quits pi-tin — the caller is meant to keep
+          // going after the first one, not to swallow every interrupt until
+          // the child's exit arrives.
+          const self = listeners.get(signal);
+          if (self !== undefined) {
+            process.removeListener(signal, self);
+            listeners.delete(signal);
+          }
+          return;
+        }
         // Removing our listeners first restores the default disposition, so
         // the re-raise terminates pi-tin exactly as an unhandled signal would.
         settle();
@@ -523,17 +541,21 @@ export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
     });
     child.on('exit', (code, signal) => {
       settle();
-      // `code !== 0` guards a real race: the deadline fires in the timers
-      // phase, a queued-but-undelivered exit is read in the poll phase after
-      // it, so a copy that genuinely succeeded can arrive here with timedOut
-      // already set. Reporting that as a timeout would warn and skip the
-      // promote for a copy that completed.
-      if (timedOut && code !== 0) {
-        reject(Object.assign(new Error(`'${file}' timed out after ${options.timeout}ms`), { code: 'ETIMEDOUT' }));
-        return;
-      }
+      // `code === 0` first guards a real race: the deadline fires in the
+      // timers phase, a queued-but-undelivered exit is read in the poll phase
+      // after it, so a run that genuinely succeeded can arrive here with
+      // timedOut (or aborted) already set. Reporting that as a failure would
+      // discard a run that completed.
       if (code === 0) {
         resolve();
+        return;
+      }
+      if (aborted) {
+        reject(Object.assign(new Error(`'${file}' was interrupted`), { code: 'EABORTED' }));
+        return;
+      }
+      if (timedOut) {
+        reject(Object.assign(new Error(`'${file}' timed out after ${options.timeoutMs}ms`), { code: 'ETIMEDOUT' }));
         return;
       }
       const stderr = Buffer.concat(stderrChunks).toString('utf-8').trim();
@@ -543,6 +565,12 @@ export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
       reject(new Error(`'${file}' ${cause}${stderr === '' ? '' : `: ${stderr}`}`));
     });
   });
+}
+
+// Exported only as the default runner and for direct tests of its error
+// shapes; production callers go through streamToContainer/copyFromContainer.
+export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
+  spawnProcessGroupWithDeadline(file, args, { timeoutMs: options.timeout, onInterrupt: 'die' });
 
 function runContainerSubprocess(
   args: string[],
@@ -556,6 +584,11 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
   return isRecord(error) && error['code'] === 'ETIMEDOUT';
 }
 
+/** True when a deadline-bounded subprocess was aborted by ^C (onInterrupt: 'abort'). */
+export function isContainerSubprocessAborted(error: unknown): boolean {
+  return isRecord(error) && error['code'] === 'EABORTED';
+}
+
 // Copy a host path into the running container by piping a host-side tar into
 // `container exec`, extracted as the target user. Not `container cp`: its
 // copy-in is slow and erratic (measured on container 1.1.0, 2026-07: 36-147
@@ -565,8 +598,8 @@ export function isContainerSubprocessTimeout(error: unknown): boolean {
 // ownership correct by construction where cp landed root-owned files. tar also
 // carries modes and in-tree symlinks intact. COPYFILE_DISABLE plus the plain
 // ustar format stop macOS bsdtar emitting AppleDouble/pax metadata entries,
-// which busybox tar mishandles and which would poison the workspace-state
-// changed-check fingerprint. `set -o pipefail` is load-bearing here and must
+// which busybox tar mishandles — they would land as stray `._`-prefixed
+// files in the restored tree. `set -o pipefail` is load-bearing here and must
 // not be removed: measured, a host-side tar failure with a healthy
 // `container exec` exits 0 without it, silently emptying this path on every
 // start. Do not trust the intuition that truncating the stream makes the
@@ -621,12 +654,10 @@ export async function copyFromContainer(options: CopyFromContainerOptions): Prom
 // the destination layout `container cp` produces, with no path rewriting.
 // Runs as root, not the workspace user: this matches the privilege
 // `container cp` had (it is executed by the runtime with full privilege) and
-// grants nothing new, since probeContainerPathShape, containerFingerprint,
-// restore-executable and remove-container-path already operate as root
-// against this same tree. A user-scoped tar would instead fail permanently
-// against any root-owned file underneath — worse, containerFingerprint
-// enumerates as root and would keep seeing that file as changed while the
-// user-scoped copy kept failing to read it, a permanent per-session loop.
+// grants nothing new, since probeContainerPathShape and
+// remove-container-path already operate as root against this same tree. A
+// user-scoped tar would instead fail permanently against any root-owned file
+// underneath, silently freezing that path's snapshot every session.
 // pipefail is load-bearing: without it a guest failure that still emits a
 // well-formed empty archive exits 0 and a bad copy looks like a good one.
 export async function streamFromContainer(options: StreamFromContainerOptions): Promise<void> {
@@ -662,11 +693,31 @@ export function execContainerCommand(options: ExecContainerCommandOptions): void
   runContainerSubprocess(args, options.run);
 }
 
+// execContainerCommand for legitimately long-running commands (the
+// agent-install step's in-container installer): async, caller-chosen
+// deadline, caller-chosen interrupt disposition. Not the 5s wedge-detection
+// deadline — this bounds a command that is expected to take minutes.
+export async function execContainerCommandWithDeadline(
+  options: Pick<ExecOptions, 'name' | 'command' | 'user'> &
+    SpawnDeadlineOptions & {
+      run?: ((file: string, args: string[], spawnOptions: SpawnDeadlineOptions) => Promise<void>) | undefined;
+    },
+): Promise<void> {
+  const run = options.run ?? spawnProcessGroupWithDeadline;
+  const args = [
+    'exec',
+    ...(options.user ? ['--user', options.user] : []),
+    options.name,
+    ...options.command,
+  ];
+  await run('container', args, { timeoutMs: options.timeoutMs, onInterrupt: options.onInterrupt });
+}
+
 const captureContainerSubprocess: ContainerOutputRunner = (file, args, options): string =>
   execFileSync(file, args, options);
 
 // execContainerCommand for callers that need the command's stdout (e.g. the
-// workspace-state fingerprint probe). Same deadline and kill semantics.
+// workspace-state path-shape probe). Same deadline and kill semantics.
 export function execContainerCommandOutput(options: ExecContainerCommandOutputOptions): string {
   const capture = options.capture ?? captureContainerSubprocess;
   const args = [

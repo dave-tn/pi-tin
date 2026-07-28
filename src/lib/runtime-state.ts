@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { getStateDir } from './paths.js';
+import { getStateDir, getWorkspaceStateDir } from './paths.js';
 import { isRecord } from './guards.js';
 import {
   LockRecordSchema,
@@ -33,6 +33,7 @@ export interface RuntimeDecisionState {
 
 export interface RuntimeStateDeps {
   getStateDir: () => string;
+  getWorkspaceStateDir: (workspaceName: string) => string;
   now: () => number;
   currentPid: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -47,6 +48,11 @@ export interface RuntimeStateDeps {
 export interface RuntimeStateApi {
   withWorkspaceLock: <T>(workspaceName: string, fn: () => Promise<T> | T) => Promise<T>;
   tryWithWorkspaceLock: <T>(workspaceName: string, fn: () => Promise<T> | T) => Promise<T | null>;
+  tryWithAgentInstallLock: <T>(
+    workspaceName: string,
+    binary: string,
+    fn: () => Promise<T> | T,
+  ) => Promise<T | null>;
   readRuntimeMeta: (workspaceName: string) => RuntimeMeta | null;
   writeRuntimeMeta: (workspaceName: string, meta: RuntimeMeta) => void;
   clearWorkspaceRuntimeState: (workspaceName: string) => void;
@@ -66,6 +72,7 @@ export interface RuntimeStateApi {
 
 const defaultDeps: RuntimeStateDeps = {
   getStateDir,
+  getWorkspaceStateDir,
   now: () => Date.now(),
   currentPid: () => process.pid,
   sleep: async (ms: number) => {
@@ -197,8 +204,8 @@ export function createRuntimeStateApi(
     }
   };
 
-  const readLockRecord = (workspaceName: string): LockRecord | null => {
-    return readStateFile(getLockPath(workspaceName), LockRecordSchema).value;
+  const readLockRecord = (lockPath: string): LockRecord | null => {
+    return readStateFile(lockPath, LockRecordSchema).value;
   };
 
   const readSessionFiles = (
@@ -298,11 +305,13 @@ export function createRuntimeStateApi(
     };
   };
 
-  const tryAcquireLock = (workspaceName: string): (() => void) | null => {
-    const lockPath = getLockPath(workspaceName);
-
+  // PID-token lock-file core, shared by the workspace lock and the agent
+  // install lock — only the lock path (and what release prunes afterwards)
+  // differs. Acquire is exclusive-create; a lock whose recorded owner is no
+  // longer the same live process is stale and reclaimed.
+  const tryAcquireLockFile = (lockPath: string): (() => void) | null => {
     while (true) {
-      ensureWorkspaceRuntimeDir(workspaceName);
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
       try {
         const fd = fs.openSync(lockPath, 'wx');
@@ -325,24 +334,6 @@ export function createRuntimeStateApi(
           } catch {
             // Best effort only.
           }
-
-          const workspaceDir = getWorkspaceRuntimeDir(workspaceName);
-          try {
-            if (fs.existsSync(workspaceDir) && fs.readdirSync(workspaceDir).length === 0) {
-              fs.rmSync(workspaceDir, { recursive: true, force: true });
-            }
-          } catch {
-            // Best effort only.
-          }
-
-          const runtimeRootDir = getRuntimeRootDir();
-          try {
-            if (fs.existsSync(runtimeRootDir) && fs.readdirSync(runtimeRootDir).length === 0) {
-              fs.rmSync(runtimeRootDir, { recursive: true, force: true });
-            }
-          } catch {
-            // Best effort only.
-          }
         };
       } catch (error) {
         if (!isFileExistsError(error)) {
@@ -350,7 +341,7 @@ export function createRuntimeStateApi(
         }
       }
 
-      const existing = readLockRecord(workspaceName);
+      const existing = readLockRecord(lockPath);
       if (existing === null || !isProcessAlive(existing.ownerPid, existing.ownerToken)) {
         try {
           fs.rmSync(lockPath, { force: true });
@@ -362,6 +353,35 @@ export function createRuntimeStateApi(
 
       return null;
     }
+  };
+
+  const tryAcquireLock = (workspaceName: string): (() => void) | null => {
+    const releaseLockFile = tryAcquireLockFile(getLockPath(workspaceName));
+    if (releaseLockFile === null) {
+      return null;
+    }
+
+    return () => {
+      releaseLockFile();
+
+      const workspaceDir = getWorkspaceRuntimeDir(workspaceName);
+      try {
+        if (fs.existsSync(workspaceDir) && fs.readdirSync(workspaceDir).length === 0) {
+          fs.rmSync(workspaceDir, { recursive: true, force: true });
+        }
+      } catch {
+        // Best effort only.
+      }
+
+      const runtimeRootDir = getRuntimeRootDir();
+      try {
+        if (fs.existsSync(runtimeRootDir) && fs.readdirSync(runtimeRootDir).length === 0) {
+          fs.rmSync(runtimeRootDir, { recursive: true, force: true });
+        }
+      } catch {
+        // Best effort only.
+      }
+    };
   };
 
   const acquireLock = async (workspaceName: string): Promise<() => void> => {
@@ -393,6 +413,31 @@ export function createRuntimeStateApi(
     fn: () => Promise<T> | T,
   ): Promise<T | null> => {
     const release = tryAcquireLock(workspaceName);
+    if (release === null) {
+      return null;
+    }
+
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
+
+  // Serialises one agent's in-container install per workspace. The lock file
+  // lives in the workspace-state dir deliberately: `pi-tin delete` reclaims
+  // that tree wholesale, the dir is not itself a mount (only sub-dirs are),
+  // and a lock in the runtime dir would survive clearWorkspaceRuntimeState
+  // and silently defeat its empty-dir pruning. Null means another pi-tin open
+  // holds the install — never an error.
+  const tryWithAgentInstallLock = async <T>(
+    workspaceName: string,
+    binary: string,
+    fn: () => Promise<T> | T,
+  ): Promise<T | null> => {
+    const release = tryAcquireLockFile(
+      path.join(deps.getWorkspaceStateDir(workspaceName), `.pi-tin-install-${binary}.lock`),
+    );
     if (release === null) {
       return null;
     }
@@ -499,6 +544,7 @@ export function createRuntimeStateApi(
   return {
     withWorkspaceLock,
     tryWithWorkspaceLock,
+    tryWithAgentInstallLock,
     readRuntimeMeta,
     writeRuntimeMeta,
     clearWorkspaceRuntimeState,
@@ -518,6 +564,7 @@ const defaultApi = createRuntimeStateApi();
 
 export const withWorkspaceLock = defaultApi.withWorkspaceLock;
 export const tryWithWorkspaceLock = defaultApi.tryWithWorkspaceLock;
+export const tryWithAgentInstallLock = defaultApi.tryWithAgentInstallLock;
 export const readRuntimeMeta = defaultApi.readRuntimeMeta;
 export const writeRuntimeMeta = defaultApi.writeRuntimeMeta;
 export const clearWorkspaceRuntimeState = defaultApi.clearWorkspaceRuntimeState;

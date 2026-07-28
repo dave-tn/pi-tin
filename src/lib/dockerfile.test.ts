@@ -598,23 +598,18 @@ describe('generateDockerfile native agent installs', () => {
   const claudeTool: Tool = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
   const opencodeTool: Tool = { name: 'OpenCode', package: 'opencode-ai@latest' };
 
-  test('bakes each native install as its own RUN in the user phase', () => {
+  // The install dirs are live host mounts, invisible at build time — a baked
+  // install would be shadowed by the mount on the very first start. The
+  // installer runs in-container at first open instead.
+  test('bakes no install RUN line: native agents install at first open', () => {
     const { dockerfile } = generateDockerfile(baseProfile, [claudeTool, opencodeTool], noWraps);
 
-    const userIndex = dockerfile.indexOf('USER dev');
-    // Download-then-run: `curl | bash` in a RUN has no pipefail, so a fetch
-    // failure would bake a broken image that buildHash then pins.
-    const claudeIndex = dockerfile.indexOf(
-      'RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
-    );
-    const opencodeIndex = dockerfile.indexOf(
-      'RUN curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
-    );
-    expect(userIndex).toBeGreaterThan(-1);
-    expect(claudeIndex).toBeGreaterThan(userIndex);
-    expect(opencodeIndex).toBeGreaterThan(claudeIndex);
+    expect(dockerfile).not.toContain('https://claude.ai/install.sh');
+    expect(dockerfile).not.toContain('https://opencode.ai/install');
   });
 
+  // The in-container installer still needs these baked: it runs against the
+  // image's own packages, with no network install step of its own.
   test('adds the install script dependencies only when native agents are present', () => {
     const withNative = generateDockerfile(baseProfile, [claudeTool], noWraps).dockerfile;
     const withoutNative = generateDockerfile(
@@ -624,9 +619,6 @@ describe('generateDockerfile native agent installs', () => {
     ).dockerfile;
 
     expect(withNative).toContain('ca-certificates');
-    // Match bash as an indented package-list line — the bare word also
-    // appears in the native install RUN (`bash /tmp/claude-install.sh`), so
-    // `toContain('bash')` could not fail when the package is dropped.
     expect(withNative).toContain('    bash');
     expect(withoutNative).not.toContain('ca-certificates');
     expect(withoutNative).not.toContain('bash');

@@ -6,7 +6,6 @@ import { formatDurationMs } from './duration.js';
 // durationMs are null when the copy never ran or could not be measured.
 export type SyncEntryOutcome =
   | { kind: 'done'; bytes: number | null; durationMs: number | null }
-  | { kind: 'unchanged' }
   | { kind: 'skipped' }
   | { kind: 'failed' }
   | { kind: 'timed-out' };
@@ -24,8 +23,6 @@ export function formatEntryOutcome(outcome: SyncEntryOutcome): string {
       ];
       return parts.length === 0 ? 'done' : `done (${parts.join(', ')})`;
     }
-    case 'unchanged':
-      return 'unchanged';
     case 'skipped':
       return 'skipped';
     case 'failed':

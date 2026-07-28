@@ -19,7 +19,7 @@ import { HerdrAgentListSchema, type ContainerProfile, type Workspace } from './v
 import { loadWorkspace } from './workspaces.js';
 import { loadContainerProfile } from './profiles.js';
 import { parseDurationMs } from './duration.js';
-import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
+import { managedInstallMountPaths, syncableWorkspaceStatePaths, syncWorkspaceState } from './workspace-state.js';
 import { captureContainerDmesg } from './container-lifecycle.js';
 import { removeWorkspaceSshArtifacts } from './ssh-endpoint.js';
 
@@ -117,22 +117,29 @@ export type HerdrStopContext =
   | {
     herdrAttach: true;
     containerProfile: ContainerProfile;
-    workspace: Workspace;
+    /** workspace_state paths cleared to sync (managed-mount overlaps dropped). */
+    statePaths: string[];
     stopAfterMs: number;
   };
 
 // Config may be gone or invalid by the time the detached helper fires; that
 // downgrades to the plain non-herdr stop path rather than failing the helper.
+// The overlap filter runs here, silently — the helper is detached with no
+// terminal; the interactive open already warned about any dropped path.
 function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
   try {
-    const workspace = loadWorkspace(workspaceName);
+    const workspace: Workspace = loadWorkspace(workspaceName);
     if (workspace.attach !== 'herdr') {
       return { herdrAttach: false };
     }
+    const containerProfile = loadContainerProfile(workspace.profile);
     return {
       herdrAttach: true,
-      containerProfile: loadContainerProfile(workspace.profile),
-      workspace,
+      containerProfile,
+      statePaths: syncableWorkspaceStatePaths(
+        containerProfile.workspace_state,
+        managedInstallMountPaths(workspace),
+      ).syncable,
       stopAfterMs: parseDurationMs(workspace.stopAfterLastSession),
     };
   } catch {
@@ -232,14 +239,17 @@ export async function runAutoStopHelper(
       return;
     }
 
-    // herdr agents may have worked (and updated resume state) since the last
-    // session's copy-out — snapshot once more so restore-and-resume picks up
-    // the latest state. Best-effort like every sync.
+    // Only herdr workspaces sync here. Every other workspace already copied
+    // its tool state out when its last session closed (finishWorkspaceSession),
+    // and nothing ran in the container since. herdr agents keep working after
+    // that point, so their tool state has moved on by the time this helper
+    // fires. Best-effort like every sync. (herdr's own session/restore state
+    // needs no snapshot at all — it is a live host mount.)
     if (herdrContext.herdrAttach) {
       await deps.syncWorkspaceState({
         containerName,
         workspaceName,
-        entries: combinedWorkspaceStateEntries(herdrContext.containerProfile, herdrContext.workspace),
+        paths: herdrContext.statePaths,
         user: herdrContext.containerProfile.user,
         direction: 'copy-out',
       });

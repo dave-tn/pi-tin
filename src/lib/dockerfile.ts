@@ -1,4 +1,4 @@
-import { nativeAgentInstalls, npmToolSpecs } from './agents.js';
+import { nativeInstallTargets, npmToolSpecs } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -242,13 +242,14 @@ export function generateDockerfile(
   const extras: Array<{ name: string; content: string }> = [];
 
   const pm = resolvePackageManager(profile);
-  const nativeInstalls = nativeAgentInstalls(packages);
+  const nativeInstalls = nativeInstallTargets(packages).map((target) => target.install);
   const npmSpecs = npmToolSpecs(packages);
 
   lines.push(`FROM ${profile.base_image}`);
   lines.push('');
 
-  // Native install scripts need curl+bash (same package names across
+  // Native install scripts run in-container at first open, not at image
+  // build, but still need curl+bash baked (same package names across
   // apt/apk/dnf); musl bases additionally need each agent's runtime libs.
   const nativeMuslPackages =
     pm === 'apk' ? [...new Set(nativeInstalls.flatMap((install) => install.muslPackages))] : [];
@@ -432,24 +433,17 @@ export function generateDockerfile(
     lines.push('');
   }
 
-  // Native agent installs (as user; self-updating in-container, with the
-  // updated binaries persisted across container lives via workspace state).
-  // One RUN per agent for layer-cache granularity and error attribution.
-  if (nativeInstalls.length > 0) {
-    lines.push('# Native agent installs');
-    for (const install of nativeInstalls) {
-      lines.push(`RUN ${install.installCommand}`);
-    }
-    lines.push('');
-  }
+  // Native agents are not installed here: their install dirs are live host
+  // mounts (invisible at build time), so the installer runs in-container at
+  // first open instead (see src/lib/agent-install.ts).
 
   // ssh entry (plain ssh and herdr panes) lands in $HOME, which holds no
   // project code. Redirect interactive shells that start there to /workspace.
   // The $PWD guard leaves herdr's follow-cwd panes (opened from a project
-  // directory) untouched. Appended after post_install/post_setup/native
-  // installs — the writers of rc files — so a home-dir shell setup (e.g.
-  // oh-my-zsh) cannot overwrite it. .profile covers /bin/sh login shells in
-  // profiles that ship no chsh.
+  // directory) untouched. Appended after post_install/post_setup — the
+  // writers of rc files — so a home-dir shell setup (e.g. oh-my-zsh) cannot
+  // overwrite it. .profile covers /bin/sh login shells in profiles that ship
+  // no chsh.
   if (opts.sshd !== null) {
     const sshLandingRedirect = 'case $- in *i*) if [ "$PWD" = "$HOME" ]; then cd /workspace; fi ;; esac';
     lines.push(
