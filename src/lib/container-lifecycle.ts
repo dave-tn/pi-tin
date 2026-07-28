@@ -27,8 +27,8 @@ function couldNotDetermineStateMessage(containerName: string): string {
 // Guest kernel messages die with the container — each one is its own VM — so
 // a crash inside (an OOM kill, a wedged runtime) leaves no post-mortem
 // evidence once teardown deletes it. Snapshot dmesg to the host right before
-// every stop of a running container: one file per workspace (~18 KB, latest
-// life only), best-effort, never blocks teardown.
+// every stop of a running container: one file per workspace (latest life
+// only), best-effort, never blocks teardown.
 export function captureContainerDmesg(containerName: string): void {
   try {
     const dmesg = execContainerCommandOutput({
