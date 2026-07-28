@@ -92,7 +92,9 @@ export interface ProgressOutput {
 }
 
 const LIVE_TICK_MS = 200;
-const CLEAR_LINE = '\r\x1b[2K';
+
+/** Return to column 0 and erase the line, for in-place TTY progress updates. */
+export const CLEAR_LINE = '\r\x1b[2K';
 
 const DIRECTION_HEADER: Record<WorkspaceStateDirection, string> = {
   'copy-in': 'Restoring workspace state:',

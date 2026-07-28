@@ -19,7 +19,7 @@ import { HerdrAgentListSchema, type ContainerProfile, type Workspace } from './v
 import { loadWorkspace } from './workspaces.js';
 import { loadContainerProfile } from './profiles.js';
 import { parseDurationMs } from './duration.js';
-import { managedInstallMountPaths, syncableWorkspaceStatePaths, syncWorkspaceState } from './workspace-state.js';
+import { syncableWorkspaceStatePaths, syncWorkspaceState } from './workspace-state.js';
 import { captureContainerDmesg } from './container-lifecycle.js';
 import { removeWorkspaceSshArtifacts } from './ssh-endpoint.js';
 
@@ -126,7 +126,7 @@ export type HerdrStopContext =
 // downgrades to the plain non-herdr stop path rather than failing the helper.
 // The overlap filter runs here, silently — the helper is detached with no
 // terminal; the interactive open already warned about any dropped path.
-function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
+export function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
   try {
     const workspace: Workspace = loadWorkspace(workspaceName);
     if (workspace.attach !== 'herdr') {
@@ -136,10 +136,7 @@ function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
     return {
       herdrAttach: true,
       containerProfile,
-      statePaths: syncableWorkspaceStatePaths(
-        containerProfile.workspace_state,
-        managedInstallMountPaths(workspace),
-      ).syncable,
+      statePaths: syncableWorkspaceStatePaths(workspace, containerProfile).syncable,
       stopAfterMs: parseDurationMs(workspace.stopAfterLastSession),
     };
   } catch {

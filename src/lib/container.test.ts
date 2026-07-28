@@ -199,6 +199,9 @@ describe('bounded container subprocess options', () => {
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: 5_000,
     killSignal: 'SIGKILL',
+    // Node's 1 MiB default would throw ENOBUFS on the largest capture here —
+    // a guest `dmesg` after an OOM kill, exactly the case it is read for.
+    maxBuffer: 64 * 1024 * 1024,
   };
 
   interface CapturedCall {
@@ -383,6 +386,7 @@ describe('bounded container subprocess options', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 1,
         killSignal: 'SIGKILL',
+        maxBuffer: 1_048_576,
       });
     } catch (error) {
       caught = error;
@@ -403,6 +407,7 @@ describe('bounded container subprocess options', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 5_000,
         killSignal: 'SIGKILL',
+        maxBuffer: 1_048_576,
       });
     } catch (error) {
       caught = error;

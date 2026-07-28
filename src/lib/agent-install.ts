@@ -9,6 +9,7 @@ import {
 } from './container.js';
 import { tryWithAgentInstallLock } from './runtime-state.js';
 import { formatDurationMs } from './duration.js';
+import { CLEAR_LINE } from './sync-progress.js';
 import type { NativeInstallTarget } from './agents.js';
 import type { ProgressOutput } from './sync-progress.js';
 
@@ -116,7 +117,6 @@ function defaultDeps(options: AgentInstallOptions): AgentInstallDeps {
   };
 }
 
-const CLEAR_LINE = '\r\x1b[2K';
 const INSTALL_TICK_MS = 1_000;
 
 // There is no byte visibility (the download happens in-container), so elapsed
@@ -206,11 +206,10 @@ async function installOne(
   try {
     return await withInstallLock(options, deps, target);
   } catch (error) {
-    // The lock itself failed (unwritable state dir, disk full). Nothing below
-    // this call may throw: the caller registered a session before the install
-    // step and only arms auto-stop in the attach path's `finally`, so an
-    // escaping error here would leave the workspace running with a live
-    // session record and nothing to reclaim it.
+    // The lock itself failed (unwritable state dir, disk full) — the one
+    // failure outside deps.install's own handling. It gets the same treatment
+    // as a failed install rather than escaping: an agent pi-tin could not
+    // install must never cost the user their open.
     deps.warn(
       `Warning: could not start the ${target.name} install — continuing without it; pi-tin retries on the next open. ${errorMessage(error)}`,
     );

@@ -15,7 +15,7 @@ import {
 import { formatDurationMs } from './duration.js';
 import { nativeInstallTargets } from './agents.js';
 import type { SyncEntryOutcome, SyncProgressReporter } from './sync-progress.js';
-import type { Workspace } from './validators.js';
+import type { ContainerProfile, Workspace } from './validators.js';
 
 // "Workspace state" is a small set of container-profile-declared paths
 // (zoxide DB, shell history, …) that pi-tin snapshots between container
@@ -128,19 +128,25 @@ export interface SyncableWorkspaceStatePaths {
 }
 
 /**
- * Filter a container profile's `workspace_state` paths against the managed
- * mounts. An overlapping path must not sync: the copy-in recipe's root
+ * The container profile's `workspace_state` paths that may actually sync for
+ * this workspace: any path overlapping one of the workspace's managed mounts
+ * is dropped. An overlapping path must not sync — the copy-in recipe's root
  * `rm -rf` against a live mount would destroy the host-side contents through
  * virtiofs — and the snapshot would be redundant anyway, since the path
  * already persists via the mount. Callers warn about `dropped`.
+ *
+ * Takes the workspace rather than a mount list so that every sync call site
+ * gets the filter by construction: passing `workspace_state` straight to
+ * syncWorkspaceState is not something a caller can do by omission.
  */
 export function syncableWorkspaceStatePaths(
-  statePaths: string[],
-  managedMountPaths: string[],
+  workspace: Pick<Workspace, 'attach' | 'tools'>,
+  containerProfile: Pick<ContainerProfile, 'workspace_state'>,
 ): SyncableWorkspaceStatePaths {
+  const managedMountPaths = managedInstallMountPaths(workspace);
   const syncable: string[] = [];
   const dropped: Array<{ statePath: string; mountPath: string }> = [];
-  for (const statePath of statePaths) {
+  for (const statePath of containerProfile.workspace_state) {
     const mountPath = managedMountPaths.find((mount) => statePathsOverlap(statePath, mount));
     if (mountPath === undefined) {
       syncable.push(statePath);

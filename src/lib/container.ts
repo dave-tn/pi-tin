@@ -40,6 +40,7 @@ export interface ContainerExecFileOptions {
   stdio: ['pipe', 'pipe', 'pipe'];
   timeout: number;
   killSignal: 'SIGKILL';
+  maxBuffer: number;
 }
 
 export type ContainerSubprocessRunner = (
@@ -106,6 +107,12 @@ interface ExecContainerCommandOutputOptions extends Pick<ExecOptions, 'name' | '
 // (execContainer) and the streaming `container build` — both are user-visible
 // and interruptible with Ctrl-C.
 export const CONTAINER_SUBPROCESS_TIMEOUT_MS = 5_000;
+
+// Node caps captured stdout at 1 MiB by default and throws ENOBUFS past it.
+// That default is below what this module's largest capture legitimately
+// produces: a guest `dmesg` after an OOM kill or a wedged runtime — precisely
+// the case the capture exists for. Raise it well clear of any real output.
+const CONTAINER_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
 
 // `container run` boots a VM for the container; give a cold start more
 // headroom than the flat deadline before declaring the runtime wedged.
@@ -426,6 +433,7 @@ function containerExecFileOptions(timeoutMs: number): ContainerExecFileOptions {
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: timeoutMs,
     killSignal: 'SIGKILL',
+    maxBuffer: CONTAINER_OUTPUT_MAX_BYTES,
   };
 }
 

@@ -54,7 +54,6 @@ import {
   syncableWorkspaceStatePaths,
   syncWorkspaceState,
   workspaceStateMountDir,
-  type SyncableWorkspaceStatePaths,
 } from './workspace-state.js';
 import { runAgentInstallStep } from './agent-install.js';
 import { createSyncProgressReporter } from './sync-progress.js';
@@ -604,21 +603,10 @@ function prepareManagedStateMounts(context: WorkspaceContext, runtimePlan: Runti
   }
 }
 
-// workspace_state paths that may actually sync: anything overlapping a
-// managed mount is dropped — the copy-in recipe's root `rm -rf` against a
-// live mount would destroy the host-side contents through virtiofs, and the
-// snapshot would be redundant anyway.
-function syncableStatePaths(context: WorkspaceContext): SyncableWorkspaceStatePaths {
-  return syncableWorkspaceStatePaths(
-    context.containerProfile.workspace_state,
-    managedInstallMountPaths(context.workspace),
-  );
-}
-
 // Warned about once per session, at the fresh-start restore. Repeating it at
 // session close would just say the same thing again about the same config.
 function syncableStatePathsWarningOnce(context: WorkspaceContext): string[] {
-  const { syncable, dropped } = syncableStatePaths(context);
+  const { syncable, dropped } = syncableWorkspaceStatePaths(context.workspace, context.containerProfile);
   for (const drop of dropped) {
     console.warn(chalk.yellow(
       `Warning: workspace_state path '${drop.statePath}' overlaps the managed mount at ~/${drop.mountPath} — skipping the snapshot; that path already persists via the live mount.`,
@@ -790,7 +778,7 @@ async function finishWorkspaceSession(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableStatePaths(context).syncable,
+        paths: syncableWorkspaceStatePaths(context.workspace, context.containerProfile).syncable,
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
@@ -966,22 +954,26 @@ export async function openWorkspace(
     ? await publishSshEndpoint(context)
     : null;
 
-  // Install any missing native agents. On every open — started and joined —
-  // so a failed install retries without a restart. Pinned after
-  // publishSshEndpoint (it can prompt interactively, and a prompt must not
-  // sit behind a long install) and before attach (herdr must find the
-  // binary). Best-effort: a failure warns and the open continues agent-less.
-  await runAgentInstallStep({
-    workspaceName: context.wsName,
-    containerName: context.containerName,
-    user: context.containerProfile.user,
-    targets: nativeInstallTargets(context.workspace.tools ?? []),
-  });
-
-  spawnAgentRefresh(context);
-
   let execResult: ExecResult | null = null;
+  // Inside the session's try/finally from here on: a session is registered
+  // and auto-stop is only armed by finishWorkspaceSession, so anything that
+  // escapes between the two would leave the workspace running with nothing to
+  // reclaim it.
   try {
+    // Install any missing native agents. On every open — started and joined —
+    // so a failed install retries without a restart. Pinned after
+    // publishSshEndpoint (it can prompt interactively, and a prompt must not
+    // sit behind a long install) and before attach (herdr must find the
+    // binary). Best-effort: a failure warns and the open continues agent-less.
+    await runAgentInstallStep({
+      workspaceName: context.wsName,
+      containerName: context.containerName,
+      user: context.containerProfile.user,
+      targets: nativeInstallTargets(context.workspace.tools ?? []),
+    });
+
+    spawnAgentRefresh(context);
+
     if (attachPreflight.mode === 'herdr') {
       execResult = await attachHerdrClient(context, containerIpv4);
     } else {

@@ -1,6 +1,5 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  AGENT_INSTALL_TIMEOUT_MS,
   planAgentInstalls,
   runAgentInstallStep,
   type AgentInstallDeps,
@@ -185,9 +184,8 @@ describe('runAgentInstallStep', () => {
     ]);
   });
 
-  // The caller registers a session before this step and only arms auto-stop
-  // in the attach path's finally, so an escaping error would leave the
-  // workspace running with a live session record and nothing to reclaim it.
+  // Lock I/O is the one failure outside the installer's own error handling
+  // (unwritable state dir, disk full); it must not cost the user their open.
   test('a lock that cannot be taken warns instead of throwing', async () => {
     const harness = createHarness({ lockThrowsFor: ['claude'] });
 
@@ -244,13 +242,5 @@ describe('runAgentInstallStep', () => {
     expect(harness.warnings).toEqual([
       'Warning: Claude Code install aborted — pi-tin retries it on the next open.',
     ]);
-  });
-});
-
-describe('AGENT_INSTALL_TIMEOUT_MS', () => {
-  // The Claude download alone is ~250 MB; anything near the 5s
-  // wedge-detection deadline would kill every real install.
-  test('bounds a legitimately long install, far above the subprocess deadline', () => {
-    expect(AGENT_INSTALL_TIMEOUT_MS).toBe(600_000);
   });
 });

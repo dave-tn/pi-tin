@@ -14,6 +14,7 @@ import {
   workspaceStateMountDir,
 } from './workspace-state.js';
 import type { SyncProgressReporter } from './sync-progress.js';
+import type { Workspace } from './validators.js';
 
 const hostStateDir = '/host/workspace-state/myws';
 
@@ -79,10 +80,15 @@ describe('managedInstallMountPaths', () => {
 });
 
 describe('syncableWorkspaceStatePaths', () => {
-  const mounts = ['.local/share/claude', '.local/bin', '.config/herdr'];
+  // A herdr workspace running Claude Code — the widest managed mount set
+  // (.local/share/claude, .local/bin, .config/herdr), so one workspace covers
+  // every overlap shape.
+  const workspace: Pick<Workspace, 'attach' | 'tools'> = { attach: 'herdr', tools: [CLAUDE_TOOL] };
+  const profile = (...workspace_state: string[]): { workspace_state: string[] } =>
+    ({ workspace_state });
 
   test('paths that touch no managed mount sync unchanged', () => {
-    expect(syncableWorkspaceStatePaths(['.zsh_history', '.local/share/zoxide'], mounts))
+    expect(syncableWorkspaceStatePaths(workspace, profile('.zsh_history', '.local/share/zoxide')))
       .toEqual({ syncable: ['.zsh_history', '.local/share/zoxide'], dropped: [] });
   });
 
@@ -90,17 +96,17 @@ describe('syncableWorkspaceStatePaths', () => {
   // live mount that deletes the *host* contents through virtiofs — the
   // agent's install, or herdr's session state.
   test('a path equal to a mount is dropped', () => {
-    expect(syncableWorkspaceStatePaths(['.local/bin'], mounts))
+    expect(syncableWorkspaceStatePaths(workspace, profile('.local/bin')))
       .toEqual({ syncable: [], dropped: [{ statePath: '.local/bin', mountPath: '.local/bin' }] });
   });
 
   test('an ancestor of a mount is dropped — it reaches into the mount just as surely', () => {
-    expect(syncableWorkspaceStatePaths(['.local'], mounts))
+    expect(syncableWorkspaceStatePaths(workspace, profile('.local')))
       .toEqual({ syncable: [], dropped: [{ statePath: '.local', mountPath: '.local/share/claude' }] });
   });
 
   test('a descendant of a mount is dropped', () => {
-    expect(syncableWorkspaceStatePaths(['.config/herdr/session.json'], mounts))
+    expect(syncableWorkspaceStatePaths(workspace, profile('.config/herdr/session.json')))
       .toEqual({
         syncable: [],
         dropped: [{ statePath: '.config/herdr/session.json', mountPath: '.config/herdr' }],
@@ -110,13 +116,17 @@ describe('syncableWorkspaceStatePaths', () => {
   // Lexical prefix matching alone would drop `.local/binaries` against the
   // `.local/bin` mount, silently losing a legitimate snapshot.
   test('a sibling sharing a name prefix is not an overlap', () => {
-    expect(syncableWorkspaceStatePaths(['.local/binaries'], mounts).syncable)
+    expect(syncableWorkspaceStatePaths(workspace, profile('.local/binaries')).syncable)
       .toEqual(['.local/binaries']);
   });
 
-  test('with no managed mounts every path syncs', () => {
-    expect(syncableWorkspaceStatePaths(['.local/bin', '.config/herdr'], []).syncable)
-      .toEqual(['.local/bin', '.config/herdr']);
+  // The same profile against a workspace that mounts nothing: the paths are
+  // only hazardous because *this* workspace mounts them.
+  test('a workspace with no managed mounts syncs every path', () => {
+    expect(syncableWorkspaceStatePaths(
+      { attach: 'shell', tools: [] },
+      profile('.local/bin', '.config/herdr'),
+    ).syncable).toEqual(['.local/bin', '.config/herdr']);
   });
 });
 
