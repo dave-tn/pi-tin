@@ -1,14 +1,19 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
   containerSystemRecoveryHint,
+  execContainerCommandOutput,
   getContainerState,
   stopContainer,
   killContainer,
   deleteContainer,
   isContainerSubprocessTimeout,
+  workspaceNameFromContainerId,
   type ContainerState,
 } from './container.js';
+import { getDiagnosticsDir } from './paths.js';
 import { formatDurationMs } from './duration.js';
 
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
@@ -19,8 +24,32 @@ function couldNotDetermineStateMessage(containerName: string): string {
   return `Could not determine the state of container '${containerName}'.`;
 }
 
+// Guest kernel messages die with the container — each one is its own VM — so
+// a crash inside (an OOM kill, a wedged runtime) leaves no post-mortem
+// evidence once teardown deletes it. Snapshot dmesg to the host right before
+// every stop of a running container: one file per workspace (~18 KB, latest
+// life only), best-effort, never blocks teardown.
+export function captureContainerDmesg(containerName: string): void {
+  try {
+    const dmesg = execContainerCommandOutput({
+      name: containerName,
+      user: 'root',
+      command: ['dmesg'],
+    });
+    const diagnosticsDir = getDiagnosticsDir();
+    fs.mkdirSync(diagnosticsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(diagnosticsDir, `${workspaceNameFromContainerId(containerName)}.dmesg.log`),
+      `# ${containerName} guest dmesg, captured pre-stop ${new Date().toISOString()}\n${dmesg}`,
+    );
+  } catch {
+    // Diagnostics only — teardown must never depend on them.
+  }
+}
+
 export interface ContainerLifecycleDeps {
   getContainerState: (name: string) => ContainerState;
+  captureContainerDmesg: (name: string) => void;
   stopContainer: (name: string) => void;
   killContainer: (name: string) => void;
   deleteContainer: (name: string) => void;
@@ -37,6 +66,7 @@ export interface ContainerLifecycleApi {
 
 const defaultDeps: ContainerLifecycleDeps = {
   getContainerState,
+  captureContainerDmesg,
   stopContainer,
   killContainer,
   deleteContainer,
@@ -95,6 +125,7 @@ export function createContainerLifecycle(
     let timedOutAction: 'stop' | 'kill' | null = null;
 
     if (initialState === 'running') {
+      deps.captureContainerDmesg(containerName);
       try {
         deps.stopContainer(containerName);
       } catch (error) {

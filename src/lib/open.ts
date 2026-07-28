@@ -47,7 +47,7 @@ import { spawnAutoStopHelper } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, npmToolSpecs } from './agents.js';
-import { combinedWorkspaceStateEntries, syncWorkspaceState } from './workspace-state.js';
+import { combinedWorkspaceStateEntries, ensureHerdrConfigStateDir, syncWorkspaceState } from './workspace-state.js';
 import { createSyncProgressReporter } from './sync-progress.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
 import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
@@ -359,6 +359,26 @@ function resolveWorkspaceVolumes(
         host: ghConfigHost,
         container: `${homeContainer}/.config/gh`,
         readonly: true,
+      });
+    }
+  }
+
+  // herdr session/restore state is a live mount, not a copy-out entry: it
+  // survives hard kills and wedged runtimes, where a teardown-time snapshot
+  // does not. An explicit host.mounts entry that landed at the same container
+  // path is an opt-out — the user's own mount serves the same durability
+  // purpose.
+  if (workspace.attach === 'herdr') {
+    const herdrConfigContainer = `${homeContainer}/.config/herdr`;
+    if (volumes.some((volume) => volume.container === herdrConfigContainer)) {
+      notices.push({
+        kind: 'info',
+        text: `herdr state uses the host.mounts entry at ${herdrConfigContainer} instead of the managed workspace-state mount.`,
+      });
+    } else {
+      volumes.push({
+        host: ensureHerdrConfigStateDir(wsName),
+        container: herdrConfigContainer,
       });
     }
   }

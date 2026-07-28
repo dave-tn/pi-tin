@@ -698,23 +698,22 @@ async function runOpGroup(options: {
 }
 
 // Alongside the container profile's own tool-state entries, pi-tin persists
-// its own binary entries: for herdr workspaces, ~/.config/herdr
-// (session/restore state, needed for restore-and-resume) and ~/.local/bin/herdr
-// (the auto-installed server — the rootfs is ephemeral, so without persistence
-// every fresh start drops it from PATH and herdr re-prompts to reinstall); and
-// for native-install agents (Claude Code, OpenCode), the binaries their own
-// auto-updaters maintain, so a fresh start resumes from the last updated
-// version instead of reverting to the image bake.
+// its own binary entries: for herdr workspaces, ~/.local/bin/herdr (the
+// auto-installed server — the rootfs is ephemeral, so without persistence
+// every fresh start drops it from PATH and herdr re-prompts to reinstall);
+// and for native-install agents (Claude Code, OpenCode), the binaries their
+// own auto-updaters maintain, so a fresh start resumes from the last updated
+// version instead of reverting to the image bake. ~/.config/herdr
+// (session/restore state) is deliberately absent: it is a live host mount
+// (see herdrConfigStateDir), so it survives any teardown — including the
+// hard kills and wedged runtimes a teardown-time copy-out cannot.
 export function combinedWorkspaceStateEntries(
   containerProfile: Pick<ContainerProfile, 'workspace_state'>,
   workspace: Pick<Workspace, 'attach' | 'tools'>,
 ): WorkspaceStateEntry[] {
   const herdrEntries: WorkspaceStateEntry[] =
     workspace.attach === 'herdr'
-      ? [
-          { kind: 'tool-state', path: '.config/herdr' },
-          { kind: 'binary', path: '.local/bin/herdr', executable: true },
-        ]
+      ? [{ kind: 'binary', path: '.local/bin/herdr', executable: true }]
       : [];
   return [
     ...containerProfile.workspace_state.map(
@@ -725,6 +724,21 @@ export function combinedWorkspaceStateEntries(
       install.stateEntries.map((entry): WorkspaceStateEntry => ({ kind: 'binary', ...entry })),
     ),
   ];
+}
+
+/**
+ * Host directory mounted at ~/.config/herdr for herdr workspaces. Lives
+ * inside the workspace-state dir on purpose: pre-mount releases snapshotted
+ * the same path there via copy-out, so existing state seeds the mount.
+ */
+export function herdrConfigStateDir(workspaceName: string): string {
+  return path.join(getWorkspaceStateDir(workspaceName), '.config', 'herdr');
+}
+
+export function ensureHerdrConfigStateDir(workspaceName: string): string {
+  const stateDir = herdrConfigStateDir(workspaceName);
+  fs.mkdirSync(stateDir, { recursive: true });
+  return stateDir;
 }
 
 // Snapshot workspace state in one direction. Best-effort per operation: a

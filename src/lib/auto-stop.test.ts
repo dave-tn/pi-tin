@@ -176,6 +176,9 @@ function createHarness(options: {
       calls.push('sync-copy-out');
       syncOptions.push(syncOpts);
     },
+    captureContainerDmesg: () => {
+      calls.push('capture-dmesg');
+    },
     stopContainer: () => {
       calls.push('stop');
       options.onStop?.();
@@ -314,12 +317,11 @@ describe('runAutoStopHelper', () => {
       armShutdown: unexpected('armShutdown'),
     });
 
-    expect(harness.calls).toEqual(['sync-copy-out', 'stop', 'delete', 'clear', 'ssh-cleanup']);
+    expect(harness.calls).toEqual(['sync-copy-out', 'capture-dmesg', 'stop', 'delete', 'clear', 'ssh-cleanup']);
     expect(harness.syncOptions).toEqual([{
       containerName: 'pi-tin-demo',
       workspaceName: 'demo',
       entries: [
-        { kind: 'tool-state', path: '.config/herdr' },
         { kind: 'binary', path: '.local/bin/herdr', executable: true },
       ],
       user: 'dev',
@@ -342,7 +344,7 @@ describe('runAutoStopHelper', () => {
       armShutdown: unexpected('armShutdown'),
     });
 
-    expect(harness.calls).toEqual(['stop', 'delete', 'clear', 'ssh-cleanup']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop', 'delete', 'clear', 'ssh-cleanup']);
   });
 
   test('leaves runtime records alone when the post-stop state is unknown', async () => {
@@ -363,12 +365,12 @@ describe('runAutoStopHelper', () => {
       removeWorkspaceSshArtifacts: unexpected('removeWorkspaceSshArtifacts'),
     });
 
-    expect(harness.calls).toEqual(['stop']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop']);
   });
 
   test.each([
-    ['stopped', ['stop', 'delete', 'clear', 'ssh-cleanup']],
-    ['not-found', ['stop', 'clear', 'ssh-cleanup']],
+    ['stopped', ['capture-dmesg', 'stop', 'delete', 'clear', 'ssh-cleanup']],
+    ['not-found', ['capture-dmesg', 'stop', 'clear', 'ssh-cleanup']],
   ] as const)('clears runtime state on a confirmed %s post-stop state', async (postState, expected) => {
     const harness = createHarness({
       containerState: 'running',
@@ -409,6 +411,6 @@ describe('runAutoStopHelper', () => {
     });
 
     expect(harness.stateReads()).toBe(2);
-    expect(harness.calls).toEqual(['stop', 'delete', 'clear', 'ssh-cleanup']);
+    expect(harness.calls).toEqual(['capture-dmesg', 'stop', 'delete', 'clear', 'ssh-cleanup']);
   });
 });

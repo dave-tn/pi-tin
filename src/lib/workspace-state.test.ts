@@ -54,11 +54,10 @@ const CODEX_TOOL = { name: 'Codex', package: '@openai/codex@latest' };
 describe('combinedWorkspaceStateEntries', () => {
   const containerProfile = { workspace_state: ['.zsh_history'] };
 
-  test('herdr workspaces add the herdr state dir and the auto-installed server binary', () => {
+  test('herdr workspaces add only the auto-installed server binary — session state is a mount, not a sync entry', () => {
     expect(combinedWorkspaceStateEntries(containerProfile, { attach: 'herdr', tools: [] }))
       .toEqual([
         { kind: 'tool-state', path: '.zsh_history' },
-        { kind: 'tool-state', path: '.config/herdr' },
         { kind: 'binary', path: '.local/bin/herdr', executable: true },
       ]);
   });

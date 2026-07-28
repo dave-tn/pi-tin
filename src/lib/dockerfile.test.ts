@@ -566,6 +566,25 @@ describe('generateDockerfile sshd', () => {
     expect(extras.map((extra) => extra.name)).toEqual([]);
   });
 
+  test('redirects herdr sockets to the ephemeral rootfs, overridable by profile env', () => {
+    const withSshd = generateDockerfile(baseProfile, [], sshdOpts).dockerfile;
+    expect(withSshd).toContain('ENV HERDR_SOCKET_PATH=/tmp/herdr.sock');
+    expect(withSshd).toContain('ENV HERDR_CLIENT_SOCKET_PATH=/tmp/herdr-client.sock');
+
+    const withoutSshd = generateDockerfile(baseProfile, [], noWraps).dockerfile;
+    expect(withoutSshd).not.toContain('HERDR_SOCKET_PATH');
+
+    const withOverride: ContainerProfile = {
+      ...baseProfile,
+      env: { HERDR_SOCKET_PATH: '/run/herdr.sock' },
+    };
+    const overridden = generateDockerfile(withOverride, [], sshdOpts).dockerfile;
+    const builtinIndex = overridden.indexOf('ENV HERDR_SOCKET_PATH=/tmp/herdr.sock');
+    const overrideIndex = overridden.indexOf('ENV HERDR_SOCKET_PATH="/run/herdr.sock"');
+    expect(builtinIndex).toBeGreaterThan(-1);
+    expect(overrideIndex).toBeGreaterThan(builtinIndex);
+  });
+
   test('installs openssh-server under apk and dnf too', () => {
     const alpine: ContainerProfile = { ...baseProfile, base_image: 'node:alpine' };
     const fedora: ContainerProfile = { ...baseProfile, base_image: 'fedora:latest' };

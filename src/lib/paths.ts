@@ -28,6 +28,11 @@ export function getStateDir(): string {
   return path.join(getConfigDir(), 'state');
 }
 
+/** Host directory for best-effort guest diagnostics (pre-stop dmesg snapshots). */
+export function getDiagnosticsDir(): string {
+  return path.join(getConfigDir(), 'diagnostics');
+}
+
 /** Per-workspace host directory mirroring the container's workspace state. */
 export function getWorkspaceStateDir(workspaceName: string): string {
   return path.join(getConfigDir(), 'workspace-state', workspaceName);
