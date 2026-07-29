@@ -95,6 +95,7 @@ import {
   type WorkspaceOpenPlan,
 } from './workspace-plans.js';
 import { isInteractiveSession, promptConfirm } from './confirmation.js';
+import { guardSessionExit } from './session-exit.js';
 import { CliError, EXIT } from './cli-errors.js';
 
 const KEEPALIVE_COMMAND = [
@@ -1031,6 +1032,14 @@ export async function openWorkspace(
     }
   });
 
+  // The session is registered from here on, so a terminating signal — closing
+  // the terminal window sends SIGHUP — must run the close-out before pi-tin
+  // dies, or the container is left running with no auto-stop armed. Armed
+  // outside the block above rather than beside registerSession because the
+  // close-out takes the workspace lock that block holds; there is no await
+  // between registerSession and the lock release for a signal to land in.
+  const closeSession = guardSessionExit(() => finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart));
+
   if (opened.mode === 'started') {
     console.log(chalk.green(`Started workspace '${context.wsName}'`));
     chownMountParents({
@@ -1091,7 +1100,7 @@ export async function openWorkspace(
       });
     }
   } finally {
-    const exitMessage = await finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart);
+    const exitMessage = await closeSession();
     console.log(exitMessage);
   }
 
