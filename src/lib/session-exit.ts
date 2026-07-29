@@ -37,9 +37,10 @@ const defaultDeps: SessionExitDeps = {
 export interface SessionExitGuard {
   /**
    * The normal exit path has started closing the session: a signal must let it
-   * finish rather than pre-empt it. It does strictly more — it snapshots
-   * workspace state first — and it is already under way, so cutting it short
-   * would trade a clean close for the cut-down one and lose the snapshot.
+   * finish rather than replace it. It does strictly more — it snapshots
+   * workspace state first — and it is already under way, so terminating on the
+   * signal would lose the snapshot. The cut-down close-out still runs, as
+   * insurance against the normal one being killed part-way through.
    */
   handOver: () => void;
   /** Drop the guard; later signals terminate pi-tin as they normally would. */
@@ -84,13 +85,20 @@ export function guardSessionExit(
       // a second signal quits outright either way, leaving an escape hatch
       // from a close-out that is not finishing.
       release();
-      if (handedOver) {
-        return;
-      }
       try {
         closeSession();
       } catch {
         // Best effort only: a failed close-out must not stop the signal.
+      }
+      if (handedOver) {
+        // Do not re-raise: the normal close-out is still running and does
+        // strictly more — it snapshots workspace state first — so let it
+        // finish and overwrite what was just armed. The close-out above still
+        // runs, because that normal one may itself be inside a spawn wrapper
+        // that answers this same signal by re-raising it against the default
+        // disposition now restored, and that death would land after the
+        // session record is gone and before the countdown is armed.
+        return;
       }
       deps.raise(signal);
     };

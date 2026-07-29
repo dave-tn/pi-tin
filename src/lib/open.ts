@@ -941,6 +941,11 @@ export async function openWorkspace(
   // terminating signal in that stretch would otherwise leave a running
   // container with no session and no auto-stop. The close-out reconciles
   // rather than assuming a session, so it is a no-op until there is one.
+  //
+  // Deliberately not released on the paths that throw out of here (a refusal,
+  // a failed build, a failed copy-in): the listeners are unref'd, so they
+  // cannot hold the process open, and a signal arriving while that error
+  // unwinds should still close out whatever session the throw left behind.
   const sessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
 
   const opened = await withWorkspaceLock(context.wsName, async () => {

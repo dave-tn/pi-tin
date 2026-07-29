@@ -125,16 +125,31 @@ describe('guardSessionExit', () => {
   // it takes and the cut-down close-out does not.
   test('after hand-over a signal lets the normal close-out finish', () => {
     const fake = fakeProcess();
-    let closed = 0;
-    const guard = guardSessionExit(() => { closed += 1; }, fake.deps);
+    const guard = guardSessionExit(() => {}, fake.deps);
 
     guard.handOver();
     fake.emit('SIGHUP');
 
-    expect(closed).toBe(0);
     expect(fake.raised).toEqual([]);
     // Still disarmed, so a second signal quits rather than being swallowed too.
     expect(fake.armed()).toEqual([]);
+  });
+
+  // The normal close-out snapshots workspace state before it arms anything,
+  // and that snapshot is itself a spawn wrapper which answers this same signal
+  // by re-raising it against the default disposition just restored. Dying
+  // there lands after the session record is gone and before the countdown is
+  // armed — the stranding this guard exists to prevent — so the cut-down
+  // close-out runs as insurance even when the normal one owns the exit.
+  test('hand-over still arms, in case the close-out it defers to is killed', () => {
+    const fake = fakeProcess();
+    let closed = 0;
+    const guard = guardSessionExit(() => { closed += 1; }, fake.deps);
+
+    guard.handOver();
+    fake.emit('SIGTERM');
+
+    expect(closed).toBe(1);
   });
 
   test('the default deps arm and disarm real process listeners', () => {
