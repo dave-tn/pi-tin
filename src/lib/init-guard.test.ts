@@ -145,6 +145,17 @@ describe('syncDefaultContainerProfiles', () => {
     }
   });
 
+  // The zshrc export must name only the workspace user's home. Every managed
+  // profile is `user: dev`, so a literal /root path put another user's home on
+  // PATH; the image PATH (with its baked .local/bin snapshot) covers what it
+  // was there to cover.
+  test('baseline zshrc PATH export names $HOME_DIR only, never /root', () => {
+    for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
+      expect(content).toContain('echo "export PATH=\\"$HOME_DIR/.local/bin:\\$PATH\\"" >> $HOME_DIR/.zshrc');
+      expect(content).not.toContain('/root/.local/bin');
+    }
+  });
+
   test('baseline post_install aliases the Debian-renamed fd and bat binaries', () => {
     for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
       const profile = validateContainerProfile(YAML.parse(content));

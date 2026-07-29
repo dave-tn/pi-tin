@@ -71,7 +71,7 @@ const NODESOURCE_INSTALL = `  - 'curl -fsSL https://deb.nodesource.com/setup_26.
 const BASELINE_POST_INSTALL = `  - 'chsh -s "$(command -v zsh)" "$USERNAME"'
   - 'HOME=$HOME_DIR sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" -- --unattended'
   - 'curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh'
-  - 'echo "export PATH=\\"/root/.local/bin:$HOME_DIR/.local/bin:\\$PATH\\"" >> $HOME_DIR/.zshrc'
+  - 'echo "export PATH=\\"$HOME_DIR/.local/bin:\\$PATH\\"" >> $HOME_DIR/.zshrc'
   - 'echo "eval \\"\\$(zoxide init zsh --cmd cd)\\"" >> $HOME_DIR/.zshrc'
   - 'echo "alias fd=fdfind" >> $HOME_DIR/.zshrc'
   - 'echo "alias bat=batcat" >> $HOME_DIR/.zshrc'

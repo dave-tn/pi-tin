@@ -131,6 +131,14 @@ const HERDR_SOCKET_ENV = {
 
 const AGENT_WRAPPER_BIN_DIR = '/usr/local/pi-tin/bin';
 
+// Build-time copy of the image's own $HOME_DIR/.local/bin, kept outside $HOME
+// so no home-directory mount can shadow it in turn. Workspaces live-mount
+// .local/bin (Claude Code's launcher, herdr's server binary), which hides
+// whatever the image baked there; this copy stays reachable via PATH. Last on
+// PATH among pi-tin's entries, so the live mount always wins — the opposite
+// intent to AGENT_WRAPPER_BIN_DIR, which is first, hence a separate directory.
+const BAKED_BIN_DIR = '/usr/local/pi-tin/baked-bin';
+
 // Launcher baked at build time, first on PATH. Tries the refresh prefix, then
 // the image-baked prefix: background refreshes never touch the baked install,
 // so one of the two always resolves — even mid-install, when npm has removed
@@ -291,17 +299,23 @@ export function generateDockerfile(
   );
   lines.push('');
 
+  // Set before post_install, so root-run installers that default to
+  // ${HOME}/.local/bin land in the *workspace user's* home, not /root — the
+  // reason zoxide ends up in the directory workspaces later mount over.
   lines.push(`ENV HOME=$HOME_DIR`);
   // Wrapper launchers first, then the refresh prefix, then the baked prefix —
   // missing dirs are inert, so the line is unconditional. .local/bin joins the
   // image PATH unconditionally: native agents install there, non-interactive
   // ssh reads no .zshrc, and remote clients (herdr) locate/auto-install their
   // server binary there. Native agents with their own bin dir (opencode)
-  // append it only when present.
+  // append it only when present. BAKED_BIN_DIR goes last of pi-tin's entries:
+  // it is a build-time snapshot of a directory that is live-mounted at
+  // runtime, so the mounted copy must win — but still ahead of $PATH, keeping
+  // today's behaviour where a ~/.local/bin tool shadows the distro's.
   const nativeBinDirs = [...new Set(nativeInstalls.map((install) => install.binDir))]
     .filter((binDir) => binDir !== '.local/bin');
   const nativeBinSuffix = nativeBinDirs.map((binDir) => `:$HOME_DIR/${binDir}`).join('');
-  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin${nativeBinSuffix}:$PATH`);
+  lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin${nativeBinSuffix}:${BAKED_BIN_DIR}:$PATH`);
   const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
@@ -398,6 +412,11 @@ export function generateDockerfile(
   lines.push(`RUN chown -R ${user}:${user} ${homeDir}`);
   lines.push('');
 
+  // Created here, while still root, and handed to the workspace user so the
+  // copy into it at the end of the build needs no USER round trip.
+  lines.push(`RUN mkdir -p ${BAKED_BIN_DIR} && chown ${user}:${user} ${BAKED_BIN_DIR}`);
+  lines.push('');
+
   // Switch to non-root user
   lines.push(`USER ${user}`);
   lines.push('WORKDIR /workspace');
@@ -461,6 +480,16 @@ export function generateDockerfile(
     lines.push(`RUN npm install -g ${npmSpecs.join(' ')}`);
     lines.push('');
   }
+
+  // Last step of the body: every RUN that can write $HOME_DIR/.local/bin —
+  // post_install, global tools, post_setup, workspace packages — has run by
+  // now. The -d guard is the one expected non-case (a profile that never
+  // created the directory); anything else fails the build with its real error
+  // rather than producing an image whose tools quietly went missing.
+  lines.push(
+    `RUN if [ -d "$HOME_DIR/.local/bin" ]; then cp -RP "$HOME_DIR/.local/bin/." ${BAKED_BIN_DIR}/; fi`,
+  );
+  lines.push('');
 
   lines.push('CMD ["/bin/sh"]');
 

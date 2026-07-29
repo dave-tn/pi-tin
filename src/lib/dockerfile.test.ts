@@ -126,11 +126,14 @@ describe('generateDockerfile', () => {
     expect(entrypoint?.content).toContain('exec "$@"');
   });
 
-  test('PATH prefers wrapper and refresh-prefix bins, with .local/bin always present', () => {
+  // The baked snapshot sits behind every $HOME_DIR entry so a live-mounted
+  // .local/bin binary still wins, and ahead of $PATH so a tool that only the
+  // image baked (zoxide) keeps resolving once the mount hides the original.
+  test('PATH prefers wrapper and refresh-prefix bins, then .local/bin, then the baked snapshot', () => {
     const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
 
     expect(dockerfile).toContain(
-      'ENV PATH=/usr/local/pi-tin/bin:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin:$PATH',
+      'ENV PATH=/usr/local/pi-tin/bin:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin:/usr/local/pi-tin/baked-bin:$PATH',
     );
   });
 
@@ -498,6 +501,61 @@ describe('generateDockerfile', () => {
   });
 });
 
+describe('generateDockerfile baked .local/bin snapshot', () => {
+  // Exact line: the -d guard is the only tolerated failure, so a stray
+  // `|| true` or a dropped guard must fail this match rather than ship an
+  // image whose baked tools quietly went missing.
+  const copyStep =
+    'RUN if [ -d "$HOME_DIR/.local/bin" ]; then cp -RP "$HOME_DIR/.local/bin/." /usr/local/pi-tin/baked-bin/; fi';
+
+  test('creates the baked-bin dir owned by the workspace user, before the USER switch', () => {
+    for (const user of ['builder', 'root']) {
+      const profile: ContainerProfile = { ...baseProfile, user };
+      const { dockerfile } = generateDockerfile(profile, [], noWraps);
+
+      const mkdirIndex = dockerfile.indexOf(
+        `RUN mkdir -p /usr/local/pi-tin/baked-bin && chown ${user}:${user} /usr/local/pi-tin/baked-bin`,
+      );
+      const userIndex = dockerfile.indexOf(`USER ${user}`);
+
+      expect(mkdirIndex).toBeGreaterThan(-1);
+      expect(userIndex).toBeGreaterThan(mkdirIndex);
+    }
+  });
+
+  test('copies .local/bin aside as the last body step, after everything that writes it', () => {
+    const profile: ContainerProfile = {
+      ...baseProfile,
+      global_tools: ['typescript@latest'],
+      post_setup: ['echo "setup"'],
+    };
+    const packages: Tool[] = [{ name: 'Codex', package: '@openai/codex@latest' }];
+    const { dockerfile } = generateDockerfile(profile, packages, noWraps);
+
+    const lines = dockerfile.split('\n').filter((line) => line !== '');
+    const postSetupIndex = lines.indexOf('RUN echo "setup"');
+    const workspacePackagesIndex = lines.indexOf('RUN npm install -g @openai/codex@latest');
+    const copyIndex = lines.indexOf(copyStep);
+    const cmdIndex = lines.indexOf('CMD ["/bin/sh"]');
+
+    expect(postSetupIndex).toBeGreaterThan(-1);
+    expect(workspacePackagesIndex).toBeGreaterThan(-1);
+    expect(copyIndex).toBeGreaterThan(postSetupIndex);
+    expect(copyIndex).toBeGreaterThan(workspacePackagesIndex);
+    expect(cmdIndex).toBe(copyIndex + 1);
+  });
+
+  test('copies into baked-bin as the user that owns it, after the USER switch', () => {
+    const { dockerfile } = generateDockerfile(baseProfile, [], noWraps);
+
+    const userIndex = dockerfile.indexOf('USER dev');
+    const copyIndex = dockerfile.indexOf(copyStep);
+
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(copyIndex).toBeGreaterThan(userIndex);
+  });
+});
+
 describe('generateDockerfile sshd', () => {
   const sshdOpts = { ...noWraps, sshd: { authorizedKey: 'ssh-ed25519 AAAATESTKEY pi-tin' } };
 
@@ -549,12 +607,17 @@ describe('generateDockerfile sshd', () => {
     expect(redirectIndex).toBeGreaterThan(postSetupIndex);
   });
 
-  test('.local/bin is on PATH with and without sshd', () => {
-    const withSshd = generateDockerfile(baseProfile, [], sshdOpts).dockerfile;
-    const withoutSshd = generateDockerfile(baseProfile, [], noWraps).dockerfile;
+  // Non-interactive ssh reads no rc file, so the image PATH is the only thing
+  // an ssh session inherits; the sshd branch must not rewrite it.
+  test('sshd leaves the image PATH line untouched', () => {
+    const pathLine = (dockerfile: string): string | undefined =>
+      dockerfile.split('\n').find((line) => line.startsWith('ENV PATH='));
 
-    expect(withSshd).toContain(':$HOME_DIR/.local/bin:$PATH');
-    expect(withoutSshd).toContain(':$HOME_DIR/.local/bin:$PATH');
+    const withoutSshd = pathLine(generateDockerfile(baseProfile, [], noWraps).dockerfile);
+    const withSshd = pathLine(generateDockerfile(baseProfile, [], sshdOpts).dockerfile);
+
+    expect(withoutSshd).toBeDefined();
+    expect(withSshd).toBe(withoutSshd);
   });
 
   test('sshd disabled leaves no sshd artifacts', () => {
@@ -649,12 +712,13 @@ describe('generateDockerfile native agent installs', () => {
     expect(dockerfile).not.toContain('USE_BUILTIN_RIPGREP');
   });
 
-  test("agent-specific bin dirs join PATH only with that agent; .local/bin needs no suffix", () => {
+  test("agent-specific bin dirs join PATH ahead of the baked snapshot, only with that agent", () => {
     const withOpencode = generateDockerfile(baseProfile, [opencodeTool], noWraps).dockerfile;
     const claudeOnly = generateDockerfile(baseProfile, [claudeTool], noWraps).dockerfile;
 
-    expect(withOpencode).toContain(':$HOME_DIR/.local/bin:$HOME_DIR/.opencode/bin:$PATH');
-    expect(claudeOnly).toContain(':$HOME_DIR/.local/bin:$PATH');
+    expect(withOpencode).toContain(
+      ':$HOME_DIR/.local/bin:$HOME_DIR/.opencode/bin:/usr/local/pi-tin/baked-bin:$PATH',
+    );
     expect(claudeOnly).not.toContain('.opencode');
   });
 });

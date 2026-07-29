@@ -197,8 +197,10 @@ An explicit `host.mounts` entry (or an agent profile) at any of these container 
 
 If an install ever ends up corrupt — or was interrupted partway through, which can leave a truncated binary that still looks installed — delete the agent's directory under `~/.config/pi-tin/workspace-state/<workspace>/` and reopen; the installer runs fresh.
 
-> [!WARNING]
-> Mounting `~/.local/bin` shadows anything the image baked there at build time. The managed profiles are unaffected (they run as `user: dev`, and their build-time tool installs run as root, landing in `/root/.local/bin`), but two kinds of **custom** profile are: one that installs user tools into `~/.local/bin` — `pip install --user`, `uv`, `pipx` — and one with `user: root`, whose home *is* `/root` and so loses those root-installed tools (including the `cd` integration) in any workspace with Claude Code or `attach: herdr`. Install such tools elsewhere, or mount them yourself with `host.mounts`.
+Mounting `~/.local/bin` would otherwise hide whatever the image baked there — the managed profiles put `zoxide` and its `cd` integration in exactly that directory. So the image's own `~/.local/bin` is copied aside at build time and stays on `PATH` behind the mount. Baked tools keep working under the mount, including in `user: root` profiles; anything installed into `~/.local/bin` at runtime persists and takes precedence over a baked copy of the same name.
+
+> [!NOTE]
+> A baked tool resolves through `PATH`, not from `~/.local/bin/<tool>`, so a profile that hard-codes that absolute path won't find it there — call it by name, install it elsewhere, or mount it yourself with `host.mounts`. For the same reason, deleting a baked tool from the mount doesn't remove it; shadow it with your own binary of that name instead.
 
 ##### Persisting a package cache
 
