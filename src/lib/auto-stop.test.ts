@@ -85,7 +85,7 @@ describe('gatherHerdrStopContext', () => {
     );
   }
 
-  function writeRuntimeMeta(mountedContainerPaths: string[]): void {
+  function writeMetaFixture(mountedContainerPaths: string[]): void {
     const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.writeFileSync(
@@ -118,7 +118,7 @@ describe('gatherHerdrStopContext', () => {
   // config now says about which mounts the workspace gets.
   test('filters against the mounts recorded for the running container', () => {
     writeWorkspace('herdr');
-    writeRuntimeMeta(['/home/dev/.zsh_history']);
+    writeMetaFixture(['/home/dev/.zsh_history']);
 
     expect(statePathsOf(gatherHerdrStopContext('demo'))).toEqual(['.config/herdr']);
   });

@@ -436,7 +436,7 @@ describe('statePathsForCopyOut', () => {
     }
   });
 
-  const writeRuntimeMeta = (mountedContainerPaths: string[] | undefined): void => {
+  const writeMetaFixture = (mountedContainerPaths: string[] | undefined): void => {
     const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.writeFileSync(path.join(runtimeDir, 'meta.json'), JSON.stringify({
@@ -481,7 +481,7 @@ describe('statePathsForCopyOut', () => {
   };
 
   test('drops a path the running container still has mounted, whatever config now says', () => {
-    writeRuntimeMeta(['/home/dev/.local/share/claude', '/home/dev/.local/bin']);
+    writeMetaFixture(['/home/dev/.local/share/claude', '/home/dev/.local/bin']);
 
     const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
 
@@ -490,7 +490,7 @@ describe('statePathsForCopyOut', () => {
   });
 
   test('a container matching its config still syncs every unmounted path', () => {
-    writeRuntimeMeta(undefined);
+    writeMetaFixture(undefined);
 
     const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), false));
 
@@ -502,7 +502,7 @@ describe('statePathsForCopyOut', () => {
   // change: the config-derived fallback would clear .local/share/claude to
   // sync even though the container may well still mount it.
   test('skips the snapshot when config has changed and the container recorded no mounts', () => {
-    writeRuntimeMeta(undefined);
+    writeMetaFixture(undefined);
 
     const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
 
