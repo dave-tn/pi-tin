@@ -82,8 +82,8 @@ describe('guardSessionExit', () => {
   });
 
   // Dropping the listeners is what makes the re-raise fatal rather than a
-  // loop back into this same handler.
-  // Recorded rather than asserted in place: the handler runs the close-out
+  // loop back into this same handler. Recorded rather than asserted in
+  // place: the handler runs the close-out
   // inside a catch-all, which would swallow a failing expectation and leave
   // this passing whatever the ordering.
   test('a signal disarms the guard before running the close-out', () => {
@@ -110,21 +110,39 @@ describe('guardSessionExit', () => {
   test('releasing disarms every signal so later ones are not claimed', () => {
     const fake = fakeProcess();
     let closed = 0;
-    const release = guardSessionExit(() => { closed += 1; }, fake.deps);
+    const guard = guardSessionExit(() => { closed += 1; }, fake.deps);
 
-    release();
+    guard.release();
     expect(fake.armed()).toEqual([]);
 
     fake.emit('SIGTERM');
     expect(closed).toBe(0);
   });
 
+  // Closing the terminal window while attached queues the signal behind the
+  // attach's blocking spawnSync, so it arrives once the normal close-out has
+  // already begun. Cutting that short would drop the workspace-state snapshot
+  // it takes and the cut-down close-out does not.
+  test('after hand-over a signal lets the normal close-out finish', () => {
+    const fake = fakeProcess();
+    let closed = 0;
+    const guard = guardSessionExit(() => { closed += 1; }, fake.deps);
+
+    guard.handOver();
+    fake.emit('SIGHUP');
+
+    expect(closed).toBe(0);
+    expect(fake.raised).toEqual([]);
+    // Still disarmed, so a second signal quits rather than being swallowed too.
+    expect(fake.armed()).toEqual([]);
+  });
+
   test('the default deps arm and disarm real process listeners', () => {
     const before = process.listenerCount('SIGHUP');
-    const release = guardSessionExit(() => {});
+    const guard = guardSessionExit(() => {});
 
     expect(process.listenerCount('SIGHUP')).toBe(before + 1);
-    release();
+    guard.release();
     expect(process.listenerCount('SIGHUP')).toBe(before);
   });
 });

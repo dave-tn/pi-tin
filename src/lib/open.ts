@@ -941,7 +941,7 @@ export async function openWorkspace(
   // terminating signal in that stretch would otherwise leave a running
   // container with no session and no auto-stop. The close-out reconciles
   // rather than assuming a session, so it is a no-op until there is one.
-  const releaseSessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
+  const sessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
 
   const opened = await withWorkspaceLock(context.wsName, async () => {
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
@@ -1118,10 +1118,13 @@ export async function openWorkspace(
       });
     }
   } finally {
-    // Disarmed only once the close-out has run: a signal landing during it —
-    // the copy-out is the long part — must still arm auto-stop on the way out.
+    // Handed over before the first await, so a signal queued behind the
+    // attach's blocking spawnSync — closing the terminal window is exactly
+    // that — lets this close-out finish, snapshot included, instead of
+    // replacing it with the cut-down one.
+    sessionExit.handOver();
     const exitMessage = await finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart);
-    releaseSessionExit();
+    sessionExit.release();
     console.log(exitMessage);
   }
 

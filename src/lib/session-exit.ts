@@ -34,9 +34,21 @@ const defaultDeps: SessionExitDeps = {
   },
 };
 
+export interface SessionExitGuard {
+  /**
+   * The normal exit path has started closing the session: a signal must let it
+   * finish rather than pre-empt it. It does strictly more — it snapshots
+   * workspace state first — and it is already under way, so cutting it short
+   * would trade a clean close for the cut-down one and lose the snapshot.
+   */
+  handOver: () => void;
+  /** Drop the guard; later signals terminate pi-tin as they normally would. */
+  release: () => void;
+}
+
 /**
  * Close an open workspace session out before a terminating signal kills
- * pi-tin, and return the function that disarms it again.
+ * pi-tin.
  *
  * `closeSession` is synchronous by necessity, not preference. Any spawn
  * wrapper in flight (`spawnProcessGroupWithDeadline`) answers the same signal
@@ -47,16 +59,18 @@ const defaultDeps: SessionExitDeps = {
  * also what stops the open carrying on to attach to a terminal that is gone:
  * nothing resumes after the re-raise.
  *
- * Cannot be armed any earlier than the workspace lock `pi-tin open` holds
- * while it starts the container and registers the session — see
- * closeSessionOnSignal for why that rules the lock out of the close-out too.
+ * A signal that lands while pi-tin is blocked in a synchronous child — the
+ * interactive attach is an unbounded `spawnSync` — is queued by the runtime
+ * and delivered when that call returns, which is why handOver matters: the
+ * normal close-out has begun by then and must not be cut short.
  */
 export function guardSessionExit(
   closeSession: () => void,
   overrides: Partial<SessionExitDeps> = {},
-): () => void {
+): SessionExitGuard {
   const deps: SessionExitDeps = { ...defaultDeps, ...overrides };
   const listeners = new Map<SessionTerminationSignal, () => void>();
+  let handedOver = false;
 
   const release = (): void => {
     for (const [signal, listener] of listeners) deps.removeListener(signal, listener);
@@ -66,9 +80,13 @@ export function guardSessionExit(
   for (const signal of SESSION_TERMINATION_SIGNALS) {
     const listener = (): void => {
       // Releasing first restores the default disposition, so the re-raise
-      // below terminates pi-tin exactly as an unhandled signal would, and a
-      // second signal still quits during the close-out.
+      // below terminates pi-tin exactly as an unhandled signal would — and so
+      // a second signal quits outright either way, leaving an escape hatch
+      // from a close-out that is not finishing.
       release();
+      if (handedOver) {
+        return;
+      }
       try {
         closeSession();
       } catch {
@@ -80,5 +98,8 @@ export function guardSessionExit(
     deps.addListener(signal, listener);
   }
 
-  return release;
+  return {
+    handOver: () => { handedOver = true; },
+    release,
+  };
 }
