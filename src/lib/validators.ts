@@ -134,6 +134,13 @@ export const RuntimeMetaSchema = v.object({
   startedAt: v.string(),
   buildHash: v.string(),
   runtimeHash: v.string(),
+  // Container paths mounted into this container life. Recorded rather than
+  // recomputed because `container run` fixes them for the container's whole
+  // life while the config that described them can change underneath: the
+  // workspace-state overlap filter has to key off what is actually mounted
+  // (see syncableWorkspaceStatePaths). Optional: a container started by an
+  // earlier pi-tin recorded none.
+  mountedContainerPaths: v.optional(v.array(v.string())),
 });
 
 export const ShutdownRecordSchema = v.object({

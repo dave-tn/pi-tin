@@ -70,6 +70,7 @@ import {
   reconcileWorkspaceRuntimeState,
   registerSession,
   unregisterSession,
+  readRuntimeMeta,
   writeRuntimeMeta,
   clearWorkspaceRuntimeState,
   cancelShutdown,
@@ -606,16 +607,59 @@ function prepareManagedStateMounts(context: WorkspaceContext, runtimePlan: Runti
   }
 }
 
-// Warned about once per session, at the fresh-start restore. Repeating it at
-// session close would just say the same thing again about the same config.
-function syncableStatePathsWarningOnce(context: WorkspaceContext): string[] {
-  const { syncable, dropped } = syncableWorkspaceStatePaths(context.workspace, context.containerProfile);
+/** The live mounts a container started from this plan will hold. */
+function planMountedContainerPaths(runtimePlan: RuntimeStartPlan): string[] {
+  return runtimePlan.volumes.map((volume) => volume.container);
+}
+
+// Copy-in runs only on a fresh start, against the container the plan in hand
+// just started — so the plan's own volumes are the mount set to filter
+// against. This is the destructive direction: the recipe opens each entry
+// with a root `rm -rf` of the container path, which on a live mount reaches
+// the host side through virtiofs. Dropped paths are warned about here and
+// only here: session close would say the same thing again about the same
+// config.
+export function statePathsForCopyIn(
+  context: WorkspaceContext,
+  runtimePlan: RuntimeStartPlan,
+): string[] {
+  const { syncable, dropped } = syncableWorkspaceStatePaths({
+    workspace: context.workspace,
+    containerProfile: context.containerProfile,
+    mountedContainerPaths: planMountedContainerPaths(runtimePlan),
+  });
   for (const drop of dropped) {
     console.warn(chalk.yellow(
-      `Warning: workspace_state path '${drop.statePath}' overlaps the managed mount at ~/${drop.mountPath} — skipping the snapshot; that path already persists via the live mount.`,
+      `Warning: workspace_state path '${drop.statePath}' overlaps the live mount at ${drop.mountPath} — skipping the snapshot; that path already persists via the mount.`,
     ));
   }
   return syncable;
+}
+
+// Copy-out runs against whatever container this session attached to, which on
+// a join is one started under an older config — so the filter reads back the
+// mounts recorded for that container life rather than deriving them again.
+// A container started before pi-tin recorded them has none, and once config
+// has changed the config-derived fallback no longer describes it either: with
+// no way to tell which paths are live mounts, skip the snapshot rather than
+// let its host-side rm and rename land on one. Recreating the container (the
+// deferred restart, or any stop) records the mounts and snapshots resume.
+export function statePathsForCopyOut(
+  context: WorkspaceContext,
+  configChangedSinceStart: boolean,
+): string[] {
+  const mountedContainerPaths = readRuntimeMeta(context.wsName)?.mountedContainerPaths;
+  if (configChangedSinceStart && mountedContainerPaths === undefined) {
+    console.warn(chalk.yellow(
+      `Warning: skipping the workspace_state snapshot for '${context.wsName}' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. Restart the workspace to resume snapshots.`,
+    ));
+    return [];
+  }
+  return syncableWorkspaceStatePaths({
+    workspace: context.workspace,
+    containerProfile: context.containerProfile,
+    mountedContainerPaths,
+  }).syncable;
 }
 
 function startWorkspaceContainer(options: {
@@ -649,6 +693,7 @@ function startWorkspaceContainer(options: {
     startedAt: new Date().toISOString(),
     buildHash: buildPlan.buildHash,
     runtimeHash: runtimePlan.runtimeHash,
+    mountedContainerPaths: planMountedContainerPaths(runtimePlan),
   });
 }
 
@@ -757,6 +802,7 @@ function setProcessExitCode(result: ExecResult): void {
 async function finishWorkspaceSession(
   context: WorkspaceContext,
   sessionId: string,
+  configChangedSinceStart: boolean,
 ): Promise<string> {
   return await withWorkspaceLock(context.wsName, async () => {
     unregisterSession(context.wsName, sessionId);
@@ -781,7 +827,7 @@ async function finishWorkspaceSession(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableWorkspaceStatePaths(context.workspace, context.containerProfile).syncable,
+        paths: statePathsForCopyOut(context, configChangedSinceStart),
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
@@ -933,7 +979,13 @@ export async function openWorkspace(
         await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
-        return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+        return {
+          mode: 'started' as const,
+          activeSessions: plan.activeSessionsAfterOpen,
+          // Started from the plan just computed, so its mounts are the
+          // config's by construction.
+          configChangedSinceStart: false,
+        };
       }
       case 'join':
         if (plan.deferredRestartMessage !== null) {
@@ -944,7 +996,16 @@ export async function openWorkspace(
         await assertWorkspaceAttachReady(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
-        return { mode: 'joined' as const, activeSessions: plan.activeSessionsAfterOpen };
+        return {
+          mode: 'joined' as const,
+          activeSessions: plan.activeSessionsAfterOpen,
+          // A deferred restart is exactly the divergence the copy-out filter
+          // has to allow for: this container predates the config. Runtime
+          // drift only — the volume set is hashed into the runtime hash, so
+          // build drift (a package added to the profile) moves the next
+          // image, never a running container's mounts.
+          configChangedSinceStart: hasRuntimeDrift,
+        };
       case 'restart': {
         emitMountNotices(runtimePlan.notices);
         const runtimeEnv = resolveRuntimeEnv(context);
@@ -959,7 +1020,13 @@ export async function openWorkspace(
         await assertAttachReadyOrRemoveContainer(context);
         registerSession(context.wsName, sessionRecord);
         cancelShutdown(context.wsName);
-        return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
+        return {
+          mode: 'started' as const,
+          activeSessions: plan.activeSessionsAfterOpen,
+          // Started from the plan just computed, so its mounts are the
+          // config's by construction.
+          configChangedSinceStart: false,
+        };
       }
     }
   });
@@ -977,7 +1044,7 @@ export async function openWorkspace(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableStatePathsWarningOnce(context),
+        paths: statePathsForCopyIn(context, runtimePlan),
         user: context.containerProfile.user,
         direction: 'copy-in',
       },
@@ -1024,7 +1091,7 @@ export async function openWorkspace(
       });
     }
   } finally {
-    const exitMessage = await finishWorkspaceSession(context, sessionId);
+    const exitMessage = await finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart);
     console.log(exitMessage);
   }
 

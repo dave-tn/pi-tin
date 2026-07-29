@@ -10,6 +10,7 @@ import {
 import {
   withWorkspaceLock,
   reconcileWorkspaceRuntimeState,
+  readRuntimeMeta,
   readShutdown,
   armShutdown,
   clearWorkspaceRuntimeState,
@@ -117,7 +118,7 @@ export type HerdrStopContext =
   | {
     herdrAttach: true;
     containerProfile: ContainerProfile;
-    /** workspace_state paths cleared to sync (managed-mount overlaps dropped). */
+    /** workspace_state paths cleared to sync (live-mount overlaps dropped). */
     statePaths: string[];
     stopAfterMs: number;
   };
@@ -125,7 +126,9 @@ export type HerdrStopContext =
 // Config may be gone or invalid by the time the detached helper fires; that
 // downgrades to the plain non-herdr stop path rather than failing the helper.
 // The overlap filter runs here, silently — the helper is detached with no
-// terminal; the interactive open already warned about any dropped path.
+// terminal; the interactive open already warned about any dropped path. It
+// filters against the mounts recorded for the running container, since config
+// can have moved on since it started.
 export function gatherHerdrStopContext(workspaceName: string): HerdrStopContext {
   try {
     const workspace: Workspace = loadWorkspace(workspaceName);
@@ -136,7 +139,11 @@ export function gatherHerdrStopContext(workspaceName: string): HerdrStopContext 
     return {
       herdrAttach: true,
       containerProfile,
-      statePaths: syncableWorkspaceStatePaths(workspace, containerProfile).syncable,
+      statePaths: syncableWorkspaceStatePaths({
+        workspace,
+        containerProfile,
+        mountedContainerPaths: readRuntimeMeta(workspaceName)?.mountedContainerPaths,
+      }).syncable,
       stopAfterMs: parseDurationMs(workspace.stopAfterLastSession),
     };
   } catch {

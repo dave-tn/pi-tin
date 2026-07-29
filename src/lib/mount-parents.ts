@@ -2,6 +2,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import type { ContainerSubprocessRunner, VolumeMount } from './container.js';
 import { execContainerCommand } from './container.js';
+import { normalizeContainerPath } from './paths.js';
 
 // Apple `container run` creates any missing mount-point ancestors inside the
 // guest as root (mounting at ~/.nuget/packages leaves a root-owned ~/.nuget),
@@ -48,11 +49,6 @@ export function chownMountParents(options: {
     const warn = options.warn ?? defaultWarn;
     warn(`Warning: could not reset ownership of mount parent directories (${options.parentDirs.join(', ')}) — writes beside these mounts may fail.`);
   }
-}
-
-function normalizeContainerPath(containerPath: string): string {
-  const normalized = path.posix.normalize(containerPath);
-  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
 }
 
 function ancestorsBetween(homeContainer: string, containerPath: string): string[] {

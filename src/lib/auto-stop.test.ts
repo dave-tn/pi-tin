@@ -85,13 +85,42 @@ describe('gatherHerdrStopContext', () => {
     );
   }
 
+  function writeMetaFixture(mountedContainerPaths: string[]): void {
+    const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runtimeDir, 'meta.json'),
+      JSON.stringify({
+        startedAt: '2026-07-29T10:00:00.000Z',
+        buildHash: 'build',
+        runtimeHash: 'runtime',
+        mountedContainerPaths,
+      }),
+    );
+  }
+
+  const statePathsOf = (context: HerdrStopContext): string[] | null =>
+    context.herdrAttach ? context.statePaths : null;
+
+  // No mount record: a container started by an earlier pi-tin, so the
+  // workspace's managed mounts stand in.
   test('drops a workspace_state path that overlaps a managed mount', () => {
     writeWorkspace('herdr');
 
     const context = gatherHerdrStopContext('demo');
 
     expect(context.herdrAttach).toBe(true);
-    expect(context.herdrAttach === true ? context.statePaths : null).toEqual(['.zsh_history']);
+    expect(statePathsOf(context)).toEqual(['.zsh_history']);
+  });
+
+  // The helper's copy-out ends in a host-side rm + rename, so a path sitting
+  // on a live mount this container actually has must not sync — whatever the
+  // config now says about which mounts the workspace gets.
+  test('filters against the mounts recorded for the running container', () => {
+    writeWorkspace('herdr');
+    writeMetaFixture(['/home/dev/.zsh_history']);
+
+    expect(statePathsOf(gatherHerdrStopContext('demo'))).toEqual(['.config/herdr']);
   });
 
   test('a non-herdr workspace takes the plain stop path', () => {
