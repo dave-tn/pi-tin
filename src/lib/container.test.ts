@@ -468,28 +468,43 @@ describe('bounded container subprocess options', () => {
   // promise is the proof the child survived: a killed child rejects with
   // "was killed by SIGKILL".
   test("onInterrupt 'finish' lets a termination signal pass and the copy complete", async () => {
-    const listenersBefore = {
-      SIGTERM: process.listenerCount('SIGTERM'),
-      SIGHUP: process.listenerCount('SIGHUP'),
-    };
-    const pending = spawnProcessGroupWithDeadline('sh', ['-c', 'sleep 0.4'], {
-      timeoutMs: 30_000,
-      onInterrupt: 'finish',
-    });
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-finish-pass-'));
+    const flagPath = path.join(tmpDir, 'flag');
+    try {
+      const listenersBefore = {
+        SIGTERM: process.listenerCount('SIGTERM'),
+        SIGHUP: process.listenerCount('SIGHUP'),
+      };
+      // The child exits only once the flag file appears, so however stalled
+      // the timers below get, it cannot finish first — a child gone before
+      // the raise would have settled the wrapper, leaving the real SIGTERM
+      // to meet the default disposition and kill the whole test run.
+      const pending = spawnProcessGroupWithDeadline(
+        'sh',
+        ['-c', `until [ -e ${flagPath} ]; do sleep 0.05; done`],
+        { timeoutMs: 30_000, onInterrupt: 'finish' },
+      );
 
-    await new Promise((resolve) => { setTimeout(resolve, 50); });
-    process.kill(process.pid, 'SIGTERM');
-    // The kill returns before the JS listener runs — the runtime delivers the
-    // emit on a later loop turn — so yield before looking at the listeners.
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
-    // Only its own listener drops — a second SIGTERM must meet the default
-    // disposition and quit, while the other termination signals stay claimed
-    // until the copy settles.
-    expect(process.listenerCount('SIGTERM')).toBe(listenersBefore.SIGTERM);
-    expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP + 1);
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      process.kill(process.pid, 'SIGTERM');
+      // The kill returns before the JS listener runs — the runtime delivers
+      // the emit on a later loop turn — so yield before looking at the
+      // listeners.
+      await new Promise((resolve) => { setTimeout(resolve, 100); });
+      // Only its own listener drops — a second SIGTERM must meet the default
+      // disposition and quit, while the other termination signals stay
+      // claimed until the copy settles.
+      expect(process.listenerCount('SIGTERM')).toBe(listenersBefore.SIGTERM);
+      expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP + 1);
 
-    await pending;
-    expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP);
+      // Release the child; resolution is the proof it survived the signal —
+      // a killed child would reject with "was killed by SIGKILL".
+      fs.writeFileSync(flagPath, 'done');
+      await pending;
+      expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("onInterrupt 'finish' still classifies its own deadline as a timeout", async () => {
