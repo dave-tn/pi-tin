@@ -938,66 +938,88 @@ describe('planAddProject', () => {
     isInteractive: true,
   };
 
+  // Hand-written rather than imported from workspace-plans — asserting the
+  // module's own constant against itself would pass after any wording change.
+  // Shared by the interactive and headless running-workspace tests, which
+  // must produce the same message.
+  const expectedRunningMessage = [
+    "Added new-app to workspace 'work'.",
+    "'work' is running, so the project isn't mounted yet — that happens on its next restart.",
+    "Once you've finished and exited every open session in 'work', the next 'pi-tin open work' will restart it and mount the project.",
+    '(Reopening while a session is still active — or while herdr agents are still working — just rejoins it unchanged.)',
+  ].join('\n');
+
   test('adds and opens when the workspace is not running', () => {
     expect(planAddProject(base)).toEqual({ action: 'add-and-open' });
   });
 
   test('adds and messages (no open) when headless and the workspace is not running', () => {
-    const plan = planAddProject({ ...base, isInteractive: false });
-    expect(plan.action).toBe('add-and-message');
-    if (plan.action !== 'add-and-message') throw new Error('wrong action');
-    expect(plan.message).toContain('new-app');
-    expect(plan.message).toContain('pi-tin open work');
+    expect(planAddProject({ ...base, isInteractive: false })).toEqual({
+      action: 'add-and-message',
+      message: [
+        "Added new-app to workspace 'work'.",
+        "Run 'pi-tin open work' from a terminal to start it with the project mounted.",
+      ].join('\n'),
+    });
   });
 
   test('headless add to a running workspace keeps the restart message', () => {
-    const plan = planAddProject({ ...base, containerState: 'running', isInteractive: false });
-    expect(plan.action).toBe('add-and-message');
-    if (plan.action !== 'add-and-message') throw new Error('wrong action');
-    expect(plan.message).toContain('restart');
+    expect(planAddProject({ ...base, containerState: 'running', isInteractive: false })).toEqual({
+      action: 'add-and-message',
+      message: expectedRunningMessage,
+    });
   });
 
   test('adds and messages (no open) when the workspace is running', () => {
-    const plan = planAddProject({ ...base, containerState: 'running' });
-    expect(plan.action).toBe('add-and-message');
-    if (plan.action !== 'add-and-message') throw new Error('wrong action');
-    expect(plan.message).toContain('new-app');
-    expect(plan.message).toContain("'work'");
-    expect(plan.message).toContain('restart');
-    expect(plan.message).not.toContain('pi-tin stop');
+    expect(planAddProject({ ...base, containerState: 'running' })).toEqual({
+      action: 'add-and-message',
+      message: expectedRunningMessage,
+    });
   });
 
   test('rejects when the container state is unknown', () => {
-    const plan = planAddProject({ ...base, containerState: 'unknown' });
-    expect(plan.action).toBe('reject');
-    if (plan.action !== 'reject') throw new Error('wrong action');
-    expect(plan.message).toContain('Could not determine');
-    expect(plan.message).toContain("'work'");
+    expect(planAddProject({ ...base, containerState: 'unknown' })).toEqual({
+      action: 'reject',
+      message: [
+        "Could not determine the state of workspace 'work' — listing containers failed.",
+        "Check the container system is running ('container system start'), then retry.",
+      ].join('\n'),
+    });
   });
 
   test('rejects when the project is already present', () => {
-    const plan = planAddProject({ ...base, existingProjects: ['/Users/dave/Dev/new-app'] });
-    expect(plan.action).toBe('reject');
-    if (plan.action !== 'reject') throw new Error('wrong action');
-    expect(plan.message).toContain('already');
+    expect(planAddProject({ ...base, existingProjects: ['/Users/dave/Dev/new-app'] })).toEqual({
+      action: 'reject',
+      message: "Project is already in workspace 'work': /Users/dave/Dev/new-app",
+    });
   });
 
   test('rejects on basename collision', () => {
-    const plan = planAddProject({
+    expect(planAddProject({
       ...base,
       projectPath: '/Users/dave/other/my-app',
       existingProjects: ['/Users/dave/Dev/my-app'],
+    })).toEqual({
+      action: 'reject',
+      message: [
+        "Project basename collision 'my-app' between:",
+        '  /Users/dave/other/my-app',
+        '  /Users/dave/Dev/my-app',
+      ].join('\n'),
     });
-    expect(plan.action).toBe('reject');
-    if (plan.action !== 'reject') throw new Error('wrong action');
-    expect(plan.message).toContain("basename collision 'my-app'");
   });
 
   test('rejects when projected mounts exceed the limit', () => {
-    const plan = planAddProject({ ...base, projectedSharedDirectoryCount: 23 });
-    expect(plan.action).toBe('reject');
-    if (plan.action !== 'reject') throw new Error('wrong action');
-    expect(plan.message).toContain('up to 22');
+    expect(planAddProject({ ...base, projectedSharedDirectoryCount: 23 })).toEqual({
+      action: 'reject',
+      message: [
+        "Workspace 'work' requires 23 shared host directories, but pi-tin currently supports up to 22 per workspace start.",
+        'This conservative limit avoids Apple container startup failures with large mount sets.',
+        'Projects, host mounts, agent profiles, agent install mounts, tmux mounts, the herdr state mount, and GitHub CLI mounts all count.',
+        'Each project counts separately.',
+        'Reduce mounted directories or split the workspace.',
+      ].join('\n'),
+    });
   });
 });
 
