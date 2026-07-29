@@ -118,7 +118,7 @@ export type HerdrStopContext =
   | {
     herdrAttach: true;
     containerProfile: ContainerProfile;
-    /** workspace_state paths cleared to sync (managed-mount overlaps dropped). */
+    /** workspace_state paths cleared to sync (live-mount overlaps dropped). */
     statePaths: string[];
     stopAfterMs: number;
   };
