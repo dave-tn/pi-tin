@@ -229,14 +229,12 @@ function probeContainerPathShape(
   }
 }
 
-// Total regular-file bytes under hostPath, or null when it is absent. Serves
-// two measurement points: copy-in totals and the live poll of the growing
-// copy-out temp path (where a mid-copy transient error just yields null for
-// that tick). lstat, regular files only — a stat walk would follow symlinks
-// (overcounting targets outside the tree, and a symlink loop would hang the
-// progress poll). Deliberately separate from directorySize below: that one
-// counts symlink sizes for the delete preview and swallows errors per entry;
-// this one mirrors what a copy moves.
+// Total regular-file bytes under hostPath. Throws when the path is absent or
+// unreadable — hostSnapshotBytes below owns the null contract. lstat, regular
+// files only — a stat walk would follow symlinks (overcounting targets outside
+// the tree, and a symlink loop would hang the progress poll). Contrast
+// directorySize further down, which counts symlink sizes for the delete
+// preview; this one mirrors what a copy moves.
 function regularFileBytes(hostPath: string): number {
   const stats = fs.lstatSync(hostPath);
   if (stats.isFile()) {
@@ -250,6 +248,13 @@ function regularFileBytes(hostPath: string): number {
     .reduce((sum, dirent) => sum + regularFileBytes(path.join(hostPath, dirent.name)), 0);
 }
 
+// Total regular-file bytes under hostPath, or null when it is absent. Serves
+// two measurement points: copy-in totals and the live poll of the growing
+// copy-out temp path, where a mid-copy transient error just yields null for
+// that tick. The catch sits here rather than inside the walk on purpose:
+// swallowing a mid-tree error per entry would report a confidently wrong
+// smaller total, where failing to null reports "unknown". directorySize makes
+// the opposite call — an approximate delete preview beats none.
 function hostSnapshotBytes(hostPath: string): number | null {
   try {
     return regularFileBytes(hostPath);
