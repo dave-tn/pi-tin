@@ -13,7 +13,7 @@ import {
   planAutoStopDecision,
   type HerdrAgentStates,
 } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand, resolveOpenPlan, statePathsForCopyOut } from './open.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand, resolveOpenPlan, statePathsForCopyIn, statePathsForCopyOut } from './open.js';
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
@@ -328,6 +328,88 @@ describe('computeRuntimeStartPlan sshd', () => {
       kind: 'info',
       text: '~/.config/herdr uses the existing mount at /home/dev/.config/herdr instead of the managed workspace-state mount.',
     });
+  });
+});
+
+// Copy-in is the destructive direction: each entry starts with a root
+// `rm -rf` of the container path, so a workspace_state path sitting on any of
+// the container's live mounts deletes the host side of it through virtiofs.
+// The mount set it filters against is the plan the container starts from, so
+// every mount the plan resolves — not just pi-tin's own managed ones — is
+// covered.
+describe('statePathsForCopyIn', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  // The issue's scenario: the host's own ~/.cache/uv mounted at the container
+  // path a custom profile also declares as workspace_state.
+  const runFilter = (workspaceStatePaths: string[]): { paths: string[]; warnings: string[] } => {
+    const hostCacheDir = path.join(tmpDir, 'uv-cache');
+    fs.mkdirSync(hostCacheDir, { recursive: true });
+    const workspace = validateWorkspace({
+      profile: 'node-dev',
+      projects: [],
+      host: { mounts: [{ host: hostCacheDir, container: '/home/dev/.cache/uv', readonly: false }] },
+    });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+      workspace_state: workspaceStatePaths,
+    });
+    const context = {
+      wsName: 'demo',
+      containerName: containerNameFor('demo'),
+      imageTag: imageTagFor('demo'),
+      workspace,
+      containerProfile,
+      resources: resolveResources(containerProfile),
+    };
+
+    const warnings: string[] = [];
+    const warn = spyOn(console, 'warn').mockImplementation((message: unknown) => {
+      warnings.push(String(message));
+    });
+    try {
+      return {
+        paths: statePathsForCopyIn(context, computeRuntimeStartPlan(context)),
+        warnings,
+      };
+    } finally {
+      warn.mockRestore();
+    }
+  };
+
+  test('drops a path mounted by host.mounts, warning about the mount it overlaps', () => {
+    const { paths, warnings } = runFilter(['.cache/uv', '.zsh_history']);
+
+    expect(paths).toEqual(['.zsh_history']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      "Warning: workspace_state path '.cache/uv' overlaps the live mount at /home/dev/.cache/uv — skipping the snapshot; that path already persists via the mount.",
+    );
+  });
+
+  test('paths clear of every mount the plan resolves still sync', () => {
+    const { paths, warnings } = runFilter(['.local/share/zoxide', '.zsh_history']);
+
+    expect(paths).toEqual(['.local/share/zoxide', '.zsh_history']);
+    expect(warnings).toEqual([]);
   });
 });
 

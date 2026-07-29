@@ -612,9 +612,14 @@ function planMountedContainerPaths(runtimePlan: RuntimeStartPlan): string[] {
   return runtimePlan.volumes.map((volume) => volume.container);
 }
 
-// Warned about once per session, at the fresh-start restore. Repeating it at
-// session close would just say the same thing again about the same config.
-function syncableStatePathsWarningOnce(
+// Copy-in runs only on a fresh start, against the container the plan in hand
+// just started — so the plan's own volumes are the mount set to filter
+// against. This is the destructive direction: the recipe opens each entry
+// with a root `rm -rf` of the container path, which on a live mount reaches
+// the host side through virtiofs. Dropped paths are warned about here and
+// only here: session close would say the same thing again about the same
+// config.
+export function statePathsForCopyIn(
   context: WorkspaceContext,
   runtimePlan: RuntimeStartPlan,
 ): string[] {
@@ -994,9 +999,12 @@ export async function openWorkspace(
         return {
           mode: 'joined' as const,
           activeSessions: plan.activeSessionsAfterOpen,
-          // The deferred restart is exactly the divergence the copy-out
-          // filter has to allow for: this container predates the config.
-          configChangedSinceStart: plan.warnAboutDeferredRestart,
+          // A deferred restart is exactly the divergence the copy-out filter
+          // has to allow for: this container predates the config. Runtime
+          // drift only — the volume set is hashed into the runtime hash, so
+          // build drift (a package added to the profile) moves the next
+          // image, never a running container's mounts.
+          configChangedSinceStart: hasRuntimeDrift,
         };
       case 'restart': {
         emitMountNotices(runtimePlan.notices);
@@ -1036,7 +1044,7 @@ export async function openWorkspace(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableStatePathsWarningOnce(context, runtimePlan),
+        paths: statePathsForCopyIn(context, runtimePlan),
         user: context.containerProfile.user,
         direction: 'copy-in',
       },
