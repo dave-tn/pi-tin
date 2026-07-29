@@ -835,36 +835,55 @@ async function finishWorkspaceSession(
       { report: createSyncProgressReporter('copy-out') },
     );
 
-    const runtime = reconcileWorkspaceRuntimeState(context.wsName);
-    if (runtime.runtimeState !== 'ok') {
-      return 'Session closed.';
-    }
-
-    if (runtime.activeSessions.length > 0) {
-      return `Session closed. Active sessions remaining: ${runtime.activeSessions.length}`;
-    }
-
-    const timeoutValue = readStopTimeout(context.wsName, context.workspace.stopAfterLastSession);
-    const timeoutMs = parseDurationMs(timeoutValue);
-    const deadlineMs = Date.now() + timeoutMs;
-    const helperPid = spawnAutoStopHelper(context.wsName, deadlineMs);
-
-    armShutdown(context.wsName, {
-      armedAt: new Date().toISOString(),
-      deadlineMs,
-      helperPid,
-    });
-
-    if (helperPid === undefined) {
-      return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
-    }
-
-    // The helper's stop decision reads attach from the workspace config (see
-    // gatherHerdrStopContext), so the message keys off the same field.
-    return context.workspace.attach === 'herdr'
-      ? 'Last session closed. Workspace will stop when agents monitored by herdr stop.'
-      : `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+    return armAutoStopForClosedSession(context);
   });
+}
+
+// The tail of a session close-out, kept whole and synchronous so the signal
+// path can run it too (see closeSessionOnSignal).
+function armAutoStopForClosedSession(context: WorkspaceContext): string {
+  const runtime = reconcileWorkspaceRuntimeState(context.wsName);
+  if (runtime.runtimeState !== 'ok') {
+    return 'Session closed.';
+  }
+
+  if (runtime.activeSessions.length > 0) {
+    return `Session closed. Active sessions remaining: ${runtime.activeSessions.length}`;
+  }
+
+  const timeoutValue = readStopTimeout(context.wsName, context.workspace.stopAfterLastSession);
+  const timeoutMs = parseDurationMs(timeoutValue);
+  const deadlineMs = Date.now() + timeoutMs;
+  const helperPid = spawnAutoStopHelper(context.wsName, deadlineMs);
+
+  armShutdown(context.wsName, {
+    armedAt: new Date().toISOString(),
+    deadlineMs,
+    helperPid,
+  });
+
+  if (helperPid === undefined) {
+    return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
+  }
+
+  // The helper's stop decision reads attach from the workspace config (see
+  // gatherHerdrStopContext), so the message keys off the same field.
+  return context.workspace.attach === 'herdr'
+    ? 'Last session closed. Workspace will stop when agents monitored by herdr stop.'
+    : `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+}
+
+// The close-out a terminating signal gets. Everything finishWorkspaceSession
+// does that a signal handler can afford: no workspace lock (it is acquired by
+// polling, which a handler cannot await, and the lock this process already
+// holds could never be re-acquired anyway), no container-state probe, and no
+// workspace-state snapshot — that needs subprocesses this process is about to
+// stop being able to supervise. Arming an auto-stop against a workspace that
+// has since stopped is harmless: the helper bails on any non-running
+// container.
+function closeSessionOnSignal(context: WorkspaceContext, sessionId: string): void {
+  unregisterSession(context.wsName, sessionId);
+  armAutoStopForClosedSession(context);
 }
 
 // The one effect between the two open planners: only 'restart-if-idle' pays
@@ -1033,12 +1052,11 @@ export async function openWorkspace(
   });
 
   // The session is registered from here on, so a terminating signal — closing
-  // the terminal window sends SIGHUP — must run the close-out before pi-tin
-  // dies, or the container is left running with no auto-stop armed. Armed
-  // outside the block above rather than beside registerSession because the
-  // close-out takes the workspace lock that block holds; there is no await
-  // between registerSession and the lock release for a signal to land in.
-  const closeSession = guardSessionExit(() => finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart));
+  // the terminal window sends SIGHUP — must arm auto-stop before pi-tin dies,
+  // or the container is left running with nothing to reclaim it. Armed outside
+  // the block above because that block holds the workspace lock; there is no
+  // await between registerSession and its release for a signal to land in.
+  const releaseSessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
 
   if (opened.mode === 'started') {
     console.log(chalk.green(`Started workspace '${context.wsName}'`));
@@ -1100,7 +1118,10 @@ export async function openWorkspace(
       });
     }
   } finally {
-    const exitMessage = await closeSession();
+    // Disarmed only once the close-out has run: a signal landing during it —
+    // the copy-out is the long part — must still arm auto-stop on the way out.
+    const exitMessage = await finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart);
+    releaseSessionExit();
     console.log(exitMessage);
   }
 
