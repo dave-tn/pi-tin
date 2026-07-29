@@ -38,6 +38,7 @@ import {
   getContainerIpv4,
   deleteContainer,
   isContainerSubprocessTimeout,
+  spawnContainerCopyForCloseOut,
   type VolumeMount,
   type ExecResult,
 } from './container.js';
@@ -824,6 +825,11 @@ async function finishWorkspaceSession(
 
     // Container is still running: snapshot workspace state out now, before any
     // stop/delete path (auto-stop, or the next fresh start) can tear it down.
+    //
+    // The close-out copy runner, not the default: a terminating signal queued
+    // behind the attach is delivered at this copy's first await — the loop
+    // never turns before then — and the default runner answers it by killing
+    // the copy, losing the very snapshot this close-out exists to take.
     await syncWorkspaceState(
       {
         containerName: context.containerName,
@@ -832,7 +838,7 @@ async function finishWorkspaceSession(
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
-      { report: createSyncProgressReporter('copy-out') },
+      { report: createSyncProgressReporter('copy-out'), copy: spawnContainerCopyForCloseOut },
     );
 
     return armAutoStopForClosedSession(context);

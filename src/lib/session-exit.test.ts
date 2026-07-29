@@ -205,4 +205,67 @@ await spawnProcessGroupWithDeadline('sleep', ['30'], { timeoutMs: 60000, onInter
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 20_000);
+
+  // The terminal-hangup shape end to end: SIGHUP to the whole process group —
+  // the CLI and its blocking attach child together, exactly what closing the
+  // terminal window delivers. The attach dies, the queued signal can only be
+  // emitted at the close-out copy's first await (nothing before it turns the
+  // event loop), and at that moment two listeners hold SIGHUP: the guard's,
+  // which arms the insurance and defers (handed over), and the copy wrapper's.
+  // With the wrapper on the close-out's 'finish' disposition the copy — the
+  // snapshot — must survive that emit and the close-out must run to the end.
+  const closeOutScript = (dir: string): string => `
+import fs from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { guardSessionExit } from '${path.join(import.meta.dir, 'session-exit.ts')}';
+import { spawnContainerCopyForCloseOut } from '${path.join(import.meta.dir, 'container.ts')}';
+
+const guard = guardSessionExit(() => { fs.writeFileSync('${dir}/armed', 'armed'); });
+try {
+  // The attach: blocking, sharing this process's group like the real one.
+  spawnSync('sleep', ['10'], { stdio: 'inherit' });
+} finally {
+  guard.handOver();
+  // The synchronous stretch before the copy (the container-state probe).
+  execFileSync('sleep', ['0.3']);
+  await spawnContainerCopyForCloseOut('sh', ['-c', 'sleep 2 && echo snap > ${dir}/snapshot'], {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 30_000,
+    killSignal: 'SIGKILL',
+    maxBuffer: 1_048_576,
+  });
+  guard.release();
+}
+`;
+
+  test('a group SIGHUP during the attach still gets the snapshot home', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-group-signal-'));
+    const scriptPath = path.join(tmpDir, 'close-out.ts');
+    fs.writeFileSync(scriptPath, closeOutScript(tmpDir));
+
+    try {
+      // detached: its own process group, standing in for the pty's foreground
+      // group, so the negative-pid kill reaches the CLI and the attach child
+      // and nothing else.
+      const child = spawn(process.execPath, [scriptPath], { stdio: 'ignore', detached: true });
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => { child.on('exit', (code, signal) => { resolve({ code, signal }); }); },
+      );
+
+      await Bun.sleep(1_500);
+      const pid = child.pid;
+      expect(pid).toBeDefined();
+      if (pid !== undefined) process.kill(-pid, 'SIGHUP');
+      const exit = await exited;
+
+      // The insurance arm ran at the emit, the copy survived it, and the
+      // close-out completed — nothing re-raised, so the exit is clean.
+      expect(fs.existsSync(path.join(tmpDir, 'armed'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, 'snapshot'))).toBe(true);
+      expect(exit.code).toBe(0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

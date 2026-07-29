@@ -93,11 +93,13 @@ export function guardSessionExit(
       if (handedOver) {
         // Do not re-raise: the normal close-out is still running and does
         // strictly more — it snapshots workspace state first — so let it
-        // finish and overwrite what was just armed. The close-out above still
-        // runs, because that normal one may itself be inside a spawn wrapper
-        // that answers this same signal by re-raising it against the default
-        // disposition now restored, and that death would land after the
-        // session record is gone and before the countdown is armed.
+        // finish and overwrite what was just armed. Its copies decline this
+        // same delivered signal rather than dying of it (the close-out copy
+        // runner's 'finish' disposition in container.ts), but the close-out
+        // can still be cut short — a second signal meets the default
+        // disposition restored above — so the close-out just run is the
+        // insurance that the countdown is armed whatever happens after this
+        // return.
         return;
       }
       deps.raise(signal);
