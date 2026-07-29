@@ -21,8 +21,10 @@ import {
   stopContainer,
   killContainer,
   deleteContainer,
+  isContainerSubprocessAborted,
   isContainerSubprocessTimeout,
   spawnContainerCopy,
+  spawnProcessGroupWithDeadline,
   type ContainerSubprocessRunner,
   type ContainerCopyRunner,
 } from './container.js';
@@ -197,6 +199,9 @@ describe('bounded container subprocess options', () => {
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: 5_000,
     killSignal: 'SIGKILL',
+    // Node's 1 MiB default would throw ENOBUFS on the largest capture here —
+    // a guest `dmesg` after an OOM kill, exactly the case it is read for.
+    maxBuffer: 64 * 1024 * 1024,
   };
 
   interface CapturedCall {
@@ -381,6 +386,7 @@ describe('bounded container subprocess options', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 1,
         killSignal: 'SIGKILL',
+        maxBuffer: 1_048_576,
       });
     } catch (error) {
       caught = error;
@@ -401,12 +407,54 @@ describe('bounded container subprocess options', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 5_000,
         killSignal: 'SIGKILL',
+        maxBuffer: 1_048_576,
       });
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe("'sh' was killed by SIGTERM");
+  });
+
+  // The agent-install step runs on this path with onInterrupt: 'abort'. Its
+  // whole point is that ^C skips the install and the open continues, so the
+  // rejection must be distinguishable from a timeout — which warns about a
+  // guest installer possibly still running — and from a plain failure.
+  // Driven against `sh` rather than the real `container` binary, which CI
+  // hosts do not have; the subject is the interrupt disposition.
+  test("onInterrupt 'abort' rejects a ^C as EABORTED, not ETIMEDOUT", async () => {
+    const sigintListenersBefore = process.listenerCount('SIGINT');
+    let caught: unknown;
+    const pending = spawnProcessGroupWithDeadline('sh', ['-c', 'sleep 10'], {
+      timeoutMs: 30_000,
+      onInterrupt: 'abort',
+    }).catch((error: unknown) => { caught = error; });
+
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    process.kill(process.pid, 'SIGINT');
+    await pending;
+
+    // A timeout warns that the guest installer may still be running and a
+    // plain failure prints the installer's stderr; an abort must say neither.
+    expect(isContainerSubprocessAborted(caught)).toBe(true);
+    expect(isContainerSubprocessTimeout(caught)).toBe(false);
+    // Both the abort's own early removal and settle() must leave no listener
+    // behind, or every install would accumulate one.
+    expect(process.listenerCount('SIGINT')).toBe(sigintListenersBefore);
+  });
+
+  test("onInterrupt 'abort' still classifies its own deadline as a timeout", async () => {
+    let caught: unknown;
+    try {
+      await spawnProcessGroupWithDeadline('sh', ['-c', 'sleep 10'], {
+        timeoutMs: 1,
+        onInterrupt: 'abort',
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isContainerSubprocessTimeout(caught)).toBe(true);
+    expect(isContainerSubprocessAborted(caught)).toBe(false);
   });
 
   test('execContainerCommand is bounded by default', () => {

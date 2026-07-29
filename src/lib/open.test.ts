@@ -262,25 +262,52 @@ describe('computeRuntimeStartPlan sshd', () => {
     expect(planFor({ attach: 'herdr' }).sshdEnabled).toBe(true);
   });
 
-  test('attach: herdr mounts ~/.config/herdr from the workspace-state dir and creates it', () => {
+  // The host dirs are created only when a container actually starts, so
+  // resolving a plan for a join (or a refusal) leaves no empty state dirs
+  // behind.
+  test('attach: herdr mounts the herdr state dir and the server bin dir, creating neither', () => {
     const runtimePlan = planFor({ attach: 'herdr' });
 
-    const stateDir = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo', '.config', 'herdr');
+    const stateRoot = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
     expect(runtimePlan.volumes).toContainEqual({
-      host: stateDir,
+      host: path.join(stateRoot, '.config', 'herdr'),
       container: '/home/dev/.config/herdr',
     });
-    expect(fs.existsSync(stateDir)).toBe(true);
+    expect(runtimePlan.volumes).toContainEqual({
+      host: path.join(stateRoot, '.local', 'bin'),
+      container: '/home/dev/.local/bin',
+    });
+    expect(runtimePlan.managedStateMountPaths).toEqual(['.local/bin', '.config/herdr']);
+    expect(fs.existsSync(stateRoot)).toBe(false);
   });
 
-  test('shell attach gets no herdr state mount', () => {
+  test('shell attach without native agents gets no managed mounts', () => {
     const runtimePlan = planFor({ sshd: true });
+    expect(runtimePlan.managedStateMountPaths).toEqual([]);
     expect(runtimePlan.volumes.some(
       (volume) => volume.container === '/home/dev/.config/herdr',
     )).toBe(false);
   });
 
-  test('an existing host.mounts entry at ~/.config/herdr overrides the managed mount', () => {
+  // .local/bin is shared by Claude Code and herdr; two --volume entries for
+  // the same container path would also double-count against the mount limit.
+  test('Claude Code mounts its install dirs, deduped against the herdr bin mount', () => {
+    const runtimePlan = planFor({
+      attach: 'herdr',
+      tools: [{ name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' }],
+    });
+
+    const stateRoot = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
+    expect(runtimePlan.managedStateMountPaths).toEqual([
+      '.local/share/claude',
+      '.local/bin',
+      '.config/herdr',
+    ]);
+    expect(runtimePlan.volumes.filter((volume) => volume.container === '/home/dev/.local/bin'))
+      .toEqual([{ host: path.join(stateRoot, '.local', 'bin'), container: '/home/dev/.local/bin' }]);
+  });
+
+  test('an existing host.mounts entry at a managed path overrides the managed mount', () => {
     const userDir = path.join(tmpDir, 'my-herdr');
     fs.mkdirSync(userDir, { recursive: true });
     const runtimePlan = planFor({
@@ -294,9 +321,10 @@ describe('computeRuntimeStartPlan sshd', () => {
     expect(herdrVolumes).toEqual([
       { host: userDir, container: '/home/dev/.config/herdr', readonly: false },
     ]);
+    expect(runtimePlan.managedStateMountPaths).toEqual(['.local/bin']);
     expect(runtimePlan.notices).toContainEqual({
       kind: 'info',
-      text: 'herdr state uses the host.mounts entry at /home/dev/.config/herdr instead of the managed workspace-state mount.',
+      text: '~/.config/herdr uses the existing mount at /home/dev/.config/herdr instead of the managed workspace-state mount.',
     });
   });
 });

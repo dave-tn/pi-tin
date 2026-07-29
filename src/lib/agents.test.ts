@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, nativeAgentInstalls, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, nativeInstallTargets, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
 
@@ -77,14 +77,9 @@ describe('KNOWN_AGENTS', () => {
       method: 'native',
       installCommand:
         'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
+      installedPath: '.local/bin/claude',
+      persistDirs: ['.local/share/claude', '.local/bin'],
       binDir: '.local/bin',
-      stateEntries: [
-        {
-          path: '.local/share/claude',
-          executable: false,
-          launcher: { link: '.local/bin/claude', versionsDir: '.local/share/claude/versions' },
-        },
-      ],
       muslPackages: ['libgcc', 'libstdc++', 'ripgrep'],
       muslEnv: { USE_BUILTIN_RIPGREP: '0' },
     });
@@ -96,11 +91,24 @@ describe('KNOWN_AGENTS', () => {
       method: 'native',
       installCommand:
         'curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
+      installedPath: '.opencode/bin/opencode',
+      persistDirs: ['.opencode/bin'],
       binDir: '.opencode/bin',
-      stateEntries: [{ path: '.opencode/bin/opencode', executable: true }],
       muslPackages: [],
       muslEnv: {},
     });
+  });
+
+  // binDir joins the image PATH; persistDirs become the live mounts. A binDir
+  // outside persistDirs would put the agent's own binary somewhere the mount
+  // never persists — installed once, gone the next container life.
+  test('every native agent mounts its binDir and installs inside a mounted dir', () => {
+    for (const agent of KNOWN_AGENTS) {
+      if (agent.install.method !== 'native') continue;
+      const { binDir, persistDirs, installedPath } = agent.install;
+      expect(persistDirs).toContain(binDir);
+      expect(persistDirs.some((dir) => installedPath.startsWith(`${dir}/`))).toBe(true);
+    }
   });
 });
 
@@ -112,10 +120,13 @@ describe('install method helpers', () => {
     { name: 'custom', package: 'some-unknown-cli@latest' },
   ];
 
-  test('nativeAgentInstalls returns native metadata in tool order', () => {
-    expect(nativeAgentInstalls(mixed).map((install) => install.binDir))
-      .toEqual(['.local/bin', '.opencode/bin']);
-    expect(nativeAgentInstalls([])).toEqual([]);
+  test('nativeInstallTargets pairs native metadata with agent identity, in tool order', () => {
+    expect(nativeInstallTargets(mixed).map((target) => [target.name, target.binary, target.install.binDir]))
+      .toEqual([
+        ['Claude Code', 'claude', '.local/bin'],
+        ['OpenCode', 'opencode', '.opencode/bin'],
+      ]);
+    expect(nativeInstallTargets([])).toEqual([]);
   });
 
   test('npmToolSpecs keeps npm agents and unknown packages, excluding native agents', () => {

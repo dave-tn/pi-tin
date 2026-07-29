@@ -1,5 +1,9 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
+  gatherHerdrStopContext,
   nextTimerChunkMs,
   queryHerdrAgentStates,
   runAutoStopHelper,
@@ -8,7 +12,7 @@ import {
 } from './auto-stop.js';
 import type { ContainerState } from './container.js';
 import type { RuntimeStateStatus, SessionRecord, ShutdownRecord } from './runtime-state.js';
-import { validateContainerProfile, validateWorkspace } from './validators.js';
+import { validateContainerProfile } from './validators.js';
 import type { HerdrAgentStates } from './workspace-plans.js';
 
 // Verified live output of `herdr agent list` (herdr 0.7.x).
@@ -42,6 +46,64 @@ describe('queryHerdrAgentStates', () => {
       .toEqual({ kind: 'unavailable' });
     expect(queryHerdrAgentStates('pi-tin-demo', 'dev', () => JSON.stringify({ nope: true })))
       .toEqual({ kind: 'unavailable' });
+  });
+});
+
+// The detached helper is the sync path with no terminal attached, so a
+// workspace_state path overlapping a live managed mount has to be dropped
+// here as well as at open — its copy-in `rm -rf` would delete the host side
+// of the mount through virtiofs, and nobody would see a warning about it.
+describe('gatherHerdrStopContext', () => {
+  let tmpDir: string;
+  const originalXdg = process.env['XDG_CONFIG_HOME'];
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-auto-stop-'));
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+    fs.mkdirSync(path.join(tmpDir, 'pi-tin', 'workspaces'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'pi-tin', 'profiles'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'pi-tin', 'profiles', 'node-dev.yaml'),
+      'description: test\nbase_image: node:trixie-slim\nuser: dev\n' +
+        'workspace_state:\n  - .zsh_history\n  - .config/herdr\n',
+    );
+  });
+
+  afterEach(() => {
+    if (originalXdg === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalXdg;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeWorkspace(attach: string): void {
+    fs.writeFileSync(
+      path.join(tmpDir, 'pi-tin', 'workspaces', 'demo.yaml'),
+      `profile: node-dev\nattach: ${attach}\nprojects: []\n`,
+    );
+  }
+
+  test('drops a workspace_state path that overlaps a managed mount', () => {
+    writeWorkspace('herdr');
+
+    const context = gatherHerdrStopContext('demo');
+
+    expect(context.herdrAttach).toBe(true);
+    expect(context.herdrAttach === true ? context.statePaths : null).toEqual(['.zsh_history']);
+  });
+
+  test('a non-herdr workspace takes the plain stop path', () => {
+    writeWorkspace('shell');
+
+    expect(gatherHerdrStopContext('demo')).toEqual({ herdrAttach: false });
+  });
+
+  // Config can be deleted or edited into an invalid state while the detached
+  // helper is asleep; that must not take the helper down with it.
+  test('unreadable config downgrades to the plain stop path', () => {
+    expect(gatherHerdrStopContext('missing')).toEqual({ herdrAttach: false });
   });
 });
 
@@ -82,12 +144,7 @@ const herdrStopContext: HerdrStopContext = {
     base_image: 'debian:trixie-slim',
     user: 'dev',
   }),
-  workspace: validateWorkspace({
-    profile: 'default',
-    projects: [],
-    attach: 'herdr',
-    stopAfterLastSession: '5m',
-  }),
+  statePaths: ['.zsh_history'],
   stopAfterMs: STOP_AFTER_MS,
 };
 
@@ -321,9 +378,7 @@ describe('runAutoStopHelper', () => {
     expect(harness.syncOptions).toEqual([{
       containerName: 'pi-tin-demo',
       workspaceName: 'demo',
-      entries: [
-        { kind: 'binary', path: '.local/bin/herdr', executable: true },
-      ],
+      paths: ['.zsh_history'],
       user: 'dev',
       direction: 'copy-out',
     }]);

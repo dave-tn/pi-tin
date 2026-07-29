@@ -4,7 +4,6 @@ import chalk from 'chalk';
 import { containerHomeDir, getWorkspaceStateDir } from './paths.js';
 import type { ContainerCopyRunner, ContainerOutputRunner, ContainerSubprocessRunner } from './container.js';
 import {
-  CONTAINER_BINARY_COPY_TIMEOUT_MS,
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
   copyFromContainer,
   execContainerCommand,
@@ -14,55 +13,34 @@ import {
   streamToContainer,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
-import { nativeAgentInstalls, type NativeStateEntry } from './agents.js';
+import { nativeInstallTargets } from './agents.js';
 import type { SyncEntryOutcome, SyncProgressReporter } from './sync-progress.js';
 import type { ContainerProfile, Workspace } from './validators.js';
 
-// "Workspace state" is a small set of paths that pi-tin snapshots between
-// container lives: copied *in* when a fresh container starts, copied *out* when
-// a session closes. It is not a live mount — see README → Workspace state.
-// Two kinds of entry share the mechanism: container-profile-declared
-// `tool-state` (zoxide DB, shell history, …) and pi-tin-owned `binary` entries
-// (persisted agent binaries — the herdr server, native agent installs), which
-// carry a larger copy deadline and a changed-check so an unchanged binary
-// costs one probe instead of a multi-hundred-MB copy.
+// "Workspace state" is a small set of container-profile-declared paths
+// (zoxide DB, shell history, …) that pi-tin snapshots between container
+// lives: copied *in* when a fresh container starts, copied *out* when a
+// session closes. It is not a live mount — see README → Workspace state.
+// The same host tree also backs the *managed workspace-state mounts*
+// (native-agent installs, herdr session state — see managedInstallMountPaths
+// below), which are live mounts and are never synced here.
 
 export type WorkspaceStateDirection = 'copy-in' | 'copy-out';
-
-export type WorkspaceStateEntry =
-  | { kind: 'tool-state'; path: string }
-  | ({ kind: 'binary' } & NativeStateEntry);
 
 // The concrete, ordered filesystem operations that realise a sync in one
 // direction. The executor is a thin switch over these; all decision logic
 // (path derivation, per-direction recipe, ordering) lives in the planner.
 export type WorkspaceStateOp =
   | { kind: 'remove-container-path'; containerPath: string }
-  | { kind: 'copy-in'; hostPath: string; containerPath: string; user: string; timeoutMs: number }
+  | { kind: 'copy-in'; hostPath: string; containerPath: string; user: string }
   | { kind: 'ensure-host-parent'; hostPath: string }
   | { kind: 'remove-host-path'; hostPath: string }
   | { kind: 'probe-container-path'; containerPath: string }
-  | { kind: 'probe-unchanged'; containerPath: string; hostPath: string; whenHostMissing: 'skip-entry' | 'continue' }
-  | { kind: 'copy-out'; containerPath: string; hostPath: string; timeoutMs: number }
-  | { kind: 'promote-temp'; tempPath: string; hostPath: string }
-  | { kind: 'restore-executable'; containerPath: string }
-  | { kind: 'record-launcher'; linkContainerPath: string; recordHostPath: string }
-  | {
-      kind: 'restore-launcher';
-      linkContainerPath: string;
-      versionsDirContainerPath: string;
-      versionsDirHostPath: string;
-      recordHostPath: string;
-      user: string;
-    };
-
-// Host-side sibling of a binary entry's snapshot holding the recorded launcher
-// target. The launcher symlink itself can never ride `container cp`: copying a
-// bare symlink as the source wedges the container (docs/bug-fixing.md).
-const LAUNCHER_RECORD_SUFFIX = '.pi-tin-launcher';
+  | { kind: 'copy-out'; containerPath: string; hostPath: string }
+  | { kind: 'promote-temp'; tempPath: string; hostPath: string };
 
 export interface WorkspaceStatePlanInput {
-  entries: WorkspaceStateEntry[];
+  paths: string[];
   user: string;
   hostStateDir: string;
   direction: WorkspaceStateDirection;
@@ -91,78 +69,127 @@ export interface WorkspaceStateSyncDependencies {
 // nothing. Ops are grouped per entry so the executor can reason about one
 // entry's recipe as a unit, and each op maps to at most one subprocess so a
 // timeout can be attributed to that op alone.
-//
-// Binary entries add: a changed-check probe (skipping the expensive copy when
-// fingerprints match — on copy-in it runs before remove-container-path so a
-// first-ever start never deletes the image-baked binary), a +x restore, and
-// launcher record/restore. After an image rebuild bakes a newer binary,
-// copy-in restores the older snapshot (fingerprints differ); the agent's own
-// updater heals that on its next start — the herdr precedent, no version
-// comparison logic.
 export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): WorkspaceStateOp[][] {
   const containerHome = containerHomeDir(input.user);
 
-  return input.entries.map((entry): WorkspaceStateOp[] => {
-    const hostPath = path.join(input.hostStateDir, entry.path);
-    const containerPath = path.posix.join(containerHome, entry.path);
-    const timeoutMs =
-      entry.kind === 'binary' ? CONTAINER_BINARY_COPY_TIMEOUT_MS : CONTAINER_SUBPROCESS_TIMEOUT_MS;
-    const launcher = entry.kind === 'binary' ? entry.launcher : undefined;
-    const recordHostPath = `${hostPath}${LAUNCHER_RECORD_SUFFIX}`;
-    const ops: WorkspaceStateOp[] = [];
+  return input.paths.map((statePath): WorkspaceStateOp[] => {
+    const hostPath = path.join(input.hostStateDir, statePath);
+    const containerPath = path.posix.join(containerHome, statePath);
 
     if (input.direction === 'copy-in') {
-      if (entry.kind === 'binary') {
-        ops.push({ kind: 'probe-unchanged', containerPath, hostPath, whenHostMissing: 'skip-entry' });
-      }
-      ops.push(
+      return [
         { kind: 'remove-container-path', containerPath },
-        { kind: 'copy-in', hostPath, containerPath, user: input.user, timeoutMs },
-      );
-      if (entry.kind === 'binary' && entry.executable) {
-        ops.push({ kind: 'restore-executable', containerPath });
-      }
-      if (launcher !== undefined) {
-        ops.push({
-          kind: 'restore-launcher',
-          linkContainerPath: path.posix.join(containerHome, launcher.link),
-          versionsDirContainerPath: path.posix.join(containerHome, launcher.versionsDir),
-          versionsDirHostPath: path.join(input.hostStateDir, launcher.versionsDir),
-          recordHostPath,
-          user: input.user,
-        });
-      }
-      return ops;
+        { kind: 'copy-in', hostPath, containerPath, user: input.user },
+      ];
     }
 
     const tempPath = `${hostPath}.pi-tin-tmp`;
-    ops.push(
+    return [
       { kind: 'ensure-host-parent', hostPath },
       { kind: 'remove-host-path', hostPath: tempPath },
       { kind: 'probe-container-path', containerPath },
-    );
-    if (launcher !== undefined) {
-      // Before the changed-check: the recorded target must stay fresh even
-      // when the content copy is skipped as unchanged (the updater can swap
-      // the link between already-downloaded versions without changing sizes).
-      // A copy-out that fails after this leaves the record ahead of the
-      // snapshot; restore-launcher resolves against the snapshot's actual
-      // contents, so a stale record is harmless.
-      ops.push({
-        kind: 'record-launcher',
-        linkContainerPath: path.posix.join(containerHome, launcher.link),
-        recordHostPath,
-      });
-    }
-    if (entry.kind === 'binary') {
-      ops.push({ kind: 'probe-unchanged', containerPath, hostPath, whenHostMissing: 'continue' });
-    }
-    ops.push(
-      { kind: 'copy-out', containerPath, hostPath: tempPath, timeoutMs },
+      { kind: 'copy-out', containerPath, hostPath: tempPath },
       { kind: 'promote-temp', tempPath, hostPath },
-    );
-    return ops;
+    ];
   });
+}
+
+// --- Managed workspace-state mounts -----------------------------------------
+
+/**
+ * Home-relative dirs live-mounted into the container from the workspace-state
+ * dir: native-agent install dirs (the agents' own auto-updaters write there,
+ * and the mount persists every update across container lives with no
+ * copying), plus, for herdr workspaces, the server binary's bin dir and the
+ * `~/.config/herdr` session/restore state — live so it survives hard kills
+ * and wedged runtimes, where a teardown-time snapshot does not. Deduped:
+ * `.local/bin` is shared by Claude Code and herdr. Keyed off workspace config
+ * (attach/tools), never the per-invocation attach override.
+ */
+export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | 'tools'>): string[] {
+  const installDirs = nativeInstallTargets(workspace.tools).flatMap(
+    (target) => target.install.persistDirs,
+  );
+  const herdrDirs = workspace.attach === 'herdr' ? ['.local/bin', '.config/herdr'] : [];
+  return [...new Set([...installDirs, ...herdrDirs])];
+}
+
+// Overlap in either direction: a workspace_state entry of `.local` reaches
+// into the `.local/bin` mount just as surely as an entry of `.local/bin`
+// itself. Home-relative paths on both sides; purely lexical.
+function statePathsOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+export interface SyncableWorkspaceStatePaths {
+  syncable: string[];
+  /** Dropped workspace_state paths, each with the managed mount it overlaps. */
+  dropped: Array<{ statePath: string; mountPath: string }>;
+}
+
+/**
+ * The container profile's `workspace_state` paths that may actually sync for
+ * this workspace: any path overlapping one of the workspace's managed mounts
+ * is dropped. An overlapping path must not sync — the copy-in recipe's root
+ * `rm -rf` against a live mount would destroy the host-side contents through
+ * virtiofs — and the snapshot would be redundant anyway, since the path
+ * already persists via the mount. Callers warn about `dropped`.
+ *
+ * Takes the workspace rather than a mount list so that every sync call site
+ * gets the filter by construction: passing `workspace_state` straight to
+ * syncWorkspaceState is not something a caller can do by omission.
+ */
+export function syncableWorkspaceStatePaths(
+  workspace: Pick<Workspace, 'attach' | 'tools'>,
+  containerProfile: Pick<ContainerProfile, 'workspace_state'>,
+): SyncableWorkspaceStatePaths {
+  const managedMountPaths = managedInstallMountPaths(workspace);
+  const syncable: string[] = [];
+  const dropped: Array<{ statePath: string; mountPath: string }> = [];
+  for (const statePath of containerProfile.workspace_state) {
+    const mountPath = managedMountPaths.find((mount) => statePathsOverlap(statePath, mount));
+    if (mountPath === undefined) {
+      syncable.push(statePath);
+    } else {
+      dropped.push({ statePath, mountPath });
+    }
+  }
+  return { syncable, dropped };
+}
+
+/**
+ * Host directory backing the managed mount at `~/<relPath>`. Lives inside the
+ * workspace-state dir on purpose: pre-mount releases snapshotted the same
+ * paths there via copy-out, so existing state seeds the mounts on upgrade.
+ */
+export function workspaceStateMountDir(workspaceName: string, relPath: string): string {
+  return path.join(getWorkspaceStateDir(workspaceName), relPath);
+}
+
+/** Effectful sibling: create the mount's host dir before the container starts. */
+export function ensureWorkspaceStateMountDir(workspaceName: string, relPath: string): string {
+  const mountDir = workspaceStateMountDir(workspaceName, relPath);
+  fs.mkdirSync(mountDir, { recursive: true });
+  return mountDir;
+}
+
+// Best-effort +x on a seeded herdr server binary. Standalone, not inside
+// ensureWorkspaceStateMountDir: agent-specific magic in a generic helper
+// would fire for Claude's .local/bin too, and the generic name would hide it.
+// Unverified insurance (the documented exec-bit variance concerns copy-in;
+// these snapshots came from copy-out), kept because herdr is the one binary
+// with no installer behind it to self-heal — Claude Code and OpenCode heal
+// via the install step's `test -x` probe (see src/lib/agent-install.ts).
+export function chmodSeededHerdrBinary(workspaceName: string): void {
+  const binaryPath = workspaceStateMountDir(workspaceName, path.join('.local', 'bin', 'herdr'));
+  try {
+    const stats = fs.statSync(binaryPath);
+    if (stats.isFile()) {
+      fs.chmodSync(binaryPath, stats.mode | 0o111);
+    }
+  } catch {
+    // No seeded binary — herdr auto-installs its server on first use.
+  }
 }
 
 // --- Effectful executor (thin switch over the planned ops) ------------------
@@ -202,187 +229,46 @@ function probeContainerPathShape(
   }
 }
 
-// --- Fingerprints for the binary changed-check ------------------------------
-
-// Canonical fingerprint: one `<size> <./relative-path>` line per regular file
-// (symlinks excluded on both sides), sorted. A single-file entry uses `.` as
-// its path. mtimes are useless here — `container cp` does not preserve them.
-const FINGERPRINT_LINE = /^\s*(\d+)\s+(\.(?:\/.*)?)$/;
-
-function canonicalFingerprint(pairs: Array<{ relPath: string; size: number }>): string {
-  return pairs
-    .map(({ relPath, size }) => `${size} ${relPath}`)
-    .sort()
-    .join('\n');
-}
-
-function hostFingerprintPairs(
-  hostPath: string,
-  relPath: string,
-): Array<{ relPath: string; size: number }> {
+// Total regular-file bytes under hostPath. Throws when the path is absent or
+// unreadable — hostSnapshotBytes below owns the null contract. lstat, regular
+// files only — a stat walk would follow symlinks (overcounting targets outside
+// the tree, and a symlink loop would hang the progress poll). Contrast
+// directorySize further down, which counts symlink sizes for the delete
+// preview; this one mirrors what a copy moves.
+function regularFileBytes(hostPath: string): number {
   const stats = fs.lstatSync(hostPath);
   if (stats.isFile()) {
-    return [{ relPath, size: stats.size }];
+    return stats.size;
   }
   if (!stats.isDirectory()) {
-    return [];
+    return 0;
   }
   return fs
     .readdirSync(hostPath, { withFileTypes: true })
-    .flatMap((dirent) =>
-      hostFingerprintPairs(
-        path.join(hostPath, dirent.name),
-        relPath === '.' ? `./${dirent.name}` : `${relPath}/${dirent.name}`,
-      ),
-    );
+    .reduce((sum, dirent) => sum + regularFileBytes(path.join(hostPath, dirent.name)), 0);
 }
 
 // Total regular-file bytes under hostPath, or null when it is absent. Serves
-// three measurement points: copy-in totals, copy-out done-sizes, and the
-// live poll of the growing copy-out temp path (where a mid-copy transient
-// error just yields null for that tick).
+// two measurement points: copy-in totals and the live poll of the growing
+// copy-out temp path, where a mid-copy transient error just yields null for
+// that tick. The catch sits here rather than inside the walk on purpose:
+// swallowing a mid-tree error per entry would report a confidently wrong
+// smaller total, where failing to null reports "unknown". directorySize makes
+// the opposite call — an approximate delete preview beats none.
 function hostSnapshotBytes(hostPath: string): number | null {
   try {
-    return hostFingerprintPairs(hostPath, '.').reduce((sum, pair) => sum + pair.size, 0);
+    return regularFileBytes(hostPath);
   } catch {
     return null;
   }
 }
 
-/** Host-side fingerprint, or null when the path does not exist. */
-export function hostFingerprint(hostPath: string): string | null {
-  try {
-    const stats = fs.lstatSync(hostPath);
-    const pairs = stats.isDirectory()
-      ? hostFingerprintPairs(hostPath, '.')
-      : stats.isFile()
-        ? [{ relPath: '.', size: stats.size }]
-        : [];
-    return canonicalFingerprint(pairs);
-  } catch {
-    return null;
-  }
-}
-
-// Container output is untrusted: parse strictly, and treat any surprise as
-// "changed" (null) so the worst a hostile or odd container can cause is an
-// unnecessary copy. Timeouts propagate for runtime-scope classification.
-export function parseContainerFingerprint(
-  output: string,
-): { canonical: string; totalBytes: number } | null {
-  const lines = output.split('\n').filter((line) => line.trim() !== '');
-  const pairs: Array<{ relPath: string; size: number }> = [];
-  for (const line of lines) {
-    const match = FINGERPRINT_LINE.exec(line);
-    if (!match || match[1] === undefined || match[2] === undefined) {
-      // A bare byte count is the single-file `stat -c '%s'` form.
-      if (/^\s*\d+\s*$/.test(line)) {
-        pairs.push({ relPath: '.', size: Number(line.trim()) });
-        continue;
-      }
-      return null;
-    }
-    pairs.push({ relPath: match[2], size: Number(match[1]) });
-  }
-  return {
-    canonical: canonicalFingerprint(pairs),
-    totalBytes: pairs.reduce((sum, pair) => sum + pair.size, 0),
-  };
-}
-
-function containerFingerprint(
-  containerName: string,
-  containerPath: string,
-  capture: ContainerOutputRunner | undefined,
-): { canonical: string; totalBytes: number } | null {
-  // Busybox-portable: per-file `stat -c` lines for a dir, a bare size for a
-  // file. stat reads inode metadata only — `wc -c` streams whole file contents,
-  // which on busybox blows the 5s probe deadline for multi-hundred-MB binaries
-  // and would misread a healthy runtime as wedged.
-  const script = 'if [ -d "$1" ]; then cd "$1" && find . -type f -exec stat -c \'%s %n\' {} + ; else stat -c \'%s\' "$1"; fi';
-  try {
-    const output = execContainerCommandOutput({
-      name: containerName,
-      user: 'root',
-      command: ['sh', '-c', script, 'sh', containerPath],
-      capture,
-    });
-    return parseContainerFingerprint(output);
-  } catch (error) {
-    if (isContainerSubprocessTimeout(error)) {
-      throw error;
-    }
-    return null;
-  }
-}
-
-// A recorded launcher target is container-sourced; only its basename is ever
-// used, and only when it resolves to a direct, plainly named, non-dot child of
-// the versions dir. Anything else means no recorded candidate.
-function recordedLauncherBasename(
-  recordHostPath: string,
-  versionsDirContainerPath: string,
-): string | null {
-  let target: string;
-  try {
-    target = fs.readFileSync(recordHostPath, 'utf-8').trim();
-  } catch {
-    return null;
-  }
-  if (!target.startsWith(`${versionsDirContainerPath}/`)) return null;
-  const base = target.slice(versionsDirContainerPath.length + 1);
-  return /^[A-Za-z0-9._-]+$/.test(base) && !/^\.+$/.test(base) ? base : null;
-}
-
-// Version binaries the restored snapshot can actually back. Zero-size files
-// are the updater's mid-download staging captures — never link to one. A
-// truncated-but-nonempty capture is undetectable here; the recorded target is
-// preferred exactly because the updater only links complete downloads.
-function snapshotVersionBasenames(versionsDirHostPath: string): string[] {
-  try {
-    return fs
-      .readdirSync(versionsDirHostPath, { withFileTypes: true })
-      .filter((dirent) => dirent.isFile())
-      .map((dirent) => dirent.name)
-      .filter((name) => {
-        try {
-          return fs.statSync(path.join(versionsDirHostPath, name)).size > 0;
-        } catch {
-          return false;
-        }
-      });
-  } catch {
-    return [];
-  }
-}
-
-// Pick the launcher target from what the just-restored snapshot actually
-// holds: the recorded basename when present there, else the newest version
-// present, else nothing. Linking (and pruning) only toward a snapshot-backed
-// file is what makes a stale record harmless — a copy-out that failed after
-// record-launcher leaves the record ahead of the snapshot, and a blind
-// restore would create a dangling launcher and then prune the only complete
-// binary.
-function resolveLauncherBasename(op: {
-  recordHostPath: string;
-  versionsDirContainerPath: string;
-  versionsDirHostPath: string;
-}): string | null {
-  const versions = snapshotVersionBasenames(op.versionsDirHostPath);
-  const recorded = recordedLauncherBasename(op.recordHostPath, op.versionsDirContainerPath);
-  if (recorded !== null && versions.includes(recorded)) return recorded;
-  const newest = [...versions].sort((a, b) => b.localeCompare(a, 'en', { numeric: true })).at(0);
-  return newest ?? null;
-}
-
-// 'skip-absent'/'skip-unchanged' both end the entry's recipe; they differ
-// only in what the progress line reports.
-type WorkspaceStateOpResult = 'continue' | 'skip-absent' | 'skip-unchanged';
+// 'skip-absent' ends the entry's recipe.
+type WorkspaceStateOpResult = 'continue' | 'skip-absent';
 
 // Per-entry mutable measurement side-channel threaded through the ops; the
 // planner stays pure, this is purely for progress reporting.
 interface SyncEntryContext {
-  copyOutTotalBytes: number | null;
   copiedBytes: number | null;
   copyDurationMs: number | null;
   // Copy failures collected during runOpGroup and warned about by
@@ -427,7 +313,7 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
         hostPath: op.hostPath,
         containerPath: op.containerPath,
         user: op.user,
-        timeoutMs: op.timeoutMs,
+        timeoutMs: CONTAINER_SUBPROCESS_TIMEOUT_MS,
         run: options.copy,
       });
       ctx.copiedBytes = totalBytes;
@@ -446,16 +332,9 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
       ctx.copyOutIsDirectory = shape === 'dir';
       return 'continue';
     }
-    case 'probe-unchanged': {
-      const host = hostFingerprint(op.hostPath);
-      if (host === null) return op.whenHostMissing === 'skip-entry' ? 'skip-absent' : 'continue';
-      const container = containerFingerprint(containerName, op.containerPath, options.capture);
-      if (container !== null) ctx.copyOutTotalBytes = container.totalBytes;
-      return container !== null && container.canonical === host ? 'skip-unchanged' : 'continue';
-    }
     case 'copy-out': {
       options.report?.copyStarted({
-        totalBytes: ctx.copyOutTotalBytes,
+        totalBytes: null,
         currentBytes: () => hostSnapshotBytes(op.hostPath),
       });
       const startedMs = Date.now();
@@ -464,7 +343,7 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
           name: containerName,
           containerPath: op.containerPath,
           hostPath: op.hostPath,
-          timeoutMs: op.timeoutMs,
+          timeoutMs: CONTAINER_SUBPROCESS_TIMEOUT_MS,
           run: options.copy,
         });
       } else {
@@ -472,7 +351,7 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
           name: containerName,
           containerPath: op.containerPath,
           hostPath: op.hostPath,
-          timeoutMs: op.timeoutMs,
+          timeoutMs: CONTAINER_SUBPROCESS_TIMEOUT_MS,
           run: options.copy,
         });
       }
@@ -496,60 +375,6 @@ async function runOp(options: RunOpOptions): Promise<WorkspaceStateOpResult> {
       fs.rmSync(op.hostPath, { recursive: true, force: true });
       fs.renameSync(op.tempPath, op.hostPath);
       return 'continue';
-    case 'restore-executable':
-      // `container cp` exec-bit preservation has varied across Apple container
-      // releases (see docs/bug-fixing.md); an idempotent chmod is cheap insurance.
-      execContainerCommand({
-        name: containerName,
-        user: 'root',
-        command: ['chmod', '+x', op.containerPath],
-        run: options.run,
-      });
-      return 'continue';
-    case 'record-launcher':
-      try {
-        const target = execContainerCommandOutput({
-          name: containerName,
-          user: 'root',
-          command: ['readlink', op.linkContainerPath],
-          capture: options.capture,
-        }).trim();
-        fs.writeFileSync(op.recordHostPath, `${target}\n`);
-      } catch (error) {
-        if (isContainerSubprocessTimeout(error)) {
-          throw error;
-        }
-        // No launcher to record — drop any stale record so restore stays honest.
-        fs.rmSync(op.recordHostPath, { force: true });
-      }
-      return 'continue';
-    case 'restore-launcher': {
-      const basename = resolveLauncherBasename(op);
-      // No snapshot-backed candidate at all (e.g. an empty or absent versions
-      // dir): leave the launcher alone and prune nothing.
-      if (basename === null) return 'continue';
-      // One subprocess: recreate the launcher symlink at the resolved target
-      // and prune every other version — the updater never prunes. The shell
-      // only ever sees a target pi-tin built itself from the validated
-      // basename, never the raw container-sourced record.
-      execContainerCommand({
-        name: containerName,
-        user: 'root',
-        command: [
-          'sh',
-          '-c',
-          'ln -sfn "$1" "$2" && chown -h "$4:$4" "$2" && find "$3" -maxdepth 1 -type f ! -name "$5" -delete',
-          'sh',
-          `${op.versionsDirContainerPath}/${basename}`,
-          op.linkContainerPath,
-          op.versionsDirContainerPath,
-          op.user,
-          basename,
-        ],
-        run: options.run,
-      });
-      return 'continue';
-    }
     default: {
       // A new WorkspaceStateOp kind must be handled above; this makes the
       // omission a compile error rather than a silently dropped op.
@@ -564,17 +389,12 @@ function workspaceStateOpPath(op: WorkspaceStateOp): string {
     case 'remove-container-path':
     case 'copy-in':
     case 'probe-container-path':
-    case 'probe-unchanged':
     case 'copy-out':
-    case 'restore-executable':
       return op.containerPath;
     case 'ensure-host-parent':
     case 'remove-host-path':
     case 'promote-temp':
       return op.hostPath;
-    case 'record-launcher':
-    case 'restore-launcher':
-      return op.linkContainerPath;
     default: {
       const _exhaustive: never = op;
       throw new Error(`Unhandled workspace-state op: ${JSON.stringify(_exhaustive)}`);
@@ -596,26 +416,16 @@ interface WorkspaceStateTimeout {
   op: WorkspaceStateOp;
 }
 
-function opTimeoutMs(op: WorkspaceStateOp): number {
-  return op.kind === 'copy-in' || op.kind === 'copy-out'
-    ? op.timeoutMs
-    : CONTAINER_SUBPROCESS_TIMEOUT_MS;
-}
-
 function timeoutWarning(
   workspaceName: string,
   direction: WorkspaceStateDirection,
   timedOut: WorkspaceStateTimeout,
 ): string {
-  const detail = `workspace_state ${direction} timed out after ${formatDurationMs(opTimeoutMs(timedOut.op))} for '${workspaceStateOpPath(timedOut.op)}' in workspace '${workspaceName}'`;
+  const detail = `workspace_state ${direction} timed out after ${formatDurationMs(CONTAINER_SUBPROCESS_TIMEOUT_MS)} for '${workspaceStateOpPath(timedOut.op)}' in workspace '${workspaceName}'`;
   if (timedOut.scope === 'runtime') {
     return `Warning: ${detail} — container runtime unresponsive; skipping the rest of this sync.`;
   }
-  // Entry-scoped timeouts are always copy ops; the binary deadline marks a
-  // pi-tin-owned agent-binary entry, where host.mounts advice would not apply.
-  return opTimeoutMs(timedOut.op) === CONTAINER_BINARY_COPY_TIMEOUT_MS
-    ? `Warning: ${detail} — skipping this path for now; pi-tin retries this agent-binary snapshot on the next open or close.`
-    : `Warning: ${detail} — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).`;
+  return `Warning: ${detail} — skipping this path. It is likely too large to snapshot; workspace_state suits small tool state — persist large paths with a host.mounts entry instead (README → Workspace state).`;
 }
 
 // A failed copy-in deserves a warning where other best-effort failures stay
@@ -636,34 +446,32 @@ function copyOutFailureWarning(workspaceName: string, op: WorkspaceStateOp): str
 }
 
 // Outcome of one entry's op group. Mirrors WorkspaceStateOpResult's
-// skip-absent/skip-unchanged split, plus 'failed' (a non-timeout error during
-// copy-out, or a warned copy-in failure) and 'timed-out' (carrying which op
-// and its scope, for the caller's warning).
+// skip-absent, plus 'failed' (a non-timeout error during copy-out, or a
+// warned copy-in failure) and 'timed-out' (carrying which op and its scope,
+// for the caller's warning).
 type OpGroupResult =
   | { kind: 'completed' }
-  | { kind: 'skipped'; reason: 'absent' | 'unchanged' }
+  | { kind: 'skipped' }
   | { kind: 'failed' }
   | { kind: 'timed-out'; timeout: WorkspaceStateTimeout };
 
 // Run one entry's ops. Non-timeout failures are best-effort per op, except a
 // failed copy, which ends the entry in either direction: on copy-out so
 // promote-temp can never swap in the partial temp a killed copy may have left
-// behind; on copy-in so the restore ops cannot run against the incomplete
-// destination, where restore-launcher would retarget the launcher at a
-// version that never arrived and prune whatever a partial extraction left
-// behind. Both copy directions collect their failing op for a warning:
-// copy-in because the recipe's remove has already cleared the container-side
-// copy, copy-out because the workspace's saved state silently stops advancing
-// otherwise. Timeouts are classified by the op that hit the deadline: a copy
-// op moves real data, so its timeout is entry-scoped — the entry's remaining
-// ops are skipped (the deadline kills the host pipeline's whole process group,
-// but the container-side tar belongs to the runtime and may still be flushing, so
-// restore ops must not race it — see streamToContainer) but later entries
-// still sync. Every other subprocess runs a near-instant command
-// (probe/rm/chmod/readlink/ln), so its timeout is runtime-scoped and the
-// caller abandons the sync. The copy-out probe doubles as a per-entry health
-// check: a genuinely wedged runtime costs at most one extra copy deadline
-// before the next probe stops the sync.
+// behind; on copy-in so nothing runs against the incomplete destination. Both
+// copy directions collect their failing op for a warning: copy-in because the
+// recipe's remove has already cleared the container-side copy, copy-out
+// because the workspace's saved state silently stops advancing otherwise.
+// Timeouts are classified by the op that hit the deadline: a copy op moves
+// real data, so its timeout is entry-scoped — the entry's remaining ops are
+// skipped (the deadline kills the host pipeline's whole process group, but
+// the container-side tar belongs to the runtime and may still be flushing, so
+// later ops must not race it — see streamToContainer) but later entries
+// still sync. Every other subprocess runs a near-instant command (probe/rm),
+// so its timeout is runtime-scoped and the caller abandons the sync. The
+// copy-out probe doubles as a per-entry health check: a genuinely wedged
+// runtime costs at most one extra copy deadline before the next probe stops
+// the sync.
 async function runOpGroup(options: {
   containerName: string;
   group: WorkspaceStateOp[];
@@ -677,8 +485,7 @@ async function runOpGroup(options: {
   for (const op of options.group) {
     try {
       const result = await runOp({ ...options, op });
-      if (result === 'skip-absent') return { kind: 'skipped', reason: 'absent' };
-      if (result === 'skip-unchanged') return { kind: 'skipped', reason: 'unchanged' };
+      if (result === 'skip-absent') return { kind: 'skipped' };
     } catch (error) {
       if (isContainerSubprocessTimeout(error)) {
         const scope = op.kind === 'copy-in' || op.kind === 'copy-out' ? 'entry' : 'runtime';
@@ -697,50 +504,6 @@ async function runOpGroup(options: {
   return { kind: 'completed' };
 }
 
-// Alongside the container profile's own tool-state entries, pi-tin persists
-// its own binary entries: for herdr workspaces, ~/.local/bin/herdr (the
-// auto-installed server — the rootfs is ephemeral, so without persistence
-// every fresh start drops it from PATH and herdr re-prompts to reinstall);
-// and for native-install agents (Claude Code, OpenCode), the binaries their
-// own auto-updaters maintain, so a fresh start resumes from the last updated
-// version instead of reverting to the image bake. ~/.config/herdr
-// (session/restore state) is deliberately absent: it is a live host mount
-// (see herdrConfigStateDir), so it survives any teardown — including the
-// hard kills and wedged runtimes a teardown-time copy-out cannot.
-export function combinedWorkspaceStateEntries(
-  containerProfile: Pick<ContainerProfile, 'workspace_state'>,
-  workspace: Pick<Workspace, 'attach' | 'tools'>,
-): WorkspaceStateEntry[] {
-  const herdrEntries: WorkspaceStateEntry[] =
-    workspace.attach === 'herdr'
-      ? [{ kind: 'binary', path: '.local/bin/herdr', executable: true }]
-      : [];
-  return [
-    ...containerProfile.workspace_state.map(
-      (statePath): WorkspaceStateEntry => ({ kind: 'tool-state', path: statePath }),
-    ),
-    ...herdrEntries,
-    ...nativeAgentInstalls(workspace.tools).flatMap((install) =>
-      install.stateEntries.map((entry): WorkspaceStateEntry => ({ kind: 'binary', ...entry })),
-    ),
-  ];
-}
-
-/**
- * Host directory mounted at ~/.config/herdr for herdr workspaces. Lives
- * inside the workspace-state dir on purpose: pre-mount releases snapshotted
- * the same path there via copy-out, so existing state seeds the mount.
- */
-export function herdrConfigStateDir(workspaceName: string): string {
-  return path.join(getWorkspaceStateDir(workspaceName), '.config', 'herdr');
-}
-
-export function ensureHerdrConfigStateDir(workspaceName: string): string {
-  const stateDir = herdrConfigStateDir(workspaceName);
-  fs.mkdirSync(stateDir, { recursive: true });
-  return stateDir;
-}
-
 // Snapshot workspace state in one direction. Best-effort per operation: a
 // missing source, a not-yet-created path, or a transient `container` failure
 // must never fail the open/close flow — this is convenience state, not
@@ -749,28 +512,27 @@ export async function syncWorkspaceState(
   options: {
     containerName: string;
     workspaceName: string;
-    entries: WorkspaceStateEntry[];
+    paths: string[];
     user: string;
     direction: WorkspaceStateDirection;
   },
   dependencies: WorkspaceStateSyncDependencies = {},
 ): Promise<void> {
-  if (options.entries.length === 0) return;
+  if (options.paths.length === 0) return;
 
   const warn = dependencies.warn ?? defaultWarn;
   const groups = planWorkspaceStateSync({
-    entries: options.entries,
+    paths: options.paths,
     user: options.user,
     hostStateDir: getWorkspaceStateDir(options.workspaceName),
     direction: options.direction,
   });
 
   for (const [index, group] of groups.entries()) {
-    const entry = options.entries[index];
-    if (entry === undefined) continue;
-    dependencies.report?.startEntry(entry.path);
+    const statePath = options.paths[index];
+    if (statePath === undefined) continue;
+    dependencies.report?.startEntry(statePath);
     const ctx: SyncEntryContext = {
-      copyOutTotalBytes: null,
       copiedBytes: null,
       copyDurationMs: null,
       copyInFailureOps: [],
@@ -808,7 +570,7 @@ function entryOutcome(result: OpGroupResult, ctx: SyncEntryContext): SyncEntryOu
     case 'completed':
       return { kind: 'done', bytes: ctx.copiedBytes, durationMs: ctx.copyDurationMs };
     case 'skipped':
-      return result.reason === 'unchanged' ? { kind: 'unchanged' } : { kind: 'skipped' };
+      return { kind: 'skipped' };
     case 'failed':
       return { kind: 'failed' };
     case 'timed-out':

@@ -50,7 +50,6 @@ describe('formatEntryOutcome', () => {
   });
 
   test('terminal states render as plain words', () => {
-    expect(formatEntryOutcome({ kind: 'unchanged' })).toBe('unchanged');
     expect(formatEntryOutcome({ kind: 'skipped' })).toBe('skipped');
     expect(formatEntryOutcome({ kind: 'failed' })).toBe('failed');
     expect(formatEntryOutcome({ kind: 'timed-out' })).toBe('timed out');
@@ -119,12 +118,12 @@ describe('createSyncProgressReporter', () => {
     const reporter = createSyncProgressReporter('copy-out', out);
     reporter.startEntry('.config/herdr');
     reporter.finishEntry({ kind: 'done', bytes: 1_200_000, durationMs: 300 });
-    reporter.startEntry('.local/bin/herdr');
-    reporter.finishEntry({ kind: 'unchanged' });
+    reporter.startEntry('.local/share/zoxide');
+    reporter.finishEntry({ kind: 'skipped' });
     expect(writes).toEqual([
       'Saving workspace state:\n',
       '  .config/herdr … done (1.2 MB, 0.3s)\n',
-      '  .local/bin/herdr … unchanged\n',
+      '  .local/share/zoxide … skipped\n',
     ]);
   });
 

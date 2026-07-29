@@ -6,7 +6,6 @@ import { formatDurationMs } from './duration.js';
 // durationMs are null when the copy never ran or could not be measured.
 export type SyncEntryOutcome =
   | { kind: 'done'; bytes: number | null; durationMs: number | null }
-  | { kind: 'unchanged' }
   | { kind: 'skipped' }
   | { kind: 'failed' }
   | { kind: 'timed-out' };
@@ -24,8 +23,6 @@ export function formatEntryOutcome(outcome: SyncEntryOutcome): string {
       ];
       return parts.length === 0 ? 'done' : `done (${parts.join(', ')})`;
     }
-    case 'unchanged':
-      return 'unchanged';
     case 'skipped':
       return 'skipped';
     case 'failed':
@@ -95,7 +92,9 @@ export interface ProgressOutput {
 }
 
 const LIVE_TICK_MS = 200;
-const CLEAR_LINE = '\r\x1b[2K';
+
+/** Return to column 0 and erase the line, for in-place TTY progress updates. */
+export const CLEAR_LINE = '\r\x1b[2K';
 
 const DIRECTION_HEADER: Record<WorkspaceStateDirection, string> = {
   'copy-in': 'Restoring workspace state:',

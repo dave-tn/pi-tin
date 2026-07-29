@@ -271,6 +271,70 @@ describe('runtime-state', () => {
     expect(result).toBeNull();
   });
 
+  // The agent-install lock reuses the workspace lock's PID-token core but
+  // lives in the workspace-state tree, so `pi-tin delete` reclaims it and it
+  // cannot survive clearWorkspaceRuntimeState to block a later install.
+  test('the agent install lock is per workspace and agent, inside the workspace-state dir', async () => {
+    const stateDirs: string[] = [];
+    const api = createApi({
+      getWorkspaceStateDir: (workspaceName: string) => {
+        stateDirs.push(workspaceName);
+        return path.join(tmpDir, 'workspace-state', workspaceName);
+      },
+    });
+
+    let lockPathDuringInstall = '';
+    const result = await api.tryWithAgentInstallLock('demo', 'claude', () => {
+      lockPathDuringInstall = path.join(tmpDir, 'workspace-state', 'demo', '.pi-tin-install-claude.lock');
+      expect(fs.existsSync(lockPathDuringInstall)).toBe(true);
+      return 'installed';
+    });
+
+    expect(result).toBe('installed');
+    expect(stateDirs).toEqual(['demo']);
+    // Released in a finally, so a later open is never blocked by this one.
+    expect(fs.existsSync(lockPathDuringInstall)).toBe(false);
+    // Never in the runtime dir: clearWorkspaceRuntimeState removes only
+    // meta.json and sessions/, so a lock left there would defeat the
+    // empty-dir pruning the workspace lock relies on.
+    expect(fs.existsSync(runtimeDir(tmpDir, 'demo'))).toBe(false);
+  });
+
+  test('a second install of the same agent is refused while the first holds the lock', async () => {
+    const api = createApi({
+      getWorkspaceStateDir: (workspaceName: string) =>
+        path.join(tmpDir, 'workspace-state', workspaceName),
+    });
+
+    const result = await api.tryWithAgentInstallLock('demo', 'claude', async () => {
+      // A different agent in the same workspace has its own lock and proceeds.
+      const other = await api.tryWithAgentInstallLock('demo', 'opencode', () => 'other-ok');
+      // The same agent is refused: null, never a throw — the caller reports
+      // "another open is installing", not a failure.
+      const same = await api.tryWithAgentInstallLock('demo', 'claude', () => 'same-ok');
+      return { other, same };
+    });
+
+    expect(result).toEqual({ other: 'other-ok', same: null });
+  });
+
+  test('an install lock left by a dead process is reclaimed', async () => {
+    const api = createApi({
+      getWorkspaceStateDir: (workspaceName: string) =>
+        path.join(tmpDir, 'workspace-state', workspaceName),
+    });
+    const lockPath = path.join(tmpDir, 'workspace-state', 'demo', '.pi-tin-install-claude.lock');
+
+    // A SIGKILLed pi-tin never ran its finally, so the lock file survives.
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ ownerPid: 4242, ownerToken: 'dead-token', acquiredAt: '2026-05-25T12:00:00.000Z' }),
+    );
+
+    expect(await api.tryWithAgentInstallLock('demo', 'claude', () => 'acquired')).toBe('acquired');
+  });
+
   test('does not kill a helper whose PID was reused by a different process', () => {
     const api = createApi();
     procs.set(555, 'helper-orig');
