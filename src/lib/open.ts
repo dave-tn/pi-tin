@@ -936,6 +936,13 @@ export async function openWorkspace(
   const runtimePlan = computeRuntimeStartPlan(context);
   const sessionId = crypto.randomUUID();
 
+  // Armed before the container exists, not just before the attach: a fresh
+  // start writes runtime meta and only then probes for exec-readiness, so a
+  // terminating signal in that stretch would otherwise leave a running
+  // container with no session and no auto-stop. The close-out reconciles
+  // rather than assuming a session, so it is a no-op until there is one.
+  const releaseSessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
+
   const opened = await withWorkspaceLock(context.wsName, async () => {
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
     const containerState = getContainerState(context.containerName);
@@ -1050,13 +1057,6 @@ export async function openWorkspace(
       }
     }
   });
-
-  // The session is registered from here on, so a terminating signal — closing
-  // the terminal window sends SIGHUP — must arm auto-stop before pi-tin dies,
-  // or the container is left running with nothing to reclaim it. Armed outside
-  // the block above because that block holds the workspace lock; there is no
-  // await between registerSession and its release for a signal to land in.
-  const releaseSessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
 
   if (opened.mode === 'started') {
     console.log(chalk.green(`Started workspace '${context.wsName}'`));

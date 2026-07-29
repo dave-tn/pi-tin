@@ -83,15 +83,17 @@ describe('guardSessionExit', () => {
 
   // Dropping the listeners is what makes the re-raise fatal rather than a
   // loop back into this same handler.
-  test('a signal disarms the guard before re-raising', () => {
+  // Recorded rather than asserted in place: the handler runs the close-out
+  // inside a catch-all, which would swallow a failing expectation and leave
+  // this passing whatever the ordering.
+  test('a signal disarms the guard before running the close-out', () => {
     const fake = fakeProcess();
-    guardSessionExit(() => {
-      expect(fake.armed()).toEqual([]);
-    }, fake.deps);
+    const armedDuringCloseOut: SessionTerminationSignal[][] = [];
+    guardSessionExit(() => { armedDuringCloseOut.push(fake.armed()); }, fake.deps);
 
     fake.emit('SIGQUIT');
 
-    expect(fake.armed()).toEqual([]);
+    expect(armedDuringCloseOut).toEqual([[]]);
   });
 
   test('a failing close-out still re-raises so the signal terminates pi-tin', () => {
