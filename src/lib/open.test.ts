@@ -4,14 +4,16 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   planWorkspaceOpen,
+  planRestartIfIdle,
   planAddProject,
   planImageBuild,
   planBuildFailureFallback,
   planAttachPreflight,
   planHerdrAttach,
   planAutoStopDecision,
+  type HerdrAgentStates,
 } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand } from './open.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand, resolveOpenPlan } from './open.js';
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
@@ -705,11 +707,11 @@ describe('planWorkspaceOpen', () => {
     })).toEqual({
       action: 'join',
       activeSessionsAfterOpen: 3,
-      warnAboutDeferredRestart: true,
+      deferredRestartMessage: "Warning: workspace changes will apply on the next restart of 'demo'.",
     });
   });
 
-  test('restarts during grace when config drift is detected', () => {
+  test('defers to the agent check during grace when config drift is detected', () => {
     expect(planWorkspaceOpen({
       workspaceName: 'demo',
       containerState: 'running',
@@ -718,16 +720,13 @@ describe('planWorkspaceOpen', () => {
       activeSessions: 0,
       buildRequested: false,
       hasDrift: true,
-    })).toEqual({
-      action: 'restart',
-      activeSessionsAfterOpen: 1,
-    });
+    })).toEqual({ action: 'restart-if-idle' });
   });
 
   // The other half of the restart condition: --build during the grace window
   // restarts even with no drift. Without this, dropping buildRequested from
   // the restart check would silently turn --build into a plain rejoin.
-  test('restarts during grace when --build is requested without drift', () => {
+  test('defers to the agent check during grace when --build is requested without drift', () => {
     expect(planWorkspaceOpen({
       workspaceName: 'demo',
       containerState: 'running',
@@ -736,10 +735,7 @@ describe('planWorkspaceOpen', () => {
       activeSessions: 0,
       buildRequested: true,
       hasDrift: false,
-    })).toEqual({
-      action: 'restart',
-      activeSessionsAfterOpen: 1,
-    });
+    })).toEqual({ action: 'restart-if-idle' });
   });
 
   test('joins during grace when no restart is needed', () => {
@@ -754,8 +750,106 @@ describe('planWorkspaceOpen', () => {
     })).toEqual({
       action: 'join',
       activeSessionsAfterOpen: 1,
-      warnAboutDeferredRestart: false,
+      deferredRestartMessage: null,
     });
+  });
+});
+
+describe('planRestartIfIdle', () => {
+  test('joins and explains itself while agents are working', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'states', working: 2 },
+      hasDrift: true,
+    })).toEqual({
+      action: 'join',
+      activeSessionsAfterOpen: 1,
+      deferredRestartMessage: [
+        "Warning: 'demo' has 2 working agents — joining the running workspace instead of restarting it.",
+        'Config changes apply on the next restart.',
+      ].join('\n'),
+    });
+  });
+
+  // --build without drift also lands here, and there are no config changes to
+  // promise on a later restart — saying so anyway would be a lie.
+  test('omits the config-changes line when the restart was not drift-driven', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'states', working: 1 },
+      hasDrift: false,
+    })).toEqual({
+      action: 'join',
+      activeSessionsAfterOpen: 1,
+      deferredRestartMessage:
+        "Warning: 'demo' has 1 working agent — joining the running workspace instead of restarting it.",
+    });
+  });
+
+  test('restarts when every agent is idle', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'states', working: 0 },
+      hasDrift: true,
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+  });
+
+  // Matches planAutoStopDecision: a query that can never succeed must not
+  // leave a workspace permanently unrebuildable.
+  test('restarts when the agent query is unavailable', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'unavailable' },
+      hasDrift: true,
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+  });
+
+  test('restarts on a non-herdr workspace', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'not-applicable' },
+      hasDrift: true,
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+  });
+});
+
+// The layer the original bug lived in: both planners were fine in isolation,
+// nothing wired the question into the open path.
+describe('resolveOpenPlan', () => {
+  const unexpectedQuery = (): HerdrAgentStates => {
+    throw new Error('unexpected agent query');
+  };
+
+  test('queries the container and resolves a restart-if-idle plan', () => {
+    expect(resolveOpenPlan({ action: 'restart-if-idle' }, {
+      workspaceName: 'demo',
+      hasDrift: true,
+      queryAgentStates: () => ({ kind: 'states', working: 3 }),
+    })).toEqual({
+      action: 'join',
+      activeSessionsAfterOpen: 1,
+      deferredRestartMessage: [
+        "Warning: 'demo' has 3 working agents — joining the running workspace instead of restarting it.",
+        'Config changes apply on the next restart.',
+      ].join('\n'),
+    });
+  });
+
+  test('passes every other action through without querying', () => {
+    const plans = [
+      { action: 'start' as const, activeSessionsAfterOpen: 1 as const, clearStaleRuntimeState: false, deleteStoppedContainer: false },
+      { action: 'join' as const, activeSessionsAfterOpen: 2, deferredRestartMessage: null },
+      { action: 'restart' as const, activeSessionsAfterOpen: 1 as const },
+      { action: 'refuse' as const, message: 'nope' },
+    ];
+
+    for (const plan of plans) {
+      expect(resolveOpenPlan(plan, {
+        workspaceName: 'demo',
+        hasDrift: true,
+        queryAgentStates: unexpectedQuery,
+      })).toEqual(plan);
+    }
   });
 });
 

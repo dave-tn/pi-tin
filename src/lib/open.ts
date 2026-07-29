@@ -43,7 +43,7 @@ import {
 } from './container.js';
 import { stopAndRemoveContainer } from './container-lifecycle.js';
 import { isRecord } from './guards.js';
-import { spawnAutoStopHelper } from './auto-stop.js';
+import { spawnAutoStopHelper, queryHerdrAgentStates } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
 import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs } from './agents.js';
@@ -85,10 +85,13 @@ import {
 } from './project-mounts.js';
 import {
   planWorkspaceOpen,
+  planRestartIfIdle,
   planImageBuild,
   planBuildFailureFallback,
   planAttachPreflight,
   planHerdrAttach,
+  type HerdrAgentStates,
+  type WorkspaceOpenPlan,
 } from './workspace-plans.js';
 import { isInteractiveSession, promptConfirm } from './confirmation.js';
 import { CliError, EXIT } from './cli-errors.js';
@@ -817,6 +820,31 @@ async function finishWorkspaceSession(
   });
 }
 
+// The one effect between the two open planners: only 'restart-if-idle' pays
+// for the agent query, and the resolved plan carries no trace of it, so the
+// executor's switch stays exhaustive over the actions it can actually get.
+// The query is asked of the running container rather than derived from the
+// workspace's `attach` setting — config can be edited to `shell` while a herdr
+// server is still serving working agents, and that edit is itself drift.
+export function resolveOpenPlan(
+  basePlan: WorkspaceOpenPlan,
+  options: {
+    workspaceName: string;
+    hasDrift: boolean;
+    queryAgentStates: () => HerdrAgentStates;
+  },
+): Exclude<WorkspaceOpenPlan, { action: 'restart-if-idle' }> {
+  if (basePlan.action !== 'restart-if-idle') {
+    return basePlan;
+  }
+
+  return planRestartIfIdle({
+    workspaceName: options.workspaceName,
+    agentStates: options.queryAgentStates(),
+    hasDrift: options.hasDrift,
+  });
+}
+
 export async function openWorkspace(
   wsName: string,
   opts: { build?: boolean; workdir?: string | undefined; attach?: Workspace['attach'] | undefined },
@@ -858,15 +886,25 @@ export async function openWorkspace(
     const hasRuntimeDrift = runtime.meta?.runtimeHash !== undefined
       ? runtime.meta.runtimeHash !== runtimePlan.runtimeHash
       : false;
-    const plan = planWorkspaceOpen({
-      workspaceName: context.wsName,
-      containerState,
-      runtimeState: runtime.runtimeState,
-      hasRuntimeMeta: runtime.meta !== null,
-      activeSessions: runtime.activeSessions.length,
-      buildRequested: opts.build === true,
-      hasDrift: hasBuildDrift || hasRuntimeDrift,
-    });
+    const plan = resolveOpenPlan(
+      planWorkspaceOpen({
+        workspaceName: context.wsName,
+        containerState,
+        runtimeState: runtime.runtimeState,
+        hasRuntimeMeta: runtime.meta !== null,
+        activeSessions: runtime.activeSessions.length,
+        buildRequested: opts.build === true,
+        hasDrift: hasBuildDrift || hasRuntimeDrift,
+      }),
+      {
+        workspaceName: context.wsName,
+        hasDrift: hasBuildDrift || hasRuntimeDrift,
+        queryAgentStates: () => queryHerdrAgentStates(
+          context.containerName,
+          context.containerProfile.user,
+        ),
+      },
+    );
 
     switch (plan.action) {
       case 'refuse':
@@ -898,8 +936,8 @@ export async function openWorkspace(
         return { mode: 'started' as const, activeSessions: plan.activeSessionsAfterOpen };
       }
       case 'join':
-        if (plan.warnAboutDeferredRestart) {
-          console.warn(chalk.yellow(`Warning: workspace changes will apply on the next restart of '${context.wsName}'.`));
+        if (plan.deferredRestartMessage !== null) {
+          console.warn(chalk.yellow(plan.deferredRestartMessage));
         }
         // No teardown on failure here: other sessions may be attached to a
         // joined container, so it is never reclaimed on a failed probe.

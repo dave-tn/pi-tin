@@ -31,11 +31,17 @@ export type WorkspaceOpenPlan =
   | {
     action: 'join';
     activeSessionsAfterOpen: number;
-    warnAboutDeferredRestart: boolean;
+    deferredRestartMessage: string | null;
   }
   | {
     action: 'restart';
     activeSessionsAfterOpen: 1;
+  }
+  // A restart is wanted, but the container may be doing work no session
+  // accounts for. The executor queries the running container and hands the
+  // answer to planRestartIfIdle; this variant never reaches it.
+  | {
+    action: 'restart-if-idle';
   }
   | {
     action: 'refuse';
@@ -135,6 +141,24 @@ function unknownContainerStateMessage(workspaceName: string): string {
   ].join('\n');
 }
 
+function deferredChangesWarning(workspaceName: string): string {
+  return `Warning: workspace changes will apply on the next restart of '${workspaceName}'.`;
+}
+
+function workingAgentsWarning(
+  workspaceName: string,
+  working: number,
+  hasDrift: boolean,
+): string {
+  const lines = [
+    `Warning: '${workspaceName}' has ${working} working agent${working === 1 ? '' : 's'} — joining the running workspace instead of restarting it.`,
+  ];
+  if (hasDrift) {
+    lines.push('Config changes apply on the next restart.');
+  }
+  return lines.join('\n');
+}
+
 function runtimeInconsistencyMessage(workspaceName: string): string {
   return [
     `Workspace '${workspaceName}' is running, but its runtime state could not be read.`,
@@ -183,21 +207,53 @@ export function planWorkspaceOpen(
     return {
       action: 'join',
       activeSessionsAfterOpen: options.activeSessions + 1,
-      warnAboutDeferredRestart: options.hasDrift,
+      deferredRestartMessage: options.hasDrift
+        ? deferredChangesWarning(options.workspaceName)
+        : null,
     };
   }
 
   if (options.buildRequested || options.hasDrift) {
-    return {
-      action: 'restart',
-      activeSessionsAfterOpen: 1,
-    };
+    return { action: 'restart-if-idle' };
   }
 
   return {
     action: 'join',
     activeSessionsAfterOpen: 1,
-    warnAboutDeferredRestart: false,
+    deferredRestartMessage: null,
+  };
+}
+
+/**
+ * Post-query half of the drift restart: a herdr detach ends the pi-tin session
+ * while agents keep working, so zero sessions is not zero work. Same question
+ * and same threshold as planAutoStopDecision — idle agents stay restartable,
+ * which is the deal auto-stop strikes with herdr's restore-and-resume.
+ *
+ * 'unavailable' restarts, matching auto-stop: a query that can never succeed
+ * must not leave a workspace permanently unrebuildable. Only reached with no
+ * active sessions, hence the join count of 1.
+ */
+export function planRestartIfIdle(options: {
+  workspaceName: string;
+  agentStates: HerdrAgentStates;
+  hasDrift: boolean;
+}): Extract<WorkspaceOpenPlan, { action: 'join' | 'restart' }> {
+  if (options.agentStates.kind === 'states' && options.agentStates.working > 0) {
+    return {
+      action: 'join',
+      activeSessionsAfterOpen: 1,
+      deferredRestartMessage: workingAgentsWarning(
+        options.workspaceName,
+        options.agentStates.working,
+        options.hasDrift,
+      ),
+    };
+  }
+
+  return {
+    action: 'restart',
+    activeSessionsAfterOpen: 1,
   };
 }
 
@@ -298,7 +354,7 @@ function addedToRunningMessage(projectPath: string, workspaceName: string): stri
     `Added ${project} to workspace '${workspaceName}'.`,
     `'${workspaceName}' is running, so the project isn't mounted yet — that happens on its next restart.`,
     `Once you've finished and exited every open session in '${workspaceName}', the next 'pi-tin open ${workspaceName}' will restart it and mount the project.`,
-    '(Reopening while a session is still active just rejoins it unchanged.)',
+    '(Reopening while a session is still active — or while herdr agents are still working — just rejoins it unchanged.)',
   ].join('\n');
 }
 
