@@ -99,6 +99,18 @@ export function containerHomeDir(user: string): string {
 }
 
 /**
+ * A container path in the canonical form the lexical mount comparisons expect:
+ * redundant separators and `.`/`..` segments resolved, trailing slashes
+ * dropped (`/` itself excepted). Guest paths are POSIX whatever the host is.
+ * Config-supplied container paths (`host.mounts`) reach those comparisons
+ * unvalidated, so they pass through here first.
+ */
+export function normalizeContainerPath(containerPath: string): string {
+  const normalized = path.posix.normalize(containerPath);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+}
+
+/**
  * True when `childPath` equals `parentDir` or lies inside it. Both arguments
  * must already be normalised (e.g. via `path.resolve`) — no trailing
  * separators; the check is purely lexical, so `/a/bc` is not within `/a/b`.

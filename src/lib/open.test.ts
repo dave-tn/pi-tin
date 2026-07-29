@@ -13,7 +13,7 @@ import {
   planAutoStopDecision,
   type HerdrAgentStates,
 } from './workspace-plans.js';
-import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand, resolveOpenPlan } from './open.js';
+import { openWorkspace, countSharedDirectories, computeRuntimeStartPlan, loginShellCommand, resolveOpenPlan, statePathsForCopyOut } from './open.js';
 import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
@@ -328,6 +328,107 @@ describe('computeRuntimeStartPlan sshd', () => {
       kind: 'info',
       text: '~/.config/herdr uses the existing mount at /home/dev/.config/herdr instead of the managed workspace-state mount.',
     });
+  });
+});
+
+// Copy-out is the half that can destroy a live mount from the host side (its
+// promote step is an rm + rename over the mount's host dir), and it runs
+// against a container this session may only have joined — so which paths it
+// may touch is decided from that container's own mount record.
+describe('statePathsForCopyOut', () => {
+  let tmpDir: string;
+  let originalEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-test-'));
+    originalEnv = process.env['XDG_CONFIG_HOME'];
+    process.env['XDG_CONFIG_HOME'] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = originalEnv;
+    }
+  });
+
+  const writeRuntimeMeta = (mountedContainerPaths: string[] | undefined): void => {
+    const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'meta.json'), JSON.stringify({
+      startedAt: '2026-07-29T10:00:00.000Z',
+      buildHash: 'build',
+      runtimeHash: 'runtime',
+      ...(mountedContainerPaths === undefined ? {} : { mountedContainerPaths }),
+    }));
+  };
+
+  // No Claude Code in tools and attach: shell — the current config derives no
+  // managed mounts at all, so only the container's own record can save these
+  // paths from the copy-out.
+  const contextFor = (): Parameters<typeof statePathsForCopyOut>[0] => {
+    const workspace = validateWorkspace({ profile: 'node-dev', projects: [] });
+    const containerProfile = validateContainerProfile({
+      description: 'fixture',
+      base_image: 'node:22',
+      user: 'dev',
+      workspace_state: ['.local/share/claude', '.zsh_history'],
+    });
+    return {
+      wsName: 'demo',
+      containerName: containerNameFor('demo'),
+      imageTag: imageTagFor('demo'),
+      workspace,
+      containerProfile,
+      resources: resolveResources(containerProfile),
+    };
+  };
+
+  const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
+    const warnings: string[] = [];
+    const warn = spyOn(console, 'warn').mockImplementation((message: unknown) => {
+      warnings.push(String(message));
+    });
+    try {
+      return { result: fn(), warnings };
+    } finally {
+      warn.mockRestore();
+    }
+  };
+
+  test('drops a path the running container still has mounted, whatever config now says', () => {
+    writeRuntimeMeta(['/home/dev/.local/share/claude', '/home/dev/.local/bin']);
+
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
+
+    expect(result).toEqual(['.zsh_history']);
+    expect(warnings).toEqual([]);
+  });
+
+  test('a container matching its config still syncs every unmounted path', () => {
+    writeRuntimeMeta(undefined);
+
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), false));
+
+    expect(result).toEqual(['.local/share/claude', '.zsh_history']);
+    expect(warnings).toEqual([]);
+  });
+
+  // A container from a pi-tin that recorded no mounts, joined after a config
+  // change: the config-derived fallback would clear .local/share/claude to
+  // sync even though the container may well still mount it.
+  test('skips the snapshot when config has changed and the container recorded no mounts', () => {
+    writeRuntimeMeta(undefined);
+
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
+
+    expect(result).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      "Warning: skipping the workspace_state snapshot for 'demo' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. Restart the workspace to resume snapshots.",
+    );
   });
 });
 

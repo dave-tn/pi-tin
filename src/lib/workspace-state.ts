@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import { containerHomeDir, getWorkspaceStateDir } from './paths.js';
+import { containerHomeDir, getWorkspaceStateDir, normalizeContainerPath } from './paths.js';
 import type { ContainerCopyRunner, ContainerOutputRunner, ContainerSubprocessRunner } from './container.js';
 import {
   CONTAINER_SUBPROCESS_TIMEOUT_MS,
@@ -119,14 +119,6 @@ export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | '
 // itself. Absolute container paths on both sides; purely lexical.
 function containerPathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-}
-
-// `host.mounts` container paths reach the mount list straight from YAML, so a
-// trailing slash is on the cards and would defeat the lexical comparison.
-// Joining with '.' is the normalisation that drops it — path.posix.normalize
-// keeps a trailing slash.
-function normalizeContainerPath(containerPath: string): string {
-  return path.posix.join(containerPath, '.');
 }
 
 export interface SyncableWorkspaceStatePaths {
