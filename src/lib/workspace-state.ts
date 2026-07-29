@@ -114,40 +114,62 @@ export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | '
   return [...new Set([...installDirs, ...herdrDirs])];
 }
 
-// Overlap in either direction: a workspace_state entry of `.local` reaches
-// into the `.local/bin` mount just as surely as an entry of `.local/bin`
-// itself. Home-relative paths on both sides; purely lexical.
-function statePathsOverlap(left: string, right: string): boolean {
+// Overlap in either direction: a workspace_state entry of `~/.local` reaches
+// into a mount at `~/.local/bin` just as surely as an entry of `.local/bin`
+// itself. Absolute container paths on both sides; purely lexical.
+function containerPathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+// `host.mounts` container paths reach the mount list straight from YAML, so a
+// trailing slash is on the cards and would defeat the lexical comparison.
+// Joining with '.' is the normalisation that drops it — path.posix.normalize
+// keeps a trailing slash.
+function normalizeContainerPath(containerPath: string): string {
+  return path.posix.join(containerPath, '.');
 }
 
 export interface SyncableWorkspaceStatePaths {
   syncable: string[];
-  /** Dropped workspace_state paths, each with the managed mount it overlaps. */
+  /** Dropped workspace_state paths, each with the container path it overlaps. */
   dropped: Array<{ statePath: string; mountPath: string }>;
 }
 
 /**
- * The container profile's `workspace_state` paths that may actually sync for
- * this workspace: any path overlapping one of the workspace's managed mounts
- * is dropped. An overlapping path must not sync — the copy-in recipe's root
- * `rm -rf` against a live mount would destroy the host-side contents through
- * virtiofs — and the snapshot would be redundant anyway, since the path
- * already persists via the mount. Callers warn about `dropped`.
+ * The container profile's `workspace_state` paths that may actually sync
+ * against a container mounting `mountedContainerPaths`: any path overlapping a
+ * live mount is dropped. An overlapping path must not sync — the copy-in
+ * recipe's root `rm -rf` against a live mount would destroy the host-side
+ * contents through virtiofs, and copy-out's promote would swap the host dir a
+ * managed mount is bound to out from under the running container — and the
+ * snapshot would be redundant anyway, since the path already persists via the
+ * mount. Callers warn about `dropped`.
  *
- * Takes the workspace rather than a mount list so that every sync call site
- * gets the filter by construction: passing `workspace_state` straight to
- * syncWorkspaceState is not something a caller can do by omission.
+ * `container run` fixes a container's mounts for its whole life while the
+ * config describing them can change underneath (an open that joins a running
+ * container and defers the restart), so the mount set is the one recorded when
+ * the container started (RuntimeMeta.mountedContainerPaths) or, at a fresh
+ * start, the plan about to be run. `undefined` means no container life
+ * recorded one — a container started by an earlier pi-tin — and falls back to
+ * the workspace's managed mounts, which is the set this filter covered before
+ * the mounts were recorded.
  */
-export function syncableWorkspaceStatePaths(
-  workspace: Pick<Workspace, 'attach' | 'tools'>,
-  containerProfile: Pick<ContainerProfile, 'workspace_state'>,
-): SyncableWorkspaceStatePaths {
-  const managedMountPaths = managedInstallMountPaths(workspace);
+export function syncableWorkspaceStatePaths(input: {
+  workspace: Pick<Workspace, 'attach' | 'tools'>;
+  containerProfile: Pick<ContainerProfile, 'user' | 'workspace_state'>;
+  mountedContainerPaths: string[] | undefined;
+}): SyncableWorkspaceStatePaths {
+  const containerHome = containerHomeDir(input.containerProfile.user);
+  const mountPaths = (
+    input.mountedContainerPaths
+    ?? managedInstallMountPaths(input.workspace).map((relPath) => path.posix.join(containerHome, relPath))
+  ).map(normalizeContainerPath);
+
   const syncable: string[] = [];
   const dropped: Array<{ statePath: string; mountPath: string }> = [];
-  for (const statePath of containerProfile.workspace_state) {
-    const mountPath = managedMountPaths.find((mount) => statePathsOverlap(statePath, mount));
+  for (const statePath of input.containerProfile.workspace_state) {
+    const containerPath = path.posix.join(containerHome, statePath);
+    const mountPath = mountPaths.find((mount) => containerPathsOverlap(containerPath, mount));
     if (mountPath === undefined) {
       syncable.push(statePath);
     } else {

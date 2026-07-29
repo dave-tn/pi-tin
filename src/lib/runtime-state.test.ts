@@ -69,6 +69,23 @@ describe('runtime-state', () => {
     expect(api.reconcileWorkspaceRuntimeState('demo').activeSessions).toHaveLength(0);
   });
 
+  // The mount record is what the workspace-state overlap filter reads back
+  // for a container whose config has since moved on, so it has to survive the
+  // round-trip through the meta schema rather than being stripped as unknown.
+  test('carries the container mount record through a meta round-trip', () => {
+    const api = createApi();
+
+    api.writeRuntimeMeta('demo', {
+      startedAt: '2026-05-25T12:00:00.000Z',
+      buildHash: 'build-hash',
+      runtimeHash: 'runtime-hash',
+      mountedContainerPaths: ['/workspace/proj', '/home/dev/.config/herdr'],
+    });
+
+    expect(api.readRuntimeMeta('demo')?.mountedContainerPaths)
+      .toEqual(['/workspace/proj', '/home/dev/.config/herdr']);
+  });
+
   test('reaps stale sessions during reconciliation', () => {
     const api = createApi();
 

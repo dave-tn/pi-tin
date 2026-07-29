@@ -70,6 +70,7 @@ import {
   reconcileWorkspaceRuntimeState,
   registerSession,
   unregisterSession,
+  readRuntimeMeta,
   writeRuntimeMeta,
   clearWorkspaceRuntimeState,
   cancelShutdown,
@@ -606,13 +607,25 @@ function prepareManagedStateMounts(context: WorkspaceContext, runtimePlan: Runti
   }
 }
 
+/** The live mounts a container started from this plan will hold. */
+function planMountedContainerPaths(runtimePlan: RuntimeStartPlan): string[] {
+  return runtimePlan.volumes.map((volume) => volume.container);
+}
+
 // Warned about once per session, at the fresh-start restore. Repeating it at
 // session close would just say the same thing again about the same config.
-function syncableStatePathsWarningOnce(context: WorkspaceContext): string[] {
-  const { syncable, dropped } = syncableWorkspaceStatePaths(context.workspace, context.containerProfile);
+function syncableStatePathsWarningOnce(
+  context: WorkspaceContext,
+  runtimePlan: RuntimeStartPlan,
+): string[] {
+  const { syncable, dropped } = syncableWorkspaceStatePaths({
+    workspace: context.workspace,
+    containerProfile: context.containerProfile,
+    mountedContainerPaths: planMountedContainerPaths(runtimePlan),
+  });
   for (const drop of dropped) {
     console.warn(chalk.yellow(
-      `Warning: workspace_state path '${drop.statePath}' overlaps the managed mount at ~/${drop.mountPath} — skipping the snapshot; that path already persists via the live mount.`,
+      `Warning: workspace_state path '${drop.statePath}' overlaps the live mount at ${drop.mountPath} — skipping the snapshot; that path already persists via the mount.`,
     ));
   }
   return syncable;
@@ -649,6 +662,7 @@ function startWorkspaceContainer(options: {
     startedAt: new Date().toISOString(),
     buildHash: buildPlan.buildHash,
     runtimeHash: runtimePlan.runtimeHash,
+    mountedContainerPaths: planMountedContainerPaths(runtimePlan),
   });
 }
 
@@ -777,11 +791,19 @@ async function finishWorkspaceSession(
 
     // Container is still running: snapshot workspace state out now, before any
     // stop/delete path (auto-stop, or the next fresh start) can tear it down.
+    // The overlap filter keys off the mounts recorded when this container
+    // started, not the current config: this session may have joined a
+    // container whose restart was deferred, leaving config describing mounts
+    // it does not have.
     await syncWorkspaceState(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableWorkspaceStatePaths(context.workspace, context.containerProfile).syncable,
+        paths: syncableWorkspaceStatePaths({
+          workspace: context.workspace,
+          containerProfile: context.containerProfile,
+          mountedContainerPaths: readRuntimeMeta(context.wsName)?.mountedContainerPaths,
+        }).syncable,
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
@@ -977,7 +999,7 @@ export async function openWorkspace(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: syncableStatePathsWarningOnce(context),
+        paths: syncableStatePathsWarningOnce(context, runtimePlan),
         user: context.containerProfile.user,
         direction: 'copy-in',
       },

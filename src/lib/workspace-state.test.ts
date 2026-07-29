@@ -79,16 +79,25 @@ describe('managedInstallMountPaths', () => {
   });
 });
 
-describe('syncableWorkspaceStatePaths', () => {
+describe('syncableWorkspaceStatePaths against the container mount record', () => {
   // A herdr workspace running Claude Code — the widest managed mount set
   // (.local/share/claude, .local/bin, .config/herdr), so one workspace covers
   // every overlap shape.
   const workspace: Pick<Workspace, 'attach' | 'tools'> = { attach: 'herdr', tools: [CLAUDE_TOOL] };
-  const profile = (...workspace_state: string[]): { workspace_state: string[] } =>
-    ({ workspace_state });
+  const filter = (options: {
+    statePaths: string[];
+    mountedContainerPaths?: string[] | undefined;
+    workspace?: Pick<Workspace, 'attach' | 'tools'>;
+    user?: string;
+  }): ReturnType<typeof syncableWorkspaceStatePaths> =>
+    syncableWorkspaceStatePaths({
+      workspace: options.workspace ?? workspace,
+      containerProfile: { user: options.user ?? 'dev', workspace_state: options.statePaths },
+      mountedContainerPaths: options.mountedContainerPaths,
+    });
 
-  test('paths that touch no managed mount sync unchanged', () => {
-    expect(syncableWorkspaceStatePaths(workspace, profile('.zsh_history', '.local/share/zoxide')))
+  test('paths that touch no mount sync unchanged', () => {
+    expect(filter({ statePaths: ['.zsh_history', '.local/share/zoxide'] }))
       .toEqual({ syncable: ['.zsh_history', '.local/share/zoxide'], dropped: [] });
   });
 
@@ -96,37 +105,91 @@ describe('syncableWorkspaceStatePaths', () => {
   // live mount that deletes the *host* contents through virtiofs — the
   // agent's install, or herdr's session state.
   test('a path equal to a mount is dropped', () => {
-    expect(syncableWorkspaceStatePaths(workspace, profile('.local/bin')))
-      .toEqual({ syncable: [], dropped: [{ statePath: '.local/bin', mountPath: '.local/bin' }] });
+    expect(filter({ statePaths: ['.local/bin'] }))
+      .toEqual({ syncable: [], dropped: [{ statePath: '.local/bin', mountPath: '/home/dev/.local/bin' }] });
   });
 
   test('an ancestor of a mount is dropped — it reaches into the mount just as surely', () => {
-    expect(syncableWorkspaceStatePaths(workspace, profile('.local')))
-      .toEqual({ syncable: [], dropped: [{ statePath: '.local', mountPath: '.local/share/claude' }] });
+    expect(filter({ statePaths: ['.local'] }))
+      .toEqual({ syncable: [], dropped: [{ statePath: '.local', mountPath: '/home/dev/.local/share/claude' }] });
   });
 
   test('a descendant of a mount is dropped', () => {
-    expect(syncableWorkspaceStatePaths(workspace, profile('.config/herdr/session.json')))
+    expect(filter({ statePaths: ['.config/herdr/session.json'] }))
       .toEqual({
         syncable: [],
-        dropped: [{ statePath: '.config/herdr/session.json', mountPath: '.config/herdr' }],
+        dropped: [{ statePath: '.config/herdr/session.json', mountPath: '/home/dev/.config/herdr' }],
       });
   });
 
   // Lexical prefix matching alone would drop `.local/binaries` against the
   // `.local/bin` mount, silently losing a legitimate snapshot.
   test('a sibling sharing a name prefix is not an overlap', () => {
-    expect(syncableWorkspaceStatePaths(workspace, profile('.local/binaries')).syncable)
-      .toEqual(['.local/binaries']);
+    expect(filter({ statePaths: ['.local/binaries'] }).syncable).toEqual(['.local/binaries']);
   });
 
   // The same profile against a workspace that mounts nothing: the paths are
   // only hazardous because *this* workspace mounts them.
   test('a workspace with no managed mounts syncs every path', () => {
-    expect(syncableWorkspaceStatePaths(
-      { attach: 'shell', tools: [] },
-      profile('.local/bin', '.config/herdr'),
-    ).syncable).toEqual(['.local/bin', '.config/herdr']);
+    expect(filter({
+      statePaths: ['.local/bin', '.config/herdr'],
+      workspace: { attach: 'shell', tools: [] },
+    }).syncable).toEqual(['.local/bin', '.config/herdr']);
+  });
+
+  // The managed-mount fallback is home-relative; a root profile's home is
+  // /root, so a filter anchored on /home/<user> would miss every overlap.
+  test('a root profile anchors the fallback mounts on /root', () => {
+    expect(filter({ statePaths: ['.config/herdr'], user: 'root' }).dropped)
+      .toEqual([{ statePath: '.config/herdr', mountPath: '/root/.config/herdr' }]);
+  });
+
+  // The gap the managed-mount-only filter left: every mount pi-tin does not
+  // manage — host.mounts, agent profiles, tmux, the gh mount — is just as
+  // live, and `rm -rf` through virtiofs is just as destructive on it.
+  test('mounts outside the managed set are dropped, and mounts outside the home are not', () => {
+    expect(filter({
+      statePaths: ['.cache/uv', '.config', '.zsh_history'],
+      mountedContainerPaths: [
+        '/workspace/proj',
+        '/home/dev/.cache/uv',
+        '/home/dev/.config/opencode',
+      ],
+    })).toEqual({
+      syncable: ['.zsh_history'],
+      dropped: [
+        { statePath: '.cache/uv', mountPath: '/home/dev/.cache/uv' },
+        { statePath: '.config', mountPath: '/home/dev/.config/opencode' },
+      ],
+    });
+  });
+
+  // A container joined after its config changed keeps the mounts it started
+  // with. Filtering on the current config would clear this path to sync, and
+  // copy-out's promote would swap the host dir out from under the live mount.
+  test('the recorded mounts win over a config that no longer declares them', () => {
+    expect(filter({
+      statePaths: ['.local/share/claude'],
+      workspace: { attach: 'shell', tools: [] },
+      mountedContainerPaths: ['/home/dev/.local/share/claude'],
+    }).dropped).toEqual([
+      { statePath: '.local/share/claude', mountPath: '/home/dev/.local/share/claude' },
+    ]);
+  });
+
+  // The mirror image: config gained a managed mount the running container
+  // never got, so nothing is live at that path and the snapshot must go on.
+  test('a managed path the running container never mounted still syncs', () => {
+    expect(filter({ statePaths: ['.config/herdr'], mountedContainerPaths: [] }).syncable)
+      .toEqual(['.config/herdr']);
+  });
+
+  // host.mounts container paths are unvalidated YAML strings.
+  test('a mount path with a trailing slash still matches its descendants', () => {
+    expect(filter({
+      statePaths: ['.cache/uv/db'],
+      mountedContainerPaths: ['/home/dev/.cache/uv/'],
+    }).dropped).toEqual([{ statePath: '.cache/uv/db', mountPath: '/home/dev/.cache/uv' }]);
   });
 });
 
