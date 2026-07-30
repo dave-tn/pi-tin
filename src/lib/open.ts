@@ -646,14 +646,23 @@ export function statePathsForCopyIn(
 // no way to tell which paths are live mounts, skip the snapshot rather than
 // let its host-side rm and rename land on one. Recreating the container (the
 // deferred restart, or any stop) records the mounts and snapshots resume.
+type CopyOutOccasion = 'session-close' | 'restart';
+
 export function statePathsForCopyOut(
   context: WorkspaceContext,
   configChangedSinceStart: boolean,
+  occasion: CopyOutOccasion,
 ): string[] {
   const mountedContainerPaths = readRuntimeMeta(context.wsName)?.mountedContainerPaths;
   if (configChangedSinceStart && mountedContainerPaths === undefined) {
+    // The same skip needs different advice: at session close the remedy is a
+    // future restart, while during a restart the remedy is already underway —
+    // it records the mounts itself, so snapshots resume before the open ends.
+    const resume = occasion === 'restart'
+      ? 'Snapshots resume from this restart.'
+      : 'Restart the workspace to resume snapshots.';
     console.warn(chalk.yellow(
-      `Warning: skipping the workspace_state snapshot for '${context.wsName}' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. Restart the workspace to resume snapshots.`,
+      `Warning: skipping the workspace_state snapshot for '${context.wsName}' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. ${resume}`,
     ));
     return [];
   }
@@ -662,6 +671,46 @@ export function statePathsForCopyOut(
     containerProfile: context.containerProfile,
     mountedContainerPaths,
   }).syncable;
+}
+
+// The teardown half of the restart branch, kept whole with injectable
+// effects so the ordering is a tested property, not executor wiring: the
+// snapshot must complete before the container it reads from is deleted, and
+// the paths must resolve while the runtime meta recording that container's
+// mounts still exists. On a herdr workspace, agents kept working after the
+// last session's close-out snapshot, so its copy is already stale — the same
+// reason auto-stop's stop branch syncs again before its stop. The filter
+// takes the join branch's runtime-drift flag: the container being replaced
+// was started under the pre-drift config, and build drift moves the next
+// image, never a running container's mounts. Best-effort like every sync — a
+// failed snapshot must not block the restart.
+export interface RestartTeardownDeps {
+  syncWorkspaceState: (options: Parameters<typeof syncWorkspaceState>[0]) => Promise<void>;
+  stopAndRemoveContainer: (containerName: string) => Promise<void>;
+}
+
+const defaultRestartTeardownDeps: RestartTeardownDeps = {
+  // The restart runs in the interactive open, so the copy reports progress
+  // like the close-out's does.
+  syncWorkspaceState: (options) =>
+    syncWorkspaceState(options, { report: createSyncProgressReporter('copy-out') }),
+  stopAndRemoveContainer: (containerName) => stopAndRemoveContainer(containerName),
+};
+
+export async function snapshotThenRemoveContainer(
+  context: WorkspaceContext,
+  hasRuntimeDrift: boolean,
+  overrides: Partial<RestartTeardownDeps> = {},
+): Promise<void> {
+  const deps = { ...defaultRestartTeardownDeps, ...overrides };
+  await deps.syncWorkspaceState({
+    containerName: context.containerName,
+    workspaceName: context.wsName,
+    paths: statePathsForCopyOut(context, hasRuntimeDrift, 'restart'),
+    user: context.containerProfile.user,
+    direction: 'copy-out',
+  });
+  await deps.stopAndRemoveContainer(context.containerName);
 }
 
 function startWorkspaceContainer(options: {
@@ -834,7 +883,7 @@ async function finishWorkspaceSession(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: statePathsForCopyOut(context, configChangedSinceStart),
+        paths: statePathsForCopyOut(context, configChangedSinceStart, 'session-close'),
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
@@ -1047,7 +1096,7 @@ export async function openWorkspace(
       case 'restart': {
         emitMountNotices(runtimePlan.notices);
         const runtimeEnv = resolveRuntimeEnv(context);
-        await stopAndRemoveContainer(context.containerName);
+        await snapshotThenRemoveContainer(context, hasRuntimeDrift);
         clearWorkspaceRuntimeState(context.wsName);
         await ensureImageBuiltIfNeeded(context, buildPlan, {
           forceBuild: opts.build === true,
