@@ -664,6 +664,46 @@ export function statePathsForCopyOut(
   }).syncable;
 }
 
+// The teardown half of the restart branch, kept whole with injectable
+// effects so the ordering is a tested property, not executor wiring: the
+// snapshot must complete before the container it reads from is deleted, and
+// the paths must resolve while the runtime meta recording that container's
+// mounts still exists. On a herdr workspace, agents kept working after the
+// last session's close-out snapshot, so its copy is already stale — the same
+// reason auto-stop's stop branch syncs again before its stop. The filter
+// takes the join branch's runtime-drift flag: the container being replaced
+// was started under the pre-drift config, and build drift moves the next
+// image, never a running container's mounts. Best-effort like every sync — a
+// failed snapshot must not block the restart.
+export interface RestartTeardownDeps {
+  syncWorkspaceState: (options: Parameters<typeof syncWorkspaceState>[0]) => Promise<void>;
+  stopAndRemoveContainer: (containerName: string) => Promise<void>;
+}
+
+const defaultRestartTeardownDeps: RestartTeardownDeps = {
+  // The restart runs in the interactive open, so the copy reports progress
+  // like the close-out's does.
+  syncWorkspaceState: (options) =>
+    syncWorkspaceState(options, { report: createSyncProgressReporter('copy-out') }),
+  stopAndRemoveContainer: (containerName) => stopAndRemoveContainer(containerName),
+};
+
+export async function snapshotThenRemoveContainer(
+  context: WorkspaceContext,
+  hasRuntimeDrift: boolean,
+  overrides: Partial<RestartTeardownDeps> = {},
+): Promise<void> {
+  const deps = { ...defaultRestartTeardownDeps, ...overrides };
+  await deps.syncWorkspaceState({
+    containerName: context.containerName,
+    workspaceName: context.wsName,
+    paths: statePathsForCopyOut(context, hasRuntimeDrift),
+    user: context.containerProfile.user,
+    direction: 'copy-out',
+  });
+  await deps.stopAndRemoveContainer(context.containerName);
+}
+
 function startWorkspaceContainer(options: {
   context: WorkspaceContext;
   runtimePlan: RuntimeStartPlan;
@@ -1047,25 +1087,7 @@ export async function openWorkspace(
       case 'restart': {
         emitMountNotices(runtimePlan.notices);
         const runtimeEnv = resolveRuntimeEnv(context);
-        // Snapshot before the teardown deletes the container: on a herdr
-        // workspace, agents kept working after the last session's close-out
-        // snapshot, so its copy is already stale (auto-stop's stop branch
-        // syncs again for the same reason). The container being replaced was
-        // started under the pre-drift config, so the filter takes the same
-        // runtime-drift flag as the join branch — build drift moves the next
-        // image, never a running container's mounts. Best-effort like every
-        // sync: a failed snapshot must not block the restart.
-        await syncWorkspaceState(
-          {
-            containerName: context.containerName,
-            workspaceName: context.wsName,
-            paths: statePathsForCopyOut(context, hasRuntimeDrift),
-            user: context.containerProfile.user,
-            direction: 'copy-out',
-          },
-          { report: createSyncProgressReporter('copy-out') },
-        );
-        await stopAndRemoveContainer(context.containerName);
+        await snapshotThenRemoveContainer(context, hasRuntimeDrift);
         clearWorkspaceRuntimeState(context.wsName);
         await ensureImageBuiltIfNeeded(context, buildPlan, {
           forceBuild: opts.build === true,
