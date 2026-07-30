@@ -481,9 +481,13 @@ export interface SpawnDeadlineOptions {
   // attach is only ever delivered once the close-out's first copy is in
   // flight, so 'die' would kill the snapshot that close-out exists to take.
   // The termination signals drop only this wrapper's listener and let the
-  // deadline-bounded copy finish — a second signal then meets the restored
-  // default disposition and quits — while ^C still dies: an interactive
-  // interrupt of a visible close-out keeps meaning "stop now".
+  // deadline-bounded copy finish — a second occurrence during the same copy
+  // then meets the restored default disposition and quits — while ^C still
+  // dies: an interactive interrupt of a visible close-out keeps meaning
+  // "stop now". The escape hatch is per copy, not per close-out: each path
+  // syncs through its own wrapper with fresh listeners, so a multi-path
+  // close-out can absorb one occurrence of each signal per copy, every one
+  // of them bounded by its own deadline.
   onInterrupt: 'die' | 'abort' | 'finish';
 }
 

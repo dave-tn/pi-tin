@@ -96,7 +96,8 @@ export function guardSessionExit(
         // finish and overwrite what was just armed. Its copies decline this
         // same delivered signal rather than dying of it (the close-out copy
         // runner's 'finish' disposition in container.ts), but the close-out
-        // can still be cut short — a second signal meets the default
+        // can still be cut short — ^C, a copy failure, or a repeat signal
+        // landing where no copy's listener claims it meets the default
         // disposition restored above — so the close-out just run is the
         // insurance that the countdown is armed whatever happens after this
         // return.
