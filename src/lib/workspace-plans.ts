@@ -36,6 +36,10 @@ export type WorkspaceOpenPlan =
   | {
     action: 'restart';
     activeSessionsAfterOpen: 1;
+    // Why a running container is about to be torn down. Null on a pure
+    // --build restart: the user asked for that one, and the build path
+    // already announces itself.
+    restartNotice: string | null;
   }
   // A restart is wanted, but the container may be doing work no session
   // accounts for. The executor queries the running container and hands the
@@ -143,6 +147,10 @@ function unknownContainerStateMessage(workspaceName: string): string {
 
 function deferredChangesWarning(workspaceName: string): string {
   return `Warning: workspace changes will apply on the next restart of '${workspaceName}'.`;
+}
+
+function driftRestartNotice(workspaceName: string): string {
+  return `⚠ Config has changed since '${workspaceName}' started — restarting to apply changes.`;
 }
 
 function workingAgentsWarning(
@@ -254,6 +262,7 @@ export function planRestartIfIdle(options: {
   return {
     action: 'restart',
     activeSessionsAfterOpen: 1,
+    restartNotice: options.hasDrift ? driftRestartNotice(options.workspaceName) : null,
   };
 }
 

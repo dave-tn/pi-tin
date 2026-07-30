@@ -1094,6 +1094,9 @@ export async function openWorkspace(
           configChangedSinceStart: hasRuntimeDrift,
         };
       case 'restart': {
+        if (plan.restartNotice !== null) {
+          console.log(chalk.yellow(plan.restartNotice));
+        }
         emitMountNotices(runtimePlan.notices);
         const runtimeEnv = resolveRuntimeEnv(context);
         await snapshotThenRemoveContainer(context, hasRuntimeDrift);

@@ -1072,12 +1072,26 @@ describe('planRestartIfIdle', () => {
     });
   });
 
-  test('restarts when every agent is idle', () => {
+  // Hand-written literal, not the planner's constant, so a wording
+  // regression fails here.
+  const driftNotice = "⚠ Config has changed since 'demo' started — restarting to apply changes.";
+
+  test('restarts with a notice when every agent is idle', () => {
     expect(planRestartIfIdle({
       workspaceName: 'demo',
       agentStates: { kind: 'states', working: 0 },
       hasDrift: true,
-    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1, restartNotice: driftNotice });
+  });
+
+  // A pure --build restart was asked for explicitly and the build path
+  // announces itself — a config-change notice would be a lie.
+  test('restarts without a notice when the restart was not drift-driven', () => {
+    expect(planRestartIfIdle({
+      workspaceName: 'demo',
+      agentStates: { kind: 'states', working: 0 },
+      hasDrift: false,
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1, restartNotice: null });
   });
 
   // Matches planAutoStopDecision: a query that can never succeed must not
@@ -1087,7 +1101,7 @@ describe('planRestartIfIdle', () => {
       workspaceName: 'demo',
       agentStates: { kind: 'unavailable' },
       hasDrift: true,
-    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1, restartNotice: driftNotice });
   });
 
   test('restarts on a non-herdr workspace', () => {
@@ -1095,7 +1109,7 @@ describe('planRestartIfIdle', () => {
       workspaceName: 'demo',
       agentStates: { kind: 'not-applicable' },
       hasDrift: true,
-    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1 });
+    })).toEqual({ action: 'restart', activeSessionsAfterOpen: 1, restartNotice: driftNotice });
   });
 });
 
@@ -1125,7 +1139,7 @@ describe('resolveOpenPlan', () => {
     const plans = [
       { action: 'start' as const, activeSessionsAfterOpen: 1 as const, clearStaleRuntimeState: false, deleteStoppedContainer: false },
       { action: 'join' as const, activeSessionsAfterOpen: 2, deferredRestartMessage: null },
-      { action: 'restart' as const, activeSessionsAfterOpen: 1 as const },
+      { action: 'restart' as const, activeSessionsAfterOpen: 1 as const, restartNotice: null },
       { action: 'refuse' as const, message: 'nope' },
     ];
 
