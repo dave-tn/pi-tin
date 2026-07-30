@@ -38,6 +38,7 @@ import {
   getContainerIpv4,
   deleteContainer,
   isContainerSubprocessTimeout,
+  spawnContainerCopyForCloseOut,
   type VolumeMount,
   type ExecResult,
 } from './container.js';
@@ -95,6 +96,7 @@ import {
   type WorkspaceOpenPlan,
 } from './workspace-plans.js';
 import { isInteractiveSession, promptConfirm } from './confirmation.js';
+import { guardSessionExit } from './session-exit.js';
 import { CliError, EXIT } from './cli-errors.js';
 
 const KEEPALIVE_COMMAND = [
@@ -823,6 +825,11 @@ async function finishWorkspaceSession(
 
     // Container is still running: snapshot workspace state out now, before any
     // stop/delete path (auto-stop, or the next fresh start) can tear it down.
+    //
+    // The close-out copy runner, not the default: a terminating signal queued
+    // behind the attach is delivered at this copy's first await — the loop
+    // never turns before then — and the default runner answers it by killing
+    // the copy, losing the very snapshot this close-out exists to take.
     await syncWorkspaceState(
       {
         containerName: context.containerName,
@@ -831,39 +838,58 @@ async function finishWorkspaceSession(
         user: context.containerProfile.user,
         direction: 'copy-out',
       },
-      { report: createSyncProgressReporter('copy-out') },
+      { report: createSyncProgressReporter('copy-out'), copy: spawnContainerCopyForCloseOut },
     );
 
-    const runtime = reconcileWorkspaceRuntimeState(context.wsName);
-    if (runtime.runtimeState !== 'ok') {
-      return 'Session closed.';
-    }
-
-    if (runtime.activeSessions.length > 0) {
-      return `Session closed. Active sessions remaining: ${runtime.activeSessions.length}`;
-    }
-
-    const timeoutValue = readStopTimeout(context.wsName, context.workspace.stopAfterLastSession);
-    const timeoutMs = parseDurationMs(timeoutValue);
-    const deadlineMs = Date.now() + timeoutMs;
-    const helperPid = spawnAutoStopHelper(context.wsName, deadlineMs);
-
-    armShutdown(context.wsName, {
-      armedAt: new Date().toISOString(),
-      deadlineMs,
-      helperPid,
-    });
-
-    if (helperPid === undefined) {
-      return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
-    }
-
-    // The helper's stop decision reads attach from the workspace config (see
-    // gatherHerdrStopContext), so the message keys off the same field.
-    return context.workspace.attach === 'herdr'
-      ? 'Last session closed. Workspace will stop when agents monitored by herdr stop.'
-      : `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+    return armAutoStopForClosedSession(context);
   });
+}
+
+// The tail of a session close-out, kept whole and synchronous so the signal
+// path can run it too (see closeSessionOnSignal).
+function armAutoStopForClosedSession(context: WorkspaceContext): string {
+  const runtime = reconcileWorkspaceRuntimeState(context.wsName);
+  if (runtime.runtimeState !== 'ok') {
+    return 'Session closed.';
+  }
+
+  if (runtime.activeSessions.length > 0) {
+    return `Session closed. Active sessions remaining: ${runtime.activeSessions.length}`;
+  }
+
+  const timeoutValue = readStopTimeout(context.wsName, context.workspace.stopAfterLastSession);
+  const timeoutMs = parseDurationMs(timeoutValue);
+  const deadlineMs = Date.now() + timeoutMs;
+  const helperPid = spawnAutoStopHelper(context.wsName, deadlineMs);
+
+  armShutdown(context.wsName, {
+    armedAt: new Date().toISOString(),
+    deadlineMs,
+    helperPid,
+  });
+
+  if (helperPid === undefined) {
+    return `Last session closed. Failed to schedule auto-stop. Stop it manually with 'pi-tin stop ${context.wsName}'.`;
+  }
+
+  // The helper's stop decision reads attach from the workspace config (see
+  // gatherHerdrStopContext), so the message keys off the same field.
+  return context.workspace.attach === 'herdr'
+    ? 'Last session closed. Workspace will stop when agents monitored by herdr stop.'
+    : `Last session closed. Workspace will stop in ${formatDurationMs(timeoutMs)}.`;
+}
+
+// The close-out a terminating signal gets. Everything finishWorkspaceSession
+// does that a signal handler can afford: no workspace lock (it is acquired by
+// polling, which a handler cannot await, and the lock this process already
+// holds could never be re-acquired anyway), no container-state probe, and no
+// workspace-state snapshot — that needs subprocesses this process is about to
+// stop being able to supervise. Arming an auto-stop against a workspace that
+// has since stopped is harmless: the helper bails on any non-running
+// container.
+function closeSessionOnSignal(context: WorkspaceContext, sessionId: string): void {
+  unregisterSession(context.wsName, sessionId);
+  armAutoStopForClosedSession(context);
 }
 
 // The one effect between the two open planners: only 'restart-if-idle' pays
@@ -915,6 +941,18 @@ export async function openWorkspace(
   const buildPlan = computeBuildPlan(context);
   const runtimePlan = computeRuntimeStartPlan(context);
   const sessionId = crypto.randomUUID();
+
+  // Armed before the container exists, not just before the attach: a fresh
+  // start writes runtime meta and only then probes for exec-readiness, so a
+  // terminating signal in that stretch would otherwise leave a running
+  // container with no session and no auto-stop. The close-out reconciles
+  // rather than assuming a session, so it is a no-op until there is one.
+  //
+  // Deliberately not released on the paths that throw out of here (a refusal,
+  // a failed build, a failed copy-in): the listeners are unref'd, so they
+  // cannot hold the process open, and a signal arriving while that error
+  // unwinds should still close out whatever session the throw left behind.
+  const sessionExit = guardSessionExit(() => closeSessionOnSignal(context, sessionId));
 
   const opened = await withWorkspaceLock(context.wsName, async () => {
     const runtime = reconcileWorkspaceRuntimeState(context.wsName);
@@ -1091,7 +1129,13 @@ export async function openWorkspace(
       });
     }
   } finally {
+    // Handed over before the first await, so a signal queued behind the
+    // attach's blocking spawnSync — closing the terminal window is exactly
+    // that — lets this close-out finish, snapshot included, instead of
+    // replacing it with the cut-down one.
+    sessionExit.handOver();
     const exitMessage = await finishWorkspaceSession(context, sessionId, opened.configChangedSinceStart);
+    sessionExit.release();
     console.log(exitMessage);
   }
 

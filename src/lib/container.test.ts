@@ -1,4 +1,8 @@
 import { describe, test, expect } from 'bun:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import {
   containerNameFor,
   imageTagFor,
@@ -456,6 +460,100 @@ describe('bounded container subprocess options', () => {
     expect(isContainerSubprocessTimeout(caught)).toBe(true);
     expect(isContainerSubprocessAborted(caught)).toBe(false);
   });
+
+  // The session close-out runs on this path. A terminating signal queued
+  // behind the interactive attach is delivered exactly when the close-out's
+  // first copy is in flight, so 'die' would kill the snapshot the close-out
+  // exists to take — 'finish' must let the copy complete instead. A resolved
+  // promise is the proof the child survived: a killed child rejects with
+  // "was killed by SIGKILL".
+  test("onInterrupt 'finish' lets a termination signal pass and the copy complete", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-finish-pass-'));
+    const flagPath = path.join(tmpDir, 'flag');
+    try {
+      const listenersBefore = {
+        SIGTERM: process.listenerCount('SIGTERM'),
+        SIGHUP: process.listenerCount('SIGHUP'),
+      };
+      // The child exits only once the flag file appears, so however stalled
+      // the timers below get, it cannot finish first — a child gone before
+      // the raise would have settled the wrapper, leaving the real SIGTERM
+      // to meet the default disposition and kill the whole test run.
+      const pending = spawnProcessGroupWithDeadline(
+        'sh',
+        ['-c', `until [ -e ${flagPath} ]; do sleep 0.05; done`],
+        { timeoutMs: 30_000, onInterrupt: 'finish' },
+      );
+
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      process.kill(process.pid, 'SIGTERM');
+      // The kill returns before the JS listener runs — the runtime delivers
+      // the emit on a later loop turn — so yield before looking at the
+      // listeners.
+      await new Promise((resolve) => { setTimeout(resolve, 100); });
+      // Only its own listener drops — a second SIGTERM must meet the default
+      // disposition and quit, while the other termination signals stay
+      // claimed until the copy settles.
+      expect(process.listenerCount('SIGTERM')).toBe(listenersBefore.SIGTERM);
+      expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP + 1);
+
+      // Release the child; resolution is the proof it survived the signal —
+      // a killed child would reject with "was killed by SIGKILL".
+      fs.writeFileSync(flagPath, 'done');
+      await pending;
+      expect(process.listenerCount('SIGHUP')).toBe(listenersBefore.SIGHUP);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("onInterrupt 'finish' still classifies its own deadline as a timeout", async () => {
+    let caught: unknown;
+    try {
+      await spawnProcessGroupWithDeadline('sh', ['-c', 'sleep 10'], {
+        timeoutMs: 1,
+        onInterrupt: 'finish',
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isContainerSubprocessTimeout(caught)).toBe(true);
+  });
+
+  // ^C is not a deliberate-termination signal: an interactive interrupt of a
+  // visible close-out keeps meaning "stop now", so 'finish' must leave the
+  // SIGINT disposition as 'die' — kill the copy, re-raise, take pi-tin down.
+  // Driven in a subprocess because the re-raise is fatal by design.
+  test("onInterrupt 'finish' still dies on ^C, copy killed", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-finish-sigint-'));
+    const markerPath = path.join(tmpDir, 'copied');
+    const scriptPath = path.join(tmpDir, 'close-out.ts');
+    fs.writeFileSync(scriptPath, `
+import { spawnContainerCopyForCloseOut } from '${path.join(import.meta.dir, 'container.ts')}';
+await spawnContainerCopyForCloseOut('sh', ['-c', 'sleep 10 && echo done > ${markerPath}'], {
+  encoding: 'utf-8',
+  stdio: ['pipe', 'pipe', 'pipe'],
+  timeout: 30_000,
+  killSignal: 'SIGKILL',
+  maxBuffer: 1_048_576,
+});
+`);
+
+    try {
+      const child = spawn(process.execPath, [scriptPath], { stdio: 'ignore' });
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => { child.on('exit', (code, signal) => { resolve({ code, signal }); }); },
+      );
+      await new Promise((resolve) => { setTimeout(resolve, 1_000); });
+      child.kill('SIGINT');
+      const exit = await exited;
+
+      expect(exit.code === 130 || exit.signal === 'SIGINT').toBe(true);
+      expect(fs.existsSync(markerPath)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   test('execContainerCommand is bounded by default', () => {
     const { calls, run } = createRunCapture();

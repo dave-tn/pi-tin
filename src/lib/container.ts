@@ -476,7 +476,19 @@ export interface SpawnDeadlineOptions {
   // EABORTED so the caller can continue (the agent-install step treats ^C as
   // "skip the install", not "kill the open"); the deliberate-termination
   // signals (SIGTERM/SIGHUP/SIGQUIT) still die.
-  onInterrupt: 'die' | 'abort';
+  // 'finish' is for the session close-out's copies, which ARE the response
+  // to a deliberate termination: a SIGHUP queued behind the interactive
+  // attach is only ever delivered once the close-out's first copy is in
+  // flight, so 'die' would kill the snapshot that close-out exists to take.
+  // The termination signals drop only this wrapper's listener and let the
+  // deadline-bounded copy finish — a second occurrence during the same copy
+  // then meets the restored default disposition and quits — while ^C still
+  // dies: an interactive interrupt of a visible close-out keeps meaning
+  // "stop now". The escape hatch is per copy, not per close-out: each path
+  // syncs through its own wrapper with fresh listeners, so a multi-path
+  // close-out can absorb one occurrence of each signal per copy, every one
+  // of them bounded by its own deadline.
+  onInterrupt: 'die' | 'abort' | 'finish';
 }
 
 // spawn-based equivalent of execFileSync + timeout + SIGKILL, with one
@@ -519,8 +531,25 @@ export function spawnProcessGroupWithDeadline(
       for (const [signal, listener] of listeners) process.removeListener(signal, listener);
       listeners.clear();
     };
+    // Drop one signal's own listener while keeping the rest armed, so the
+    // next occurrence of that signal reaches the default disposition.
+    const dropOwnListener = (signal: NodeJS.Signals): void => {
+      const self = listeners.get(signal);
+      if (self !== undefined) {
+        process.removeListener(signal, self);
+        listeners.delete(signal);
+      }
+    };
     for (const signal of SPAWN_INTERRUPTS) {
       const listener = (): void => {
+        if (options.onInterrupt === 'finish' && signal !== 'SIGINT') {
+          // The close-out disposition: this copy is the close-out's own work,
+          // already bounded by the deadline above, so a deliberate-termination
+          // signal lets it finish rather than killing it. Dropping only this
+          // listener keeps the escape hatch: a second signal quits outright.
+          dropOwnListener(signal);
+          return;
+        }
         killProcessGroup(child, 'SIGKILL');
         if (options.onInterrupt === 'abort' && signal === 'SIGINT') {
           aborted = true;
@@ -528,11 +557,7 @@ export function spawnProcessGroupWithDeadline(
           // disposition and still quits pi-tin — the caller is meant to keep
           // going after the first one, not to swallow every interrupt until
           // the child's exit arrives.
-          const self = listeners.get(signal);
-          if (self !== undefined) {
-            process.removeListener(signal, self);
-            listeners.delete(signal);
-          }
+          dropOwnListener(signal);
           return;
         }
         // Removing our listeners first restores the default disposition, so
@@ -579,6 +604,12 @@ export function spawnProcessGroupWithDeadline(
 // shapes; production callers go through streamToContainer/copyFromContainer.
 export const spawnContainerCopy: ContainerCopyRunner = (file, args, options) =>
   spawnProcessGroupWithDeadline(file, args, { timeoutMs: options.timeout, onInterrupt: 'die' });
+
+// The session close-out's copy runner (see 'finish' above): the snapshot a
+// terminating signal would otherwise kill mid-copy is exactly what the
+// close-out exists to take, so it declines the signal and finishes.
+export const spawnContainerCopyForCloseOut: ContainerCopyRunner = (file, args, options) =>
+  spawnProcessGroupWithDeadline(file, args, { timeoutMs: options.timeout, onInterrupt: 'finish' });
 
 function runContainerSubprocess(
   args: string[],
