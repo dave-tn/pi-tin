@@ -646,14 +646,23 @@ export function statePathsForCopyIn(
 // no way to tell which paths are live mounts, skip the snapshot rather than
 // let its host-side rm and rename land on one. Recreating the container (the
 // deferred restart, or any stop) records the mounts and snapshots resume.
+type CopyOutOccasion = 'session-close' | 'restart';
+
 export function statePathsForCopyOut(
   context: WorkspaceContext,
   configChangedSinceStart: boolean,
+  occasion: CopyOutOccasion,
 ): string[] {
   const mountedContainerPaths = readRuntimeMeta(context.wsName)?.mountedContainerPaths;
   if (configChangedSinceStart && mountedContainerPaths === undefined) {
+    // The same skip needs different advice: at session close the remedy is a
+    // future restart, while during a restart the remedy is already underway —
+    // it records the mounts itself, so snapshots resume before the open ends.
+    const resume = occasion === 'restart'
+      ? 'Snapshots resume from this restart.'
+      : 'Restart the workspace to resume snapshots.';
     console.warn(chalk.yellow(
-      `Warning: skipping the workspace_state snapshot for '${context.wsName}' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. Restart the workspace to resume snapshots.`,
+      `Warning: skipping the workspace_state snapshot for '${context.wsName}' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. ${resume}`,
     ));
     return [];
   }
@@ -697,7 +706,7 @@ export async function snapshotThenRemoveContainer(
   await deps.syncWorkspaceState({
     containerName: context.containerName,
     workspaceName: context.wsName,
-    paths: statePathsForCopyOut(context, hasRuntimeDrift),
+    paths: statePathsForCopyOut(context, hasRuntimeDrift, 'restart'),
     user: context.containerProfile.user,
     direction: 'copy-out',
   });
@@ -874,7 +883,7 @@ async function finishWorkspaceSession(
       {
         containerName: context.containerName,
         workspaceName: context.wsName,
-        paths: statePathsForCopyOut(context, configChangedSinceStart),
+        paths: statePathsForCopyOut(context, configChangedSinceStart, 'session-close'),
         user: context.containerProfile.user,
         direction: 'copy-out',
       },

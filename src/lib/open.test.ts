@@ -413,6 +413,42 @@ describe('statePathsForCopyIn', () => {
   });
 });
 
+// Shared by the statePathsForCopyOut and snapshotThenRemoveContainer suites —
+// both drive the same copy-out filter against recorded runtime meta, and a
+// drifted copy of either fixture would leave the two suites silently testing
+// different containers.
+const writeCopyOutMetaFixture = (tmpDir: string, mountedContainerPaths: string[] | undefined): void => {
+  const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'meta.json'), JSON.stringify({
+    startedAt: '2026-07-29T10:00:00.000Z',
+    buildHash: 'build',
+    runtimeHash: 'runtime',
+    ...(mountedContainerPaths === undefined ? {} : { mountedContainerPaths }),
+  }));
+};
+
+// No Claude Code in tools and attach: shell — the current config derives no
+// managed mounts at all, so only the container's own record can save these
+// paths from the copy-out.
+const copyOutContextFor = (): Parameters<typeof statePathsForCopyOut>[0] => {
+  const workspace = validateWorkspace({ profile: 'node-dev', projects: [] });
+  const containerProfile = validateContainerProfile({
+    description: 'fixture',
+    base_image: 'node:22',
+    user: 'dev',
+    workspace_state: ['.local/share/claude', '.zsh_history'],
+  });
+  return {
+    wsName: 'demo',
+    containerName: containerNameFor('demo'),
+    imageTag: imageTagFor('demo'),
+    workspace,
+    containerProfile,
+    resources: resolveResources(containerProfile),
+  };
+};
+
 // Copy-out is the half that can destroy a live mount from the host side (its
 // promote step is an rm + rename over the mount's host dir), and it runs
 // against a container this session may only have joined — so which paths it
@@ -436,38 +472,6 @@ describe('statePathsForCopyOut', () => {
     }
   });
 
-  const writeMetaFixture = (mountedContainerPaths: string[] | undefined): void => {
-    const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
-    fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.writeFileSync(path.join(runtimeDir, 'meta.json'), JSON.stringify({
-      startedAt: '2026-07-29T10:00:00.000Z',
-      buildHash: 'build',
-      runtimeHash: 'runtime',
-      ...(mountedContainerPaths === undefined ? {} : { mountedContainerPaths }),
-    }));
-  };
-
-  // No Claude Code in tools and attach: shell — the current config derives no
-  // managed mounts at all, so only the container's own record can save these
-  // paths from the copy-out.
-  const contextFor = (): Parameters<typeof statePathsForCopyOut>[0] => {
-    const workspace = validateWorkspace({ profile: 'node-dev', projects: [] });
-    const containerProfile = validateContainerProfile({
-      description: 'fixture',
-      base_image: 'node:22',
-      user: 'dev',
-      workspace_state: ['.local/share/claude', '.zsh_history'],
-    });
-    return {
-      wsName: 'demo',
-      containerName: containerNameFor('demo'),
-      imageTag: imageTagFor('demo'),
-      workspace,
-      containerProfile,
-      resources: resolveResources(containerProfile),
-    };
-  };
-
   const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
     const warnings: string[] = [];
     const warn = spyOn(console, 'warn').mockImplementation((message: unknown) => {
@@ -481,18 +485,18 @@ describe('statePathsForCopyOut', () => {
   };
 
   test('drops a path the running container still has mounted, whatever config now says', () => {
-    writeMetaFixture(['/home/dev/.local/share/claude', '/home/dev/.local/bin']);
+    writeCopyOutMetaFixture(tmpDir, ['/home/dev/.local/share/claude', '/home/dev/.local/bin']);
 
-    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(copyOutContextFor(), true, 'session-close'));
 
     expect(result).toEqual(['.zsh_history']);
     expect(warnings).toEqual([]);
   });
 
   test('a container matching its config still syncs every unmounted path', () => {
-    writeMetaFixture(undefined);
+    writeCopyOutMetaFixture(tmpDir, undefined);
 
-    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), false));
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(copyOutContextFor(), false, 'session-close'));
 
     expect(result).toEqual(['.local/share/claude', '.zsh_history']);
     expect(warnings).toEqual([]);
@@ -502,9 +506,9 @@ describe('statePathsForCopyOut', () => {
   // change: the config-derived fallback would clear .local/share/claude to
   // sync even though the container may well still mount it.
   test('skips the snapshot when config has changed and the container recorded no mounts', () => {
-    writeMetaFixture(undefined);
+    writeCopyOutMetaFixture(tmpDir, undefined);
 
-    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(contextFor(), true));
+    const { result, warnings } = captureWarnings(() => statePathsForCopyOut(copyOutContextFor(), true, 'session-close'));
 
     expect(result).toEqual([]);
     expect(warnings).toHaveLength(1);
@@ -538,35 +542,6 @@ describe('snapshotThenRemoveContainer', () => {
     }
   });
 
-  const writeMetaFixture = (mountedContainerPaths: string[] | undefined): void => {
-    const runtimeDir = path.join(tmpDir, 'pi-tin', 'state', 'runtime', 'demo');
-    fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.writeFileSync(path.join(runtimeDir, 'meta.json'), JSON.stringify({
-      startedAt: '2026-07-29T10:00:00.000Z',
-      buildHash: 'build',
-      runtimeHash: 'runtime',
-      ...(mountedContainerPaths === undefined ? {} : { mountedContainerPaths }),
-    }));
-  };
-
-  const contextFor = (): Parameters<typeof snapshotThenRemoveContainer>[0] => {
-    const workspace = validateWorkspace({ profile: 'node-dev', projects: [] });
-    const containerProfile = validateContainerProfile({
-      description: 'fixture',
-      base_image: 'node:22',
-      user: 'dev',
-      workspace_state: ['.local/share/claude', '.zsh_history'],
-    });
-    return {
-      wsName: 'demo',
-      containerName: containerNameFor('demo'),
-      imageTag: imageTagFor('demo'),
-      workspace,
-      containerProfile,
-      resources: resolveResources(containerProfile),
-    };
-  };
-
   type RestartSyncOptions = Parameters<RestartTeardownDeps['syncWorkspaceState']>[0];
 
   const createTeardownHarness = (): {
@@ -592,10 +567,10 @@ describe('snapshotThenRemoveContainer', () => {
   };
 
   test('snapshots workspace state out, mount-filtered, before the container is removed', async () => {
-    writeMetaFixture(['/home/dev/.local/share/claude']);
+    writeCopyOutMetaFixture(tmpDir, ['/home/dev/.local/share/claude']);
     const harness = createTeardownHarness();
 
-    await snapshotThenRemoveContainer(contextFor(), true, harness.deps);
+    await snapshotThenRemoveContainer(copyOutContextFor(), true, harness.deps);
 
     expect(harness.calls).toEqual(['sync-copy-out', 'stop-and-remove']);
     expect(harness.syncOptions).toEqual([{
@@ -611,7 +586,7 @@ describe('snapshotThenRemoveContainer', () => {
   // here would fall back to config-derived mounts that no longer describe
   // the drifted container, and sync both paths.
   test('a drifted container with no mount record skips the snapshot but is still removed', async () => {
-    writeMetaFixture(undefined);
+    writeCopyOutMetaFixture(tmpDir, undefined);
     const harness = createTeardownHarness();
     const warnings: string[] = [];
     const warn = spyOn(console, 'warn').mockImplementation((message: unknown) => {
@@ -619,7 +594,7 @@ describe('snapshotThenRemoveContainer', () => {
     });
 
     try {
-      await snapshotThenRemoveContainer(contextFor(), true, harness.deps);
+      await snapshotThenRemoveContainer(copyOutContextFor(), true, harness.deps);
     } finally {
       warn.mockRestore();
     }
@@ -632,7 +607,13 @@ describe('snapshotThenRemoveContainer', () => {
       user: 'dev',
       direction: 'copy-out',
     }]);
+    // Hand-written literal, not the session-close variant: the close-out's
+    // "Restart the workspace to resume snapshots" advice is stale here — the
+    // restart it asks for is the command already running.
     expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      "Warning: skipping the workspace_state snapshot for 'demo' — its container predates pi-tin's record of which paths it mounts, and the config has changed since it started. Snapshots resume from this restart.",
+    );
   });
 });
 
