@@ -12,6 +12,7 @@ import { KNOWN_AGENTS, defaultProfileNameFor, toolDisplayName, toWorkspaceTool }
 import type { KnownAgent } from '../lib/agents.js';
 import { listAgentProfiles, createAgentProfile } from '../lib/agent-profiles.js';
 import { agentProfileNameError } from '../lib/agent-discovery.js';
+import { workspaceNameLengthError } from '../lib/container.js';
 import {
   ensureWorkspaceTmuxDir,
   getHostTmuxConfigPath,
@@ -45,6 +46,11 @@ async function promptWorkspaceName(nameArg: string | undefined): Promise<string>
       console.error(chalk.red(invalidWorkspaceNameMessage(nameArg)));
       process.exit(1);
     }
+    const lengthError = workspaceNameLengthError(nameArg);
+    if (lengthError !== null) {
+      console.error(chalk.red(lengthError));
+      process.exit(1);
+    }
     if (workspaceExists(nameArg)) {
       console.error(
         chalk.red(`Workspace '${nameArg}' already exists.`),
@@ -60,6 +66,8 @@ async function promptWorkspaceName(nameArg: string | undefined): Promise<string>
       const trimmed = value.trim();
       if (trimmed.length === 0) return 'Name is required';
       if (!isValidWorkspaceName(trimmed)) return WORKSPACE_NAME_RULE;
+      const lengthError = workspaceNameLengthError(trimmed);
+      if (lengthError !== null) return lengthError;
       if (workspaceExists(trimmed)) return `Workspace '${trimmed}' already exists`;
       return true;
     },

@@ -106,7 +106,7 @@ On first run, `pt` will offer to install the `container` CLI if it's missing; th
 > [!NOTE]
 > First run can involve downloading container images and package installs (potentially a few GB), so it may take a few minutes. Subsequent runs are fast; entering a workspace is sub-second.
 
-Workspace names must be lowercase alphanumeric, and may contain `.`, `-`, or `_` (e.g. `my-project`, `app_v2`).
+Workspace names must be lowercase alphanumeric, and may contain `.`, `-`, or `_` (e.g. `my-project`, `app_v2`). They are also capped at 56 characters, because the name becomes the workspace's container name (`pi-tin-<workspace>`) and its network hostname, which the container runtime limits to 63.
 
 Need to be explicit? `pi-tin create <name>` builds a workspace up front, `pi-tin open <name>` opens one by name from anywhere, and `pi-tin --build` forces an image rebuild on the matched workspace's next start.
 

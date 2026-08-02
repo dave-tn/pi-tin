@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import { getWorkspacesDir, isWithinDir } from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { parseYaml } from './yaml.js';
+import { workspaceNameLengthError } from './container.js';
 import { validateWorkspace } from './validators.js';
 import type { Workspace } from './validators.js';
 
@@ -65,6 +66,10 @@ export function assertValidWorkspaceName(name: string): void {
 
 export function writeWorkspace(name: string, workspace: Workspace): void {
   assertValidWorkspaceName(name);
+  const lengthError = workspaceNameLengthError(name);
+  if (lengthError !== null) {
+    throw new Error(lengthError);
+  }
   const wsPath = path.join(getWorkspacesDir(), `${name}.yaml`);
   atomicWriteFile(wsPath, YAML.stringify(workspace));
 }

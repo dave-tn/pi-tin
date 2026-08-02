@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import {
   containerNameFor,
   imageTagFor,
+  workspaceNameLengthError,
   isPiTinContainerId,
   workspaceNameFromContainerId,
   isPiTinImageTag,
@@ -66,6 +67,34 @@ describe('workspace naming helpers', () => {
     expect(workspaceNameFromContainerId('postgres')).toBe('postgres');
     expect(isPiTinImageTag('node:slim')).toBe(false);
     expect(workspaceNameFromImageTag('node:slim')).toBe('node:slim');
+  });
+});
+
+describe('workspaceNameLengthError', () => {
+  // The runtime rejects a 64-character container name, so the longest workspace
+  // name that still works is 63 minus the prefix. Spelled out rather than
+  // derived from the constants so a change to either is caught here.
+  const longestValid = 'a'.repeat(56);
+
+  test('accepts the longest name that still fits the container name limit', () => {
+    expect(containerNameFor(longestValid)).toHaveLength(63);
+    expect(workspaceNameLengthError(longestValid)).toBeNull();
+  });
+
+  test('rejects one character beyond the limit', () => {
+    const tooLong = `${longestValid}a`;
+    expect(containerNameFor(tooLong)).toHaveLength(64);
+
+    const error = workspaceNameLengthError(tooLong);
+    expect(error).not.toBeNull();
+    expect(error).toContain(tooLong);
+    expect(error).toContain('64');
+    expect(error).toContain('63');
+    expect(error).toContain('56');
+  });
+
+  test('accepts ordinary names', () => {
+    expect(workspaceNameLengthError('my-ws')).toBeNull();
   });
 });
 

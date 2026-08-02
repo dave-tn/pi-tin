@@ -147,6 +147,31 @@ export function imageTagFor(workspaceName: string): string {
   return `${PI_TIN_PREFIX}${workspaceName}`;
 }
 
+// The runtime rejects container names longer than this. It is the DNS label
+// limit, and applies because the name doubles as the container's network
+// hostname — so it holds regardless of runtime version.
+const MAX_CONTAINER_NAME_LENGTH = 63;
+
+/** Longest workspace name that still yields a usable container name. */
+const MAX_WORKSPACE_NAME_LENGTH = MAX_CONTAINER_NAME_LENGTH - PI_TIN_PREFIX.length;
+
+/**
+ * Why `workspaceName` is too long to back a container, or null when it fits.
+ * Enforced where workspaces are written rather than in isValidWorkspaceName so
+ * that a name from an older pi-tin stays listable and deletable.
+ */
+export function workspaceNameLengthError(workspaceName: string): string | null {
+  const containerName = containerNameFor(workspaceName);
+  if (containerName.length <= MAX_CONTAINER_NAME_LENGTH) {
+    return null;
+  }
+  return (
+    `Workspace name '${workspaceName}' is too long: it makes a ${containerName.length}-character ` +
+    `container name, but the limit is ${MAX_CONTAINER_NAME_LENGTH}. ` +
+    `Use ${MAX_WORKSPACE_NAME_LENGTH} characters or fewer.`
+  );
+}
+
 export function isPiTinContainerId(id: string): boolean {
   return id.startsWith(PI_TIN_PREFIX);
 }

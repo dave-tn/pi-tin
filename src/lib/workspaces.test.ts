@@ -351,4 +351,24 @@ describe('writeWorkspace name validation', () => {
     expect(() => loadWorkspace('foo/bar')).toThrow(invalidNameMessage('foo/bar'));
     expect(() => loadWorkspace('MyProject')).toThrow(invalidNameMessage('MyProject'));
   });
+
+  test('rejects a name too long to back a container', () => {
+    expect(() => writeWorkspace('a'.repeat(56), baseWorkspace)).not.toThrow();
+    expect(() => writeWorkspace('a'.repeat(57), baseWorkspace)).toThrow(
+      /too long.*64-character container name.*limit is 63/,
+    );
+  });
+
+  // The length guard deliberately lives here and not in the shared name rule,
+  // so a workspace written by an older pi-tin — before the guard existed —
+  // does not become impossible to remove.
+  test('an over-long workspace from an older pi-tin stays loadable and deletable', () => {
+    const legacyName = 'a'.repeat(60);
+    const wsPath = path.join(tmpDir, 'pi-tin', 'workspaces', `${legacyName}.yaml`);
+    fs.writeFileSync(wsPath, YAML.stringify(baseWorkspace));
+
+    expect(loadWorkspace(legacyName).profile).toBe('default');
+    expect(() => deleteWorkspace(legacyName)).not.toThrow();
+    expect(fs.existsSync(wsPath)).toBe(false);
+  });
 });
