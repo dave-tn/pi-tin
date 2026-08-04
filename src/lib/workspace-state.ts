@@ -22,8 +22,9 @@ import type { ContainerProfile, Workspace } from './validators.js';
 // lives: copied *in* when a fresh container starts, copied *out* when a
 // session closes. It is not a live mount — see README → Workspace state.
 // The same host tree also backs the *managed workspace-state mounts*
-// (native-agent installs, herdr session state — see managedInstallMountPaths
-// below), which are live mounts and are never synced here.
+// (native-agent installs, herdr session and detection state — see
+// managedInstallMountPaths below), which are live mounts and are never synced
+// here.
 
 export type WorkspaceStateDirection = 'copy-in' | 'copy-out';
 
@@ -100,17 +101,24 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
  * Home-relative dirs live-mounted into the container from the workspace-state
  * dir: native-agent install dirs (the agents' own auto-updaters write there,
  * and the mount persists every update across container lives with no
- * copying), plus, for herdr workspaces, the server binary's bin dir and the
- * `~/.config/herdr` session/restore state — live so it survives hard kills
- * and wedged runtimes, where a teardown-time snapshot does not. Deduped:
- * `.local/bin` is shared by Claude Code and herdr. Keyed off workspace config
- * (attach/tools), never the per-invocation attach override.
+ * copying), plus, for herdr workspaces, the server binary's bin dir, the
+ * `~/.config/herdr` session/restore state, and the `~/.local/state/herdr`
+ * state dir — live so they survive hard kills and wedged runtimes, where a
+ * teardown-time snapshot does not. The state dir holds herdr's downloaded
+ * agent-detection manifests (plus announcement and plugin state). herdr
+ * refetches those from herdr.dev at every server start regardless, so the
+ * mount saves no traffic; it means a start that cannot reach herdr.dev keeps
+ * the last manifests it fetched instead of falling back to the older set
+ * bundled in the binary. Deduped: `.local/bin` is shared by Claude Code and
+ * herdr. Keyed off workspace config (attach/tools), never the per-invocation
+ * attach override.
  */
 export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | 'tools'>): string[] {
   const installDirs = nativeInstallTargets(workspace.tools).flatMap(
     (target) => target.install.persistDirs,
   );
-  const herdrDirs = workspace.attach === 'herdr' ? ['.local/bin', '.config/herdr'] : [];
+  const herdrDirs =
+    workspace.attach === 'herdr' ? ['.local/bin', '.config/herdr', '.local/state/herdr'] : [];
   return [...new Set([...installDirs, ...herdrDirs])];
 }
 

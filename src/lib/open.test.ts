@@ -267,7 +267,7 @@ describe('computeRuntimeStartPlan sshd', () => {
   // The host dirs are created only when a container actually starts, so
   // resolving a plan for a join (or a refusal) leaves no empty state dirs
   // behind.
-  test('attach: herdr mounts the herdr state dir and the server bin dir, creating neither', () => {
+  test('attach: herdr mounts the herdr state dirs and the server bin dir, creating none', () => {
     const runtimePlan = planFor({ attach: 'herdr' });
 
     const stateRoot = path.join(tmpDir, 'pi-tin', 'workspace-state', 'demo');
@@ -279,7 +279,12 @@ describe('computeRuntimeStartPlan sshd', () => {
       host: path.join(stateRoot, '.local', 'bin'),
       container: '/home/dev/.local/bin',
     });
-    expect(runtimePlan.managedStateMountPaths).toEqual(['.local/bin', '.config/herdr']);
+    expect(runtimePlan.volumes).toContainEqual({
+      host: path.join(stateRoot, '.local', 'state', 'herdr'),
+      container: '/home/dev/.local/state/herdr',
+    });
+    expect(runtimePlan.managedStateMountPaths)
+      .toEqual(['.local/bin', '.config/herdr', '.local/state/herdr']);
     expect(fs.existsSync(stateRoot)).toBe(false);
   });
 
@@ -304,6 +309,7 @@ describe('computeRuntimeStartPlan sshd', () => {
       '.local/share/claude',
       '.local/bin',
       '.config/herdr',
+      '.local/state/herdr',
     ]);
     expect(runtimePlan.volumes.filter((volume) => volume.container === '/home/dev/.local/bin'))
       .toEqual([{ host: path.join(stateRoot, '.local', 'bin'), container: '/home/dev/.local/bin' }]);
@@ -323,7 +329,7 @@ describe('computeRuntimeStartPlan sshd', () => {
     expect(herdrVolumes).toEqual([
       { host: userDir, container: '/home/dev/.config/herdr', readonly: false },
     ]);
-    expect(runtimePlan.managedStateMountPaths).toEqual(['.local/bin']);
+    expect(runtimePlan.managedStateMountPaths).toEqual(['.local/bin', '.local/state/herdr']);
     expect(runtimePlan.notices).toContainEqual({
       kind: 'info',
       text: '~/.config/herdr uses the existing mount at /home/dev/.config/herdr instead of the managed workspace-state mount.',
@@ -1315,7 +1321,7 @@ describe('planAddProject', () => {
       message: [
         "Workspace 'work' requires 23 shared host directories, but pi-tin currently supports up to 22 per workspace start.",
         'This conservative limit avoids Apple container startup failures with large mount sets.',
-        'Projects, host mounts, agent profiles, agent install mounts, tmux mounts, the herdr state mount, and GitHub CLI mounts all count.',
+        'Projects, host mounts, agent profiles, agent install mounts, tmux mounts, the herdr state mounts, and GitHub CLI mounts all count.',
         'Each project counts separately.',
         'Reduce mounted directories or split the workspace.',
       ].join('\n'),

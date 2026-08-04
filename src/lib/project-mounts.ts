@@ -21,7 +21,7 @@ export function sharedDirectoryLimitMessage(
   return [
     `Workspace '${workspaceName}' requires ${sharedDirectoryCount} shared host directories, but pi-tin currently supports up to ${MAX_SHARED_DIRECTORIES} per workspace start.`,
     'This conservative limit avoids Apple container startup failures with large mount sets.',
-    'Projects, host mounts, agent profiles, agent install mounts, tmux mounts, the herdr state mount, and GitHub CLI mounts all count.',
+    'Projects, host mounts, agent profiles, agent install mounts, tmux mounts, the herdr state mounts, and GitHub CLI mounts all count.',
     'Each project counts separately.',
     'Reduce mounted directories or split the workspace.',
   ].join('\n');

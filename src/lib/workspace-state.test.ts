@@ -52,9 +52,9 @@ const OPENCODE_TOOL = { name: 'OpenCode', package: 'opencode-ai@latest' };
 const CODEX_TOOL = { name: 'Codex', package: '@openai/codex@latest' };
 
 describe('managedInstallMountPaths', () => {
-  test('herdr workspaces mount the server bin dir and the session state dir', () => {
+  test('herdr workspaces mount the server bin dir, session state and detection cache', () => {
     expect(managedInstallMountPaths({ attach: 'herdr', tools: [] }))
-      .toEqual(['.local/bin', '.config/herdr']);
+      .toEqual(['.local/bin', '.config/herdr', '.local/state/herdr']);
   });
 
   test('shell workspaces without native agents mount nothing', () => {
@@ -75,14 +75,14 @@ describe('managedInstallMountPaths', () => {
   // the same host dir, and would double-count against MAX_SHARED_DIRECTORIES.
   test('.local/bin is deduped across Claude Code and herdr', () => {
     expect(managedInstallMountPaths({ attach: 'herdr', tools: [CLAUDE_TOOL] }))
-      .toEqual(['.local/share/claude', '.local/bin', '.config/herdr']);
+      .toEqual(['.local/share/claude', '.local/bin', '.config/herdr', '.local/state/herdr']);
   });
 });
 
 describe('syncableWorkspaceStatePaths against the container mount record', () => {
   // A herdr workspace running Claude Code — the widest managed mount set
-  // (.local/share/claude, .local/bin, .config/herdr), so one workspace covers
-  // every overlap shape.
+  // (.local/share/claude, .local/bin, .config/herdr, .local/state/herdr), so
+  // one workspace covers every overlap shape.
   const workspace: Pick<Workspace, 'attach' | 'tools'> = { attach: 'herdr', tools: [CLAUDE_TOOL] };
   const filter = (options: {
     statePaths: string[];
@@ -112,6 +112,17 @@ describe('syncableWorkspaceStatePaths against the container mount record', () =>
   test('an ancestor of a mount is dropped — it reaches into the mount just as surely', () => {
     expect(filter({ statePaths: ['.local'] }))
       .toEqual({ syncable: [], dropped: [{ statePath: '.local', mountPath: '/home/dev/.local/share/claude' }] });
+  });
+
+  // `.local/state` is a plausible XDG-state entry for a profile to snapshot,
+  // and on a herdr workspace it is an ancestor of the agent-detection cache
+  // mount — the one managed mount no other case here reaches.
+  test('an ancestor of the herdr detection cache is dropped', () => {
+    expect(filter({ statePaths: ['.local/state'] }))
+      .toEqual({
+        syncable: [],
+        dropped: [{ statePath: '.local/state', mountPath: '/home/dev/.local/state/herdr' }],
+      });
   });
 
   test('a descendant of a mount is dropped', () => {
