@@ -13,7 +13,7 @@ import {
   streamToContainer,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
-import { KNOWN_AGENTS, nativeInstallTargets, type KnownAgent } from './agents.js';
+import { nativeInstallTargets, type KnownAgent } from './agents.js';
 import type { SyncEntryOutcome, SyncProgressReporter } from './sync-progress.js';
 import type { ContainerProfile, Workspace } from './validators.js';
 
@@ -155,17 +155,20 @@ export interface SyncableWorkspaceStatePaths {
  * start, the plan about to be run. `undefined` means no container life
  * recorded one — a container started by an earlier pi-tin — and falls back to
  * the workspace's managed mounts, which is the set this filter covered before
- * the mounts were recorded.
+ * the mounts were recorded. That fallback reads `agents` — the merged table —
+ * so it derives the same mounts the resolver would, a custom native agent's
+ * install dir included.
  */
 export function syncableWorkspaceStatePaths(input: {
   workspace: Pick<Workspace, 'attach' | 'tools'>;
   containerProfile: Pick<ContainerProfile, 'user' | 'workspace_state'>;
   mountedContainerPaths: string[] | undefined;
+  agents: readonly KnownAgent[];
 }): SyncableWorkspaceStatePaths {
   const containerHome = containerHomeDir(input.containerProfile.user);
   const mountPaths = (
     input.mountedContainerPaths
-    ?? managedInstallMountPaths(input.workspace, KNOWN_AGENTS).map((relPath) => path.posix.join(containerHome, relPath))
+    ?? managedInstallMountPaths(input.workspace, input.agents).map((relPath) => path.posix.join(containerHome, relPath))
   ).map(normalizeContainerPath);
 
   const syncable: string[] = [];

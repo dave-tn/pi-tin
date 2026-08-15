@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { KNOWN_AGENTS, defaultProfileNameFor } from './agents.js';
+import { defaultProfileNameFor } from './agents.js';
 import type { KnownAgent } from './agents.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
 
@@ -12,12 +12,15 @@ import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
  * injectable home so it is testable against a temp dir.
  */
 
-/** Known agents with at least one of their dot-directories present under `home`. */
-export function findConfiguredAgents(home: string = os.homedir()): KnownAgent[] {
+/** Agents from `agents` with at least one of their dot-directories under `home`. */
+export function findConfiguredAgents(
+  agents: readonly KnownAgent[],
+  home: string = os.homedir(),
+): KnownAgent[] {
   // `some`, not `every`: any dot-dir is enough signal that the agent is
   // configured here. Host-mode mounting asks a different question — it needs
   // every dir to exist — and answers it separately in create.ts.
-  return KNOWN_AGENTS.filter((agent) =>
+  return agents.filter((agent) =>
     agent.dot_dirs.some((dir) => isExistingDirectory(path.join(home, dir))),
   );
 }
@@ -66,9 +69,11 @@ export function planDiscoveredAgentProfile(options: {
   return {
     mode: 'isolated',
     suggestedName,
+    // States the refusal, not a rationale: a custom definition may set
+    // host_mode_supported: false for reasons of its own.
     isolatedOnlyNote:
-      `  ${agent.name} uses macOS Keychain for auth, which isn't available\n` +
-      `  in containers. Creating as isolated agent profile.`,
+      `  ${agent.name} does not support host mode. Creating as isolated\n` +
+      `  agent profile.`,
   };
 }
 

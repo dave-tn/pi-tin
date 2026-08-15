@@ -84,6 +84,30 @@ describe('planAgentProfileSelection', () => {
       action: 'create-default',
     });
   });
+
+  // A custom agent's dot-dirs go through the same matching as a built-in's —
+  // the planner only ever sees dot_dirs, never which table the agent came from.
+  test("offers an existing profile mounting a custom agent's dot-dir", () => {
+    const profiles = [
+      { name: 'oh-my-pi', mode: 'isolated' as const, mounts: ['.oh-my-pi'] },
+    ];
+    expect(planAgentProfileSelection({ dot_dirs: ['.oh-my-pi'] }, profiles, false)).toEqual({
+      action: 'choose',
+      choices: [
+        { name: 'oh-my-pi [isolated]', value: { kind: 'existing', profileName: 'oh-my-pi' } },
+        { name: 'Create new...', value: { kind: 'create-new' } },
+      ],
+    });
+  });
+
+  test('matches dot-dirs exactly, not by prefix', () => {
+    const profiles = [
+      { name: 'legacy', mode: 'isolated' as const, mounts: ['.oh-my-pi-legacy'] },
+    ];
+    expect(planAgentProfileSelection({ dot_dirs: ['.oh-my-pi'] }, profiles, false)).toEqual({
+      action: 'create-default',
+    });
+  });
 });
 
 describe('hostProfileNameFor', () => {

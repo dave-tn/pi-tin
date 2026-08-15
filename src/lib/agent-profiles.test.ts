@@ -11,6 +11,45 @@ import {
   validateAgentProfilesForWorkspace,
 } from './agent-profiles.js';
 import { KNOWN_AGENTS } from './agents.js';
+import type { KnownAgent } from './agents.js';
+
+// User-authored definitions once merged into the table: one ordinary agent and
+// one that refuses host mode. createAgentProfile reads whatever table it is
+// handed, so these exercise the custom half without touching the real config.
+const OH_MY_PI: KnownAgent = {
+  name: 'oh-my-pi',
+  package: 'oh-my-pi@latest',
+  binary: 'ohmypi',
+  dot_dirs: ['.oh-my-pi'],
+  host_mode_supported: true,
+  install: { method: 'npm' },
+  container_env: {},
+  isolated_seed_files: [{ path: '.oh-my-pi/trust.json', content: '{}\n' }],
+};
+
+const NO_HOST: KnownAgent = {
+  name: 'NoHost',
+  package: 'nohost-agent@latest',
+  binary: 'nohost',
+  dot_dirs: ['.nohost'],
+  host_mode_supported: false,
+  install: { method: 'npm' },
+  container_env: {},
+  isolated_seed_files: [],
+};
+
+const MERGED_AGENTS: readonly KnownAgent[] = [...KNOWN_AGENTS, OH_MY_PI, NO_HOST];
+
+// Exact-message assertions: `toThrow(string)` matches a substring, so a
+// message that merely starts with the expected text would pass.
+function thrownMessage(run: () => unknown): string {
+  try {
+    run();
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error('expected the call to throw');
+}
 
 describe('agent-profiles', () => {
   let tmpDir: string;
@@ -47,9 +86,36 @@ describe('agent-profiles', () => {
       expect(yaml).toContain('.claude');
     });
 
-    test('throws for unknown agent name, quoting the name and listing known agents', () => {
-      expect(() => createAgentProfile('test', 'Unknown Agent', 'isolated', KNOWN_AGENTS))
-        .toThrow("Unknown agent: 'Unknown Agent'. Known agents: ");
+    // Hand-written literal, not the imported message builder, so a copy
+    // regression fails here. The remediation tail is the only route a user has
+    // from "not in the list" to a custom agent of their own.
+    test('throws for unknown agent name, listing known agents and how to add one', () => {
+      expect(thrownMessage(() => createAgentProfile('test', 'Unknown Agent', 'isolated', KNOWN_AGENTS)))
+        .toBe(
+          "Unknown agent: 'Unknown Agent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, "
+          + 'Gemini CLI. To add a custom agent, create an agent definition (README: Custom agents).',
+        );
+    });
+
+    test('lists custom agents from the merged table in the unknown-agent message', () => {
+      expect(thrownMessage(() => createAgentProfile('test', 'Unknown Agent', 'isolated', MERGED_AGENTS)))
+        .toBe(
+          "Unknown agent: 'Unknown Agent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, "
+          + 'Gemini CLI, oh-my-pi, NoHost. To add a custom agent, create an agent definition '
+          + '(README: Custom agents).',
+        );
+    });
+
+    test('creates an isolated profile for a custom agent, with its dot-dir and seed file', () => {
+      createAgentProfile('mine', 'oh-my-pi', 'isolated', MERGED_AGENTS);
+      const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'mine');
+      expect(fs.statSync(path.join(profileDir, '.oh-my-pi')).isDirectory()).toBe(true);
+      expect(fs.readFileSync(path.join(profileDir, '.oh-my-pi', 'trust.json'), 'utf-8')).toBe('{}\n');
+      expect(loadAgentProfile('mine')).toMatchObject({
+        agent: 'oh-my-pi',
+        mode: 'isolated',
+        mounts: ['.oh-my-pi'],
+      });
     });
 
     test('throws if profile already exists, naming the profile and its directory', () => {
@@ -216,11 +282,18 @@ describe('agent-profiles', () => {
       expect(fs.existsSync(path.join(profileDir, '.config/opencode'))).toBe(true);
     });
 
-    test('throws when creating host profile for unsupported agent, naming the agent and why', () => {
-      expect(() => createAgentProfile('test', 'Claude Code', 'host', KNOWN_AGENTS)).toThrow(
-        'Claude Code does not support host mode. Its auth depends on macOS Keychain, '
-        + 'which is unavailable in containers.',
-      );
+    // Generic by design: a custom definition may refuse host mode for reasons
+    // that have nothing to do with the macOS Keychain, so the refusal states
+    // the fact and leaves the rationale to README.
+    test('throws when creating host profile for unsupported agent, naming the agent', () => {
+      expect(thrownMessage(() => createAgentProfile('test', 'Claude Code', 'host', KNOWN_AGENTS)))
+        .toBe('Claude Code does not support host mode.');
+    });
+
+    test('refuses host mode for a custom agent that declares it unsupported', () => {
+      expect(thrownMessage(() => createAgentProfile('nh', 'NoHost', 'host', MERGED_AGENTS)))
+        .toBe('NoHost does not support host mode.');
+      expect(fs.existsSync(path.join(tmpDir, 'pi-tin', 'agent-profiles', 'nh'))).toBe(false);
     });
   });
 

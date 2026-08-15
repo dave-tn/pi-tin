@@ -21,6 +21,7 @@ import { loadWorkspace } from './workspaces.js';
 import { loadContainerProfile } from './profiles.js';
 import { parseDurationMs } from './duration.js';
 import { syncableWorkspaceStatePaths, syncWorkspaceState } from './workspace-state.js';
+import { allAgents } from './agent-definitions.js';
 import { captureContainerDmesg } from './container-lifecycle.js';
 import { removeWorkspaceSshArtifacts } from './ssh-endpoint.js';
 
@@ -143,6 +144,7 @@ export function gatherHerdrStopContext(workspaceName: string): HerdrStopContext 
         workspace,
         containerProfile,
         mountedContainerPaths: readRuntimeMeta(workspaceName)?.mountedContainerPaths,
+        agents: allAgents(),
       }).syncable,
       stopAfterMs: parseDurationMs(workspace.stopAfterLastSession),
     };

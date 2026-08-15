@@ -33,8 +33,11 @@ export function findCreatableAgent(
   return agents.find((agent) => agent.name === agentName && agent.dot_dirs.length > 0);
 }
 
+// The remediation tail is the only route from "not in the list" to an agent
+// the built-in table will never carry.
 export function unknownAgentMessage(agentName: string, agents: readonly KnownAgent[]): string {
-  return `Unknown agent: '${agentName}'. Known agents: ${agents.map((a) => a.name).join(', ')}`;
+  return `Unknown agent: '${agentName}'. Known agents: ${agents.map((a) => a.name).join(', ')}. `
+    + 'To add a custom agent, create an agent definition (README: Custom agents).';
 }
 
 export function createAgentProfile(
@@ -48,10 +51,11 @@ export function createAgentProfile(
     throw new Error(unknownAgentMessage(agentName, agents));
   }
 
+  // No rationale in the message: a user-authored definition may refuse host
+  // mode for reasons of its own, so only the refusal is stated here and the
+  // built-ins' reasoning lives in README.
   if (mode === 'host' && !agent.host_mode_supported) {
-    throw new Error(
-      `${agentName} does not support host mode. Its auth depends on macOS Keychain, which is unavailable in containers.`,
-    );
+    throw new Error(`${agentName} does not support host mode.`);
   }
 
   const profileDir = getProfileDir(name);

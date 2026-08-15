@@ -14,6 +14,7 @@ import {
   workspaceStateMountDir,
 } from './workspace-state.js';
 import { KNOWN_AGENTS } from './agents.js';
+import type { KnownAgent } from './agents.js';
 import type { SyncProgressReporter } from './sync-progress.js';
 import type { Workspace } from './validators.js';
 
@@ -51,6 +52,28 @@ const shapeProbeArgs = (containerPath: string): string[] =>
 const CLAUDE_TOOL = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
 const OPENCODE_TOOL = { name: 'OpenCode', package: 'opencode-ai@latest' };
 const CODEX_TOOL = { name: 'Codex', package: '@openai/codex@latest' };
+
+// A user-authored native-install agent, as it looks once merged into the
+// table: its persist_dirs become managed mounts exactly like a built-in's.
+const OH_MY_PI_TOOL = { name: 'oh-my-pi', package: 'oh-my-pi@latest' };
+const OH_MY_PI_NATIVE: KnownAgent = {
+  name: 'oh-my-pi',
+  package: 'oh-my-pi@latest',
+  binary: 'ohmypi',
+  dot_dirs: ['.oh-my-pi'],
+  host_mode_supported: true,
+  container_env: {},
+  isolated_seed_files: [],
+  install: {
+    method: 'native',
+    install_command: 'curl -fsSL https://example.invalid/install | sh',
+    installed_path: '.local/share/oh-my-pi/bin/ohmypi',
+    persist_dirs: ['.local/share/oh-my-pi'],
+    bin_dir: '.local/share/oh-my-pi/bin',
+    musl_packages: [],
+    musl_env: {},
+  },
+};
 
 describe('managedInstallMountPaths', () => {
   test('herdr workspaces mount the server bin dir, session state and detection cache', () => {
@@ -90,11 +113,13 @@ describe('syncableWorkspaceStatePaths against the container mount record', () =>
     mountedContainerPaths?: string[] | undefined;
     workspace?: Pick<Workspace, 'attach' | 'tools'>;
     user?: string;
+    agents?: readonly KnownAgent[];
   }): ReturnType<typeof syncableWorkspaceStatePaths> =>
     syncableWorkspaceStatePaths({
       workspace: options.workspace ?? workspace,
       containerProfile: { user: options.user ?? 'dev', workspace_state: options.statePaths },
       mountedContainerPaths: options.mountedContainerPaths,
+      agents: options.agents ?? KNOWN_AGENTS,
     });
 
   test('paths that touch no mount sync unchanged', () => {
@@ -154,6 +179,31 @@ describe('syncableWorkspaceStatePaths against the container mount record', () =>
   test('a root profile anchors the fallback mounts on /root', () => {
     expect(filter({ statePaths: ['.config/herdr'], user: 'root' }).dropped)
       .toEqual([{ statePath: '.config/herdr', mountPath: '/root/.config/herdr' }]);
+  });
+
+  // The fallback derives mounts from the workspace's tools, so it has to read
+  // the same merged table the mount resolver does — against KNOWN_AGENTS alone
+  // a custom native agent's install dir looks like an ordinary snapshot path
+  // and the copy-in's root `rm -rf` reaches its host side through virtiofs.
+  test('the fallback drops a custom native agent install dir from the merged table', () => {
+    expect(filter({
+      statePaths: ['.local/share/oh-my-pi'],
+      workspace: { attach: 'shell', tools: [OH_MY_PI_TOOL] },
+      agents: [...KNOWN_AGENTS, OH_MY_PI_NATIVE],
+    })).toEqual({
+      syncable: [],
+      dropped: [{
+        statePath: '.local/share/oh-my-pi',
+        mountPath: '/home/dev/.local/share/oh-my-pi',
+      }],
+    });
+  });
+
+  test('the same path syncs when the custom agent is absent from the table', () => {
+    expect(filter({
+      statePaths: ['.local/share/oh-my-pi'],
+      workspace: { attach: 'shell', tools: [OH_MY_PI_TOOL] },
+    }).syncable).toEqual(['.local/share/oh-my-pi']);
   });
 
   // The gap the managed-mount-only filter left: every mount pi-tin does not

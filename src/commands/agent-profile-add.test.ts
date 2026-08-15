@@ -44,7 +44,26 @@ async function runAndCatch(program: Command, argv: string[]): Promise<unknown> {
   return undefined;
 }
 
+// A user-authored agent definition. The command reads the merged table itself,
+// so the only way to inject a custom agent is a real file under the temp
+// XDG_CONFIG_HOME.
+const writeAgentDefinition = (name: string, body: string): void => {
+  const dir = path.join(tmpDir, 'pi-tin', 'agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${name}.yaml`), body, 'utf-8');
+};
+
+const OH_MY_PI_DEFINITION = [
+  'package: oh-my-pi@latest',
+  'binary: ohmypi',
+  'dot_dirs:',
+  '  - .oh-my-pi',
+  '',
+].join('\n');
+
 describe('agent-profile add', () => {
+  // Hand-written literal, not the imported message builder: the remediation
+  // tail is the only route from "not in the list" to a custom agent.
   test('rejects an unknown agent as a validation error listing known agents', async () => {
     const program = new Command();
     registerAgentProfileAddCommand(program);
@@ -56,8 +75,54 @@ describe('agent-profile add', () => {
     expect(err.exitCode).toBe(EXIT.VALIDATION);
     expect(err.detail.code).toBe('validation');
     expect(err.detail.badInput).toBe('Nonexistent');
-    expect(err.detail.validValues).toContain('Claude Code');
-    expect(err.message).toContain("Unknown agent: 'Nonexistent'");
+    expect(err.detail.validValues).toEqual([
+      'Claude Code', 'Pi', 'Codex', 'OpenCode', 'Amp', 'Gemini CLI',
+    ]);
+    expect(err.message).toBe(
+      "Unknown agent: 'Nonexistent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, "
+      + 'Gemini CLI. To add a custom agent, create an agent definition (README: Custom agents).',
+    );
+  });
+
+  test('lists a custom agent definition among the known agents it rejects against', async () => {
+    writeAgentDefinition('oh-my-pi', OH_MY_PI_DEFINITION);
+    const program = new Command();
+    registerAgentProfileAddCommand(program);
+
+    const err = await runAndCatch(program, ['add', 'mine', '--agent', 'Nonexistent']);
+
+    expect(err).toBeInstanceOf(CliError);
+    if (!(err instanceof CliError)) throw new Error('unreachable');
+    expect(err.detail.validValues).toContain('oh-my-pi');
+    expect(err.message).toContain('Amp, Gemini CLI, oh-my-pi. To add a custom agent,');
+  });
+
+  test('creates a profile for a custom agent defined under the agents dir', async () => {
+    writeAgentDefinition('oh-my-pi', OH_MY_PI_DEFINITION);
+    const program = new Command();
+    registerAgentProfileAddCommand(program);
+
+    const writes: string[] = [];
+    const write = spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(await runAndCatch(program, ['add', 'mine', '--agent', 'oh-my-pi', '--json']))
+        .toBeUndefined();
+    } finally {
+      write.mockRestore();
+    }
+
+    const profileDir = path.join(tmpDir, 'pi-tin', 'agent-profiles', 'mine');
+    expect(JSON.parse(writes.join(''))).toEqual({
+      action: 'created',
+      profile: 'mine',
+      agent: 'oh-my-pi',
+      mode: 'isolated',
+      path: profileDir,
+    });
+    expect(fs.statSync(path.join(profileDir, '.oh-my-pi')).isDirectory()).toBe(true);
   });
 
   test('rejects an unsafe profile name as a validation error', async () => {

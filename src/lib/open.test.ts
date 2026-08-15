@@ -18,6 +18,7 @@ import { validateContainerProfile, validateWorkspace } from './validators.js';
 import { resolveResources } from './resources.js';
 import { containerNameFor, imageTagFor } from './container.js';
 import { containerHomeDir, getHostGhConfigDir } from './paths.js';
+import { KNOWN_AGENTS } from './agents.js';
 import { CliError, EXIT } from './cli-errors.js';
 
 describe('openWorkspace workspace loading errors', () => {
@@ -189,6 +190,7 @@ describe('computeRuntimeStartPlan', () => {
         workspace,
         containerProfile,
         resources: resolveResources(containerProfile),
+        agents: KNOWN_AGENTS,
       });
 
       expect(log).not.toHaveBeenCalled();
@@ -245,6 +247,7 @@ describe('computeRuntimeStartPlan sshd', () => {
       imageTag: imageTagFor('demo'),
       workspace,
       containerProfile,
+      agents: KNOWN_AGENTS,
       resources: resolveResources(containerProfile),
     });
   };
@@ -385,6 +388,7 @@ describe('statePathsForCopyIn', () => {
       workspace,
       containerProfile,
       resources: resolveResources(containerProfile),
+      agents: KNOWN_AGENTS,
     };
 
     const warnings: string[] = [];
@@ -452,6 +456,7 @@ const copyOutContextFor = (): Parameters<typeof statePathsForCopyOut>[0] => {
     workspace,
     containerProfile,
     resources: resolveResources(containerProfile),
+    agents: KNOWN_AGENTS,
   };
 };
 
@@ -669,6 +674,7 @@ describe('computeRuntimeStartPlan runtime hash drift', () => {
       containerName: containerNameFor('demo'),
       imageTag: imageTagFor('demo'),
       workspace,
+      agents: KNOWN_AGENTS,
       containerProfile,
       resources: resolveResources(containerProfile),
     });

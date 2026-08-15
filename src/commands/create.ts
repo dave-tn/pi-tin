@@ -8,8 +8,9 @@ import { ensureInitialised } from '../lib/init-guard.js';
 import { listContainerProfiles, loadContainerProfile } from '../lib/profiles.js';
 import { workspaceExists, writeWorkspace, isValidWorkspaceName, invalidWorkspaceNameMessage, WORKSPACE_NAME_RULE } from '../lib/workspaces.js';
 import type { HostMount, ContainerProfile, Tool, Workspace } from '../lib/validators.js';
-import { KNOWN_AGENTS, defaultProfileNameFor, toolDisplayName, toWorkspaceTool } from '../lib/agents.js';
+import { defaultProfileNameFor, toolDisplayName, toWorkspaceTool } from '../lib/agents.js';
 import type { KnownAgent } from '../lib/agents.js';
+import { allAgents } from '../lib/agent-definitions.js';
 import { listAgentProfiles, createAgentProfile } from '../lib/agent-profiles.js';
 import { agentProfileNameError } from '../lib/agent-discovery.js';
 import { workspaceNameLengthError } from '../lib/container.js';
@@ -165,7 +166,10 @@ async function promptProjects(): Promise<{ parentDir: string; projectNames: stri
   return { parentDir, projectNames: selectedProjects };
 }
 
-async function promptAndCreateAgentProfile(agent: KnownAgent): Promise<string> {
+async function promptAndCreateAgentProfile(
+  agent: KnownAgent,
+  agents: readonly KnownAgent[],
+): Promise<string> {
   const profileName = await input({
     message: `${agent.name} — agent profile name:`,
     default: defaultProfileNameFor(agent),
@@ -177,7 +181,7 @@ async function promptAndCreateAgentProfile(agent: KnownAgent): Promise<string> {
   });
 
   const name = profileName.trim();
-  createAgentProfile(name, agent.name, 'isolated', KNOWN_AGENTS);
+  createAgentProfile(name, agent.name, 'isolated', agents);
   console.log(chalk.green(`  ✔ Created agent profile '${name}'`));
   return name;
 }
@@ -193,11 +197,14 @@ function hostAgentConfigExists(agent: KnownAgent): boolean {
   );
 }
 
-async function promptAgentProfile(agent: KnownAgent): Promise<string> {
+async function promptAgentProfile(
+  agent: KnownAgent,
+  agents: readonly KnownAgent[],
+): Promise<string> {
   const plan = planAgentProfileSelection(agent, listAgentProfiles(), hostAgentConfigExists(agent));
 
   if (plan.action === 'create-default') {
-    return promptAndCreateAgentProfile(agent);
+    return promptAndCreateAgentProfile(agent, agents);
   }
 
   const chosen = await select({
@@ -213,37 +220,43 @@ async function promptAgentProfile(agent: KnownAgent): Promise<string> {
       return chosen.existingProfileName;
     }
     const name = hostProfileNameFor(agent);
-    createAgentProfile(name, agent.name, 'host', KNOWN_AGENTS);
+    createAgentProfile(name, agent.name, 'host', agents);
     console.log(chalk.green(`  ✔ Created host agent profile '${name}'`));
     return name;
   }
 
   if (chosen.kind === 'create-new') {
-    return promptAndCreateAgentProfile(agent);
+    return promptAndCreateAgentProfile(agent, agents);
   }
 
   return chosen.profileName;
 }
 
-async function promptAgents(): Promise<{ tools: Tool[]; agentProfileNames: string[] }> {
+async function promptAgents(
+  agents: readonly KnownAgent[],
+): Promise<{ tools: Tool[]; agentProfileNames: string[] }> {
   const selectedAgents = await checkbox({
     message: 'Select coding agents (space to toggle, enter to confirm):',
-    choices: KNOWN_AGENTS.map((agent) => ({
+    choices: agents.map((agent) => ({
       name: `${agent.name} (${agent.package.replace(/@latest$/, '')})`,
       value: agent,
     })),
   });
 
   const tools: Tool[] = selectedAgents.map(toWorkspaceTool);
+  // An agent that declares no dot-dirs has nothing to isolate, so it is never
+  // asked about an agent profile — createAgentProfile would refuse it anyway.
+  // Only a user-authored definition can declare none.
+  const profileAgents = selectedAgents.filter((agent) => agent.dot_dirs.length > 0);
   const agentProfileNames: string[] = [];
 
-  if (selectedAgents.length > 0) {
+  if (profileAgents.length > 0) {
     console.log('');
     console.log(chalk.dim('Agent profiles store configuration and credentials across workspaces'));
     console.log('');
 
-    for (const agent of selectedAgents) {
-      agentProfileNames.push(await promptAgentProfile(agent));
+    for (const agent of profileAgents) {
+      agentProfileNames.push(await promptAgentProfile(agent, agents));
     }
   }
 
@@ -462,7 +475,9 @@ export async function runCreateFlow(nameArg?: string): Promise<void> {
     const name = await promptWorkspaceName(nameArg);
     const { containerProfileName, containerProfile } = await promptContainerProfile();
     const { parentDir, projectNames } = await promptProjects();
-    const { tools, agentProfileNames } = await promptAgents();
+    // Read once for the whole wizard: the agent choices, the profile prompts
+    // and the profile creation must all see the same table.
+    const { tools, agentProfileNames } = await promptAgents(allAgents());
 
     // Environment variables — seeded with host terminal color support and timezone
     const gitEnv = await promptGitIdentityEnv();

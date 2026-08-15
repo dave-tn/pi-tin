@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { parseTimezoneFromLocaltimePath, availableApiKeyVars } from './create-flow.js';
-import { KNOWN_AGENTS } from './agents.js';
+import { allAgents } from './agent-definitions.js';
 
 export interface HostInfo {
   gitIdentity: { name: string | null; email: string | null };
@@ -56,6 +56,6 @@ export function detectHost(): HostInfo {
     tz: detectHostTimezone(),
     colorterm: process.env['COLORTERM'],
     apiKeyVars: availableApiKeyVars(process.env),
-    agents: KNOWN_AGENTS,
+    agents: allAgents(),
   });
 }

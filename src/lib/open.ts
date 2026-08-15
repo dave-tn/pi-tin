@@ -47,7 +47,8 @@ import { isRecord } from './guards.js';
 import { spawnAutoStopHelper, queryHerdrAgentStates } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs } from './agents.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs, type KnownAgent } from './agents.js';
+import { allAgents } from './agent-definitions.js';
 import {
   chmodSeededHerdrBinary,
   ensureWorkspaceStateMountDir,
@@ -126,6 +127,13 @@ interface WorkspaceContext {
   workspace: Workspace;
   containerProfile: ContainerProfile;
   resources: ResolvedResources;
+  /**
+   * Built-ins plus the user's agent definitions, read once per invocation with
+   * the rest of the config. Every consumer below reads it rather than calling
+   * allAgents() again, so one open cannot see two different tables — and a
+   * broken definition warns once, not per consumer.
+   */
+  agents: readonly KnownAgent[];
 }
 
 interface BuildPlan {
@@ -206,12 +214,13 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
     workspace,
     containerProfile,
     resources,
+    agents: allAgents(),
   };
 }
 
 function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const tools = context.workspace.tools ?? [];
-  const agents = KNOWN_AGENTS;
+  const { agents } = context;
   const skipPermissions = context.workspace.agent?.skipPermissions ?? true;
   const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools, agents) : [];
   const agentEnv = agentContainerEnv(tools, agents);
@@ -267,7 +276,7 @@ function validateProjects(projects: string[]): void {
 function resolveWorkspaceVolumes(
   context: WorkspaceContext,
 ): { volumes: VolumeMount[]; notices: MountNotice[]; managedStateMountPaths: string[] } {
-  const { workspace, containerProfile, wsName } = context;
+  const { workspace, containerProfile, wsName, agents } = context;
   const homeContainer = containerHomeDir(containerProfile.user);
   const volumes = resolveProjectVolumes(workspace.projects);
   const notices: MountNotice[] = [];
@@ -390,7 +399,7 @@ function resolveWorkspaceVolumes(
   // created when a container actually starts (see prepareManagedStateMounts),
   // never here — this resolver also runs for joins and refusals.
   const managedStateMountPaths: string[] = [];
-  for (const relPath of managedInstallMountPaths(workspace, KNOWN_AGENTS)) {
+  for (const relPath of managedInstallMountPaths(workspace, agents)) {
     const containerPath = `${homeContainer}/${relPath}`;
     if (volumes.some((volume) => volume.container === containerPath)) {
       notices.push({
@@ -631,6 +640,7 @@ export function statePathsForCopyIn(
     workspace: context.workspace,
     containerProfile: context.containerProfile,
     mountedContainerPaths: planMountedContainerPaths(runtimePlan),
+    agents: context.agents,
   });
   for (const drop of dropped) {
     console.warn(chalk.yellow(
@@ -672,6 +682,7 @@ export function statePathsForCopyOut(
     workspace: context.workspace,
     containerProfile: context.containerProfile,
     mountedContainerPaths,
+    agents: context.agents,
   }).syncable;
 }
 
@@ -758,7 +769,7 @@ function startWorkspaceContainer(options: {
 // missed refresh (script absent in a pre-upgrade image, container gone) keeps
 // existing versions.
 function spawnAgentRefresh(context: WorkspaceContext): void {
-  if (npmToolSpecs(context.workspace.tools ?? [], KNOWN_AGENTS).length === 0) {
+  if (npmToolSpecs(context.workspace.tools ?? [], context.agents).length === 0) {
     return;
   }
   try {
@@ -1166,7 +1177,7 @@ export async function openWorkspace(
       workspaceName: context.wsName,
       containerName: context.containerName,
       user: context.containerProfile.user,
-      targets: nativeInstallTargets(context.workspace.tools ?? [], KNOWN_AGENTS),
+      targets: nativeInstallTargets(context.workspace.tools ?? [], context.agents),
     });
 
     spawnAgentRefresh(context);

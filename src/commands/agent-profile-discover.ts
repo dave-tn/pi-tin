@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { confirm, input, select } from '@inquirer/prompts';
-import { KNOWN_AGENTS, dotDirsLabel } from '../lib/agents.js';
+import { dotDirsLabel } from '../lib/agents.js';
+import { allAgents } from '../lib/agent-definitions.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { createAgentProfile, listAgentProfiles } from '../lib/agent-profiles.js';
 import type { AgentProfileMode } from '../lib/agent-profiles.js';
@@ -19,7 +20,10 @@ export async function runAgentProfileDiscover(): Promise<void> {
     remediation: 'Create agent profiles directly: `pi-tin agent-profile add <name> --agent <agent>`.',
   });
 
-  const foundAgents = findConfiguredAgents();
+  // Read once: the scan and every profile it goes on to create must agree on
+  // which agents exist.
+  const agents = allAgents();
+  const foundAgents = findConfiguredAgents(agents);
 
   if (foundAgents.length === 0) {
     console.log('No known agent configurations found on your system.');
@@ -55,7 +59,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
     });
 
     try {
-      const profileDir = createAgentProfile(name.trim(), agent.name, mode, KNOWN_AGENTS);
+      const profileDir = createAgentProfile(name.trim(), agent.name, mode, agents);
       takenNames = [...takenNames, name.trim()];
       console.log(chalk.green(`  \u2714 Created '${name.trim()}' (${mode}) at ${profileDir}`));
     } catch (err) {
