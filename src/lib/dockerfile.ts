@@ -1,4 +1,4 @@
-import { nativeInstallTargets, npmToolSpecs, type KnownAgent } from './agents.js';
+import { nativeInstallTargets, npmToolSpecs, type AgentWrap, type KnownAgent } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -80,11 +80,6 @@ function createUserLines(pm: PackageManager): string[] {
   }
 }
 
-export interface AgentWrap {
-  binary: string;
-  flag: string;
-}
-
 const CLAUDE_MANAGED_SETTINGS_PATH = '/etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json';
 
 // pi-tin installs all agent tools and `global_tools` with npm, whatever the base
@@ -142,16 +137,24 @@ const BAKED_BIN_DIR = '/usr/local/pi-tin/baked-bin';
 // Launcher baked at build time, first on PATH. Tries the refresh prefix, then
 // the image-baked prefix: background refreshes never touch the baked install,
 // so one of the two always resolves — even mid-install, when npm has removed
-// the refresh prefix's bin links (Arborist retires them before relinking).
+// the refresh prefix's bin links (Arborist retires them before relinking). A
+// native agent installs into its own live-mounted bin dir instead, which this
+// wrapper shadows on PATH — so that dir is searched too, or the agent could
+// never launch.
 function generateAgentWrapper(wrap: AgentWrap): string {
+  const searchDirs = [
+    '"$HOME/.npm-refresh/bin"',
+    '"$HOME/.npm-global/bin"',
+    ...(wrap.bin_dir === undefined ? [] : [`"$HOME/${wrap.bin_dir}"`]),
+  ];
   return [
     '#!/bin/sh',
-    'for prefix_bin in "$HOME/.npm-refresh/bin" "$HOME/.npm-global/bin"; do',
-    `  if [ -x "$prefix_bin/${wrap.binary}" ]; then`,
-    `    exec "$prefix_bin/${wrap.binary}" ${wrap.flag} "$@"`,
+    `for bin_dir in ${searchDirs.join(' ')}; do`,
+    `  if [ -x "$bin_dir/${wrap.binary}" ]; then`,
+    `    exec "$bin_dir/${wrap.binary}" ${wrap.flag} "$@"`,
     '  fi',
     'done',
-    `echo "pi-tin: ${wrap.binary} not found in workspace npm prefixes" >&2`,
+    `echo "pi-tin: ${wrap.binary} not found in workspace install paths" >&2`,
     'exit 127',
   ].join('\n');
 }

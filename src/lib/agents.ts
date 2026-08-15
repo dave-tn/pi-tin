@@ -209,21 +209,33 @@ export function agentContainerEnv(
   return env;
 }
 
+/**
+ * A launcher wrapper to bake into the image: the binary to shadow, the flag it
+ * must add, and — for a native install only — the home-relative bin dir the
+ * real binary lives in, since that is outside the npm prefixes the wrapper
+ * would otherwise be the only place to look.
+ */
+export interface AgentWrap {
+  binary: string;
+  flag: string;
+  bin_dir?: string;
+}
+
 /** Return the agents that still require launcher wrapping to enable skip-permissions mode. */
 export function agentsWithSkipPermissions(
   packages: Tool[],
   agents: readonly KnownAgent[],
-): Array<{ binary: string; flag: string }> {
-  const results: Array<{ binary: string; flag: string }> = [];
-  for (const pkg of packages) {
+): AgentWrap[] {
+  return packages.flatMap((pkg): AgentWrap[] => {
     const agent = knownAgentForPackage(pkg, agents);
     // Claude Code takes its skip-permissions mode from baked managed settings,
     // so it needs no launcher wrapper.
-    if (agent?.skip_permissions_flag && !isBuiltInClaudeCode(agent)) {
-      results.push({ binary: agent.binary, flag: agent.skip_permissions_flag });
+    if (agent === undefined || agent.skip_permissions_flag === undefined || isBuiltInClaudeCode(agent)) {
+      return [];
     }
-  }
-  return results;
+    const wrap: AgentWrap = { binary: agent.binary, flag: agent.skip_permissions_flag };
+    return [agent.install.method === 'native' ? { ...wrap, bin_dir: agent.install.bin_dir } : wrap];
+  });
 }
 
 // OpenCode is permissive by default (edit/bash → "allow") but still prompts on

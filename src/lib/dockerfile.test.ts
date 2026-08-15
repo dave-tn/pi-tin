@@ -286,6 +286,48 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain(':$HOME_DIR/.zed-agent/bin:');
   });
 
+  // A native agent installs into its own live-mounted bin dir, never an npm
+  // prefix — and the wrapper is baked first on PATH, so it shadows that binary.
+  // A wrapper that searched only the npm prefixes would exit 127 every launch.
+  test('a native custom agent with a skip flag gets a wrapper that searches its bin dir', () => {
+    const zed: KnownAgent = {
+      name: 'Zed Agent',
+      package: 'zed-agent@latest',
+      binary: 'zedagent',
+      dot_dirs: ['.zed-agent'],
+      host_mode_supported: true,
+      install: {
+        method: 'native',
+        install_command: 'curl -fsSL https://example.invalid/install -o /tmp/z.sh && bash /tmp/z.sh',
+        installed_path: '.zed-agent/bin/zedagent',
+        persist_dirs: ['.zed-agent/bin'],
+        bin_dir: '.zed-agent/bin',
+        musl_packages: [],
+        musl_env: {},
+      },
+      skip_permissions_flag: '--yolo',
+      container_env: {},
+      isolated_seed_files: [],
+    };
+    const agents = [...KNOWN_AGENTS, zed];
+    const packages: Tool[] = [{ name: 'Zed Agent', package: 'zed-agent@latest' }];
+
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
+      // As computeBuildPlan derives them, with skipPermissions on.
+      agentWraps: agentsWithSkipPermissions(packages, agents),
+      agentEnv: {},
+      claudeManagedSettings: null,
+      claudeConfig: null,
+      sshd: null,
+      agents,
+    });
+
+    const wrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-zedagent');
+    expect(wrapper?.content).toContain('"$HOME/.zed-agent/bin"');
+    expect(wrapper?.content).toContain('--yolo "$@"');
+    expect(dockerfile).toContain('COPY pi-tin-wrapper-zedagent /usr/local/pi-tin/bin/zedagent');
+  });
+
   test('refresh script preserves original npm package specs and excludes native agents', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
