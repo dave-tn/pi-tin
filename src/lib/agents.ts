@@ -121,13 +121,20 @@ export function npmToolSpecs(packages: Tool[], agents: readonly KnownAgent[]): s
     .map((pkg) => pkg.package);
 }
 
-function usesManagedSkipPermissions(agent: KnownAgent): boolean {
-  return agent.binary === 'claude';
+// Claude Code is identified by `package`, never by `binary`: a user definition
+// supplies its own binary name, so a fork declaring `binary: claude` would
+// otherwise lose its declared skip-permissions flag and inherit Claude Code's
+// baked config. Package is the identity axis the loader reserves.
+function isBuiltInClaudeCode(agent: KnownAgent): boolean {
+  return findBuiltInByPackage(agent.package)?.binary === 'claude';
 }
 
 /** Return whether the workspace includes Claude Code. */
 export function workspaceHasClaudeCode(packages: Tool[], agents: readonly KnownAgent[]): boolean {
-  return packages.some((pkg) => knownAgentForPackage(pkg, agents)?.binary === 'claude');
+  return packages.some((pkg) => {
+    const agent = knownAgentForPackage(pkg, agents);
+    return agent !== undefined && isBuiltInClaudeCode(agent);
+  });
 }
 
 /**
@@ -210,7 +217,9 @@ export function agentsWithSkipPermissions(
   const results: Array<{ binary: string; flag: string }> = [];
   for (const pkg of packages) {
     const agent = knownAgentForPackage(pkg, agents);
-    if (agent?.skip_permissions_flag && !usesManagedSkipPermissions(agent)) {
+    // Claude Code takes its skip-permissions mode from baked managed settings,
+    // so it needs no launcher wrapper.
+    if (agent?.skip_permissions_flag && !isBuiltInClaudeCode(agent)) {
       results.push({ binary: agent.binary, flag: agent.skip_permissions_flag });
     }
   }

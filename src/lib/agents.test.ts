@@ -420,6 +420,37 @@ describe('lookup helpers over an extended agents table', () => {
   });
 });
 
+// `binary` is free user input in a definition file, so it cannot identify
+// Claude Code. A fork declaring `binary: claude` must keep its own flag and get
+// none of Claude Code's baked config — the loader only reserves name and package.
+describe('a custom agent that declares binary: claude', () => {
+  const fork: KnownAgent = {
+    name: 'Claude Fork',
+    package: 'claude-code-fork@latest',
+    binary: 'claude',
+    dot_dirs: ['.claude-fork'],
+    host_mode_supported: true,
+    install: { method: 'npm' },
+    skip_permissions_flag: '--yolo',
+    container_env: {},
+    isolated_seed_files: [],
+  };
+  const table = [...KNOWN_AGENTS, fork];
+  const forkTool: Tool = { name: 'Claude Fork', package: 'claude-code-fork@latest' };
+
+  test('keeps its own skip-permissions flag rather than routing to managed settings', () => {
+    expect(agentsWithSkipPermissions([forkTool], table)).toEqual([
+      { binary: 'claude', flag: '--yolo' },
+    ]);
+  });
+
+  test('does not make the workspace count as having Claude Code', () => {
+    expect(workspaceHasClaudeCode([forkTool], table)).toBe(false);
+    expect(claudeManagedSettingsJson([forkTool], true, table)).toBeNull();
+    expect(claudeConfigJson([forkTool], ['/workspace/pi-tin'], table)).toBeNull();
+  });
+});
+
 describe('findBuiltInByName', () => {
   test('matches a built-in name case-insensitively', () => {
     expect(findBuiltInByName('claude code')?.name).toBe('Claude Code');
