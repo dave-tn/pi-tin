@@ -145,6 +145,13 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       summary: 'List agents (built-in and custom definitions)',
       flags: ['--json'],
     },
+    {
+      command: 'agent apply',
+      summary: 'Create or update a custom agent definition (built-in agents cannot be overridden)',
+      args: ['<name>'],
+      stdin: 'agent-definition JSON',
+      flags: ['--dry-run', '--json'],
+    },
   ],
   interactiveOnly: [
     { command: 'create', use: 'Use `apply <name>` with workspace JSON on stdin.' },

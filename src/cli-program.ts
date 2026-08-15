@@ -17,6 +17,7 @@ import { registerAgentProfileDeleteCommand } from './commands/agent-profile-dele
 import { registerAgentProfileDiscoverCommand } from './commands/agent-profile-discover.js';
 import { registerAgentProfileFinderCommand } from './commands/agent-profile-finder.js';
 import { registerAgentListCommand } from './commands/agent-list.js';
+import { registerAgentApplyCommand } from './commands/agent-apply.js';
 import { registerAgentGuideCommand } from './commands/agent-guide.js';
 import { runDefaultAction } from './lib/default-action.js';
 import { CliError, EXIT } from './lib/cli-errors.js';
@@ -73,6 +74,7 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
     .description('Manage agent definitions');
 
   registerAgentListCommand(agentCmd);
+  registerAgentApplyCommand(agentCmd);
 
   // Machine-oriented usage guide
   registerAgentGuideCommand(program);

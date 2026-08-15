@@ -21,7 +21,7 @@ export function parseJsonInput(text: string): unknown {
 // degrades to {} (everything reads as added, like a create) and the real
 // parse error surfaces as a warning on stderr, keeping stdout pure JSON.
 export function loadApplyDiffBase(
-  kind: 'workspace' | 'container profile',
+  kind: 'workspace' | 'container profile' | 'agent definition',
   name: string,
   loadExisting: () => unknown,
 ): unknown {
