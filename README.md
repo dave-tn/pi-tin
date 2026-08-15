@@ -26,7 +26,7 @@ The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOL
 
 **OCI-compatible.** Use standard images from Docker Hub, GHCR, and any OCI registry — existing container images just work.
 
-Daily-driven on Pi and Claude Code; Amp, OpenCode, and more are supported but lightly tested. Customisable to support any agent.
+Daily-driven on Pi and Claude Code; Amp, OpenCode, and more are supported but lightly tested. Any other agent can be added with an [agent definition](#custom-agents).
 
 The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where agents can be unleashed.
 
@@ -130,6 +130,8 @@ Configs live at `~/.config/pi-tin/` (or `$XDG_CONFIG_HOME/pi-tin/`):
     myproject.yaml     # Workspace definition
   agent-profiles/
     personal/          # Agent identity (auth + config)
+  agents/
+    oh-my-pi.yaml      # Custom agent definition (optional)
 ```
 
 Config is created automatically on first use.
@@ -300,6 +302,66 @@ Notes:
 - `pi-tin create` detects your Mac's timezone (from `/etc/localtime`) and writes it as a literal `host.env.TZ` (e.g. `TZ: America/New_York`) so the container shares your local time by default. Edit the value to use a different zone, or remove the line to fall back to UTC. The value is a snapshot taken at create time — it does not track later host changes. Existing workspaces are unaffected; add `TZ` by hand to opt in. The managed `node-dev` container profile bundles `tzdata` so IANA zone names resolve; **custom container profiles must include a zoneinfo source (e.g. the `tzdata` package)** or `TZ` will silently fall back to UTC.
 - Git identity is detected from your host `~/.gitconfig` during `pi-tin create`.
 
+### Custom agents
+
+pi-tin knows Claude Code, Pi, Codex, OpenCode, Amp, and Gemini CLI out of the box. To add another, write an **agent definition**: a YAML file at `~/.config/pi-tin/agents/<name>.yaml`, where the filename is the agent name.
+
+```yaml
+# ~/.config/pi-tin/agents/oh-my-pi.yaml
+package: oh-my-pi@latest
+binary: omp
+dot_dirs: [.oh-my-pi]
+skip_permissions_flag: "--yolo"
+container_env: { OMP_LOG: "info" }
+```
+
+A defined agent is then treated like a built-in: it is offered by `pi-tin create`, takes [agent profiles](#agent-profiles) (`agent-profile add`, `agent-profile discover`), is listed by `detect-host`, and gets its `container_env` and skip-permissions wrapper in the image. Write definitions with `pi-tin agent apply <name>` (JSON on stdin) or by hand; `pi-tin agent list` shows the merged table with each entry's source.
+
+#### Agent definition schema
+
+| Field                   | Required | Description |
+| ----------------------- | -------- | ----------- |
+| `package`               | yes      | npm package spec (e.g. `oh-my-pi@latest`). Identifies the agent in a workspace's `tools`, and is the install source unless `install.method` is `native`. |
+| `binary`                | yes      | Executable name in the container. Must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`. |
+| `dot_dirs`              | no       | Home-relative config directories an agent profile provides (e.g. `[.oh-my-pi]`). An agent with none cannot take an agent profile. Defaults to `[]`. |
+| `host_mode_supported`   | no       | Whether `agent-profile add --host` is allowed — see [Host mode](#host-mode). Defaults to `true`. |
+| `install`               | no       | `{ method: npm }` (the default) or a `native` block — see below. |
+| `host_mode_warning`     | no       | Caveat shown beside the host-mode option in `agent-profile discover`. |
+| `skip_permissions_flag` | no       | Flag the launcher wrapper adds when `agent.skipPermissions` is on (e.g. `--yolo`). Omit for agents that need none. |
+| `container_env`         | no       | Environment variables baked into the image of any workspace including this agent. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings. Defaults to `{}`. |
+| `isolated_seed_files`   | no       | Files written into a freshly created **isolated** agent profile, each `{ path, content }` with `path` relative to the profile directory. Defaults to `[]`. |
+
+Every path field is home-relative: no leading `/`, no `.`/`..` segments.
+
+An agent with its own installer uses a `native` install block instead of npm, mirroring how pi-tin installs Claude Code and OpenCode — in-container on first open, onto [live host mounts](#agent-install-mounts) so its self-updates persist:
+
+```yaml
+package: some-agent@latest      # identity for `tools`; not an npm install here
+binary: some-agent
+dot_dirs: [".config/some-agent"]
+install:
+  method: native
+  install_command: "curl -fsSL https://example.com/install.sh -o /tmp/i.sh && bash /tmp/i.sh && rm /tmp/i.sh"
+  installed_path: ".local/bin/some-agent"
+  persist_dirs: [".local/share/some-agent"]
+  bin_dir: ".local/bin"
+  musl_packages: [libgcc, libstdc++]
+  musl_env: {}
+```
+
+The `native` block's own fields (the `npm` block has nothing beyond `method`):
+
+| Field             | Required | Description |
+| ----------------- | -------- | ----------- |
+| `install_command` | yes      | Single-line shell command, run in-container on the first open. |
+| `installed_path`  | yes      | Path probed with `test -x` to decide whether the agent is already installed. |
+| `persist_dirs`    | yes      | Directories live-mounted from the workspace state tree, so the install and its updates survive container recreation. |
+| `bin_dir`         | yes      | Directory appended to the image `PATH`; must also appear in `persist_dirs`. |
+| `musl_packages`   | no       | Extra system packages the binary needs on musl (Alpine) bases. Defaults to `[]`. |
+| `musl_env`        | no       | Extra image environment for musl bases. Defaults to `{}`. |
+
+Built-ins always win. A definition whose name or `package` collides with a built-in — or with an earlier definition, compared case-insensitively and ignoring the version suffix — is skipped with a warning on stderr, as is one that fails to parse or validate. The remaining definitions still load, so one bad file never takes the CLI down.
+
 ### Update notifications
 
 pi-tin checks npm in the background — at most once every 24 hours — for a newer
@@ -348,6 +410,9 @@ of the following to a non-empty value:
 | `pi-tin agent-profile delete <name> [--force] [--dry-run] [--json]` | Delete an agent profile (`--dry-run` previews the impact, including referencing workspaces; non-interactive callers must pass `--force` or get exit code 4) |
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
 | `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
+| `pi-tin agent list [--json]` | List agents, built-in and custom, with each entry's source (`--json` for machine-readable output; JSON is the default when output is piped) |
+| `pi-tin agent apply <name> [--dry-run]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; built-in agents cannot be overridden) |
+| `pi-tin agent delete <name> [--force] [--dry-run] [--json]` | Delete a custom agent definition (`--dry-run` previews the impact, including referencing workspaces and agent profiles; non-interactive callers must pass `--force` or get exit code 4) |
 
 `pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.
 
@@ -373,6 +438,7 @@ These commands form the JSON read-modify-write surface an agent uses to inspect 
 | `show <name>` (workspace) | `apply <name>` (workspace) |
 | `container-profile show <name>` | `container-profile apply <name>` |
 | `agent-profile show <name>` / `agent-profile list` | `agent-profile add <name> --agent <agent>` |
+| `agent list` (built-in and custom agents) | `agent apply <name>` ([agent definition](#custom-agents)) |
 | `detect-host` (host facts, no name) | — |
 
 The contract is **JSON in, JSON out**:
@@ -582,7 +648,7 @@ pi-tin agent-profile add my-codex --agent Codex --host
 
 In host mode the container shares your host identity with no separate login, but changes the agent makes inside the container — including credential refreshes — write through to your host config. Use it when you want one identity everywhere; prefer the default isolated mode when you want the container sandboxed from your host.
 
-Host mode is only available for agents whose auth works outside the macOS Keychain. **Claude Code does not support `--host`** (its credentials live in the Keychain, which containers can't reach); Pi, Codex, OpenCode, Amp, and Gemini CLI do. Passing `--host` to an unsupported agent is rejected with an error.
+Host mode needs auth that works outside the macOS Keychain. **Claude Code does not support `--host`** — its credentials live in the Keychain, which containers can't reach; Pi, Codex, OpenCode, Amp, and Gemini CLI do. For a [custom agent](#custom-agents), `host_mode_supported` decides. Passing `--host` to an agent that doesn't support it is rejected with an error.
 
 ### Sharing agent profiles
 
