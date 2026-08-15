@@ -38,10 +38,10 @@ export function registerAgentApplyCommand(group: import('commander').Command): v
       const raw = parseJsonInput(await readStdin());
       const definition = parseDefinition(raw);
 
-      // Both identity axes are the loader's collision rules (built-ins always
-      // win), enforced up front so apply never writes a file the loader would
-      // then silently skip. Name first: it is what the user typed and what the
-      // file would be called.
+      // Both identity axes are the loader's built-in collision rules (built-ins
+      // always win), enforced up front so apply never writes a file that a
+      // built-in would shadow. Name first: it is what the user typed and what
+      // the file would be called.
       const builtInName = findBuiltInByName(name);
       if (builtInName !== undefined) {
         throw new CliError(

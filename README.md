@@ -450,7 +450,7 @@ The contract is **JSON in, JSON out**:
 
 The subsections below — [Editing container profiles](#editing-container-profiles) and [Editing workspaces](#editing-workspaces) — give the per-command detail.
 
-- **JSON output.** Data-returning commands (`list`, `show`, `container-profile list`, `container-profile show`, `agent-profile list`, `agent-profile show`) accept `--json`. They also emit JSON **by default when stdout is not a TTY** — i.e. when the output is piped or captured — so a script never has to remember the flag. Pass `--json` explicitly to force JSON even in an interactive terminal.
+- **JSON output.** Data-returning commands (`list`, `show`, `container-profile list`, `container-profile show`, `agent-profile list`, `agent-profile show`, `agent list`) accept `--json`. They also emit JSON **by default when stdout is not a TTY** — i.e. when the output is piped or captured — so a script never has to remember the flag. Pass `--json` explicitly to force JSON even in an interactive terminal.
 - **Channels.** Results go to **stdout** (the data channel); diagnostics, prompts, and errors go to **stderr**. Capturing stdout alone gives clean parseable output.
 - **Stable exit codes.** Every command exits with a semantic code so callers can branch on the outcome without parsing prose:
 
@@ -459,10 +459,10 @@ The subsections below — [Editing container profiles](#editing-container-profil
   | 0 | `SUCCESS` | Success |
   | 1 | `GENERAL` | General / unexpected error |
   | 2 | `VALIDATION` | Bad input / schema validation failure |
-  | 3 | `NOT_FOUND` | Named workspace, container profile, or agent profile does not exist |
+  | 3 | `NOT_FOUND` | Named workspace, container profile, agent profile, or agent definition does not exist |
   | 4 | `CONFIRMATION_REQUIRED` | Destructive op without `--force` in non-interactive mode |
 
-- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed. All five support `--dry-run` (preview the effect) and `--json`.
+- **Destructive-command confirmation.** Destructive commands (`stop`, `delete`, `cleanup`, `agent-profile delete`, `container-profile delete`, `agent delete`) prompt for confirmation on an interactive terminal (`stop` only when live sessions would be killed). Run without a TTY they exit with code `4` instead of hanging, unless `--force` is passed. All six support `--dry-run` (preview the effect) and `--json`.
 - **Structured errors.** In JSON mode, errors are emitted as a structured envelope on stderr — `{ "error": { "message", "code", … } }` — so an agent can read the machine-stable `code` (and any `remediation`, `validValues`, or `badInput` fields) instead of grepping the message text. An unknown command is a validation failure: exit 2 with code `unknown_command` and the valid command list in `validValues` (this also applies when --help follows an unknown command, and to `pi-tin help <unknown>`). Usage mistakes (unknown option, missing argument, a group command such as `agent-profile` with no subcommand) are validation failures too: exit 2 with code `usage`.
 - **Prerequisite failures.** On an interactive terminal pi-tin offers to install the `container` CLI or start the container system service. Without a TTY it exits `1` with a structured error instead of prompting: `container_not_installed`, `container_version_unsupported`, `container_system_not_running`, or `container_system_probe_failed` (`platform_unsupported` on a non-macOS host). Caveat for `container_system_not_running`: some sandboxed shells block access to the container system service, so a running service can be reported as not running — verify with `container system status` from an unsandboxed shell before starting or restarting the service.
 

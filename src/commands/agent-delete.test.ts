@@ -130,6 +130,18 @@ function expectCliError(err: unknown): CliError {
 }
 
 describe('agent delete', () => {
+  test('rejects an unsafe definition name with exit 2', async () => {
+    const { err } = await run(['delete', '../escape', '--force', '--json']);
+
+    const cliErr = expectCliError(err);
+    expect(cliErr.exitCode).toBe(EXIT.VALIDATION);
+    expect(cliErr.detail.code).toBe('validation');
+    expect(cliErr.detail.badInput).toBe('../escape');
+    expect(cliErr.message).toBe(
+      "Invalid agent definition name '../escape'. Names must not be '.' or '..', and must not contain '/' or '\\'.",
+    );
+  });
+
   test('refuses a built-in agent name that has no definition file', async () => {
     const { err, stdout } = await run(['delete', 'Claude Code', '--force', '--json']);
 
