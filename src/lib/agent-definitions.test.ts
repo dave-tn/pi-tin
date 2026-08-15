@@ -2,8 +2,17 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { allAgents, loadAgentDefinitions } from './agent-definitions.js';
+import {
+  agentDefinitionExists,
+  allAgents,
+  deleteAgentDefinition,
+  loadAgentDefinition,
+  loadAgentDefinitions,
+  planAgentDelete,
+  writeAgentDefinition,
+} from './agent-definitions.js';
 import { KNOWN_AGENTS } from './agents.js';
+import type { AgentDefinitionFile } from './validators.js';
 
 const MINIMAL_YAML = 'package: oh-my-pi@latest\nbinary: omp\n';
 
@@ -154,5 +163,125 @@ describe('loadAgentDefinitions', () => {
 
     expect(result).toEqual([]);
     expect(warnings).toEqual([]);
+  });
+});
+
+const DEFINITION: AgentDefinitionFile = {
+  package: 'oh-my-pi@latest',
+  binary: 'omp',
+  dot_dirs: ['.oh-my-pi'],
+  host_mode_supported: true,
+  install: { method: 'npm' },
+  container_env: {},
+  isolated_seed_files: [],
+};
+
+describe('agent definition CRUD', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-agent-defs-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('round-trips a definition through write, load and delete', () => {
+    const definitionsDir = path.join(tmpDir, 'agents');
+
+    writeAgentDefinition('oh-my-pi', DEFINITION, definitionsDir);
+
+    expect(agentDefinitionExists('oh-my-pi', definitionsDir)).toBe(true);
+    expect(loadAgentDefinition('oh-my-pi', definitionsDir)).toEqual(DEFINITION);
+
+    deleteAgentDefinition('oh-my-pi', definitionsDir);
+
+    expect(agentDefinitionExists('oh-my-pi', definitionsDir)).toBe(false);
+  });
+
+  // Existence, not parseability: a corrupt definition must stay deletable.
+  test('reports an unparseable definition as existing', () => {
+    fs.writeFileSync(path.join(tmpDir, 'corrupt.yaml'), 'binary: [unclosed\n');
+
+    expect(agentDefinitionExists('corrupt', tmpDir)).toBe(true);
+    expect(() => loadAgentDefinition('corrupt', tmpDir)).toThrow('Failed to parse YAML');
+  });
+
+  test('throws a not-found error for a missing definition', () => {
+    expect(() => loadAgentDefinition('nope', tmpDir)).toThrow("Agent definition 'nope' not found.");
+    expect(() => deleteAgentDefinition('nope', tmpDir)).toThrow(
+      "Agent definition 'nope' not found.",
+    );
+  });
+
+  // The guard is what keeps a name from resolving outside the definitions dir.
+  test.each(['../x', 'a/b', 'a\\b', '.', '..', ''])("rejects path-unsafe name '%s'", (name) => {
+    expect(() => loadAgentDefinition(name, tmpDir)).toThrow(
+      `Invalid agent definition name '${name}'`,
+    );
+    expect(() => agentDefinitionExists(name, tmpDir)).toThrow(
+      `Invalid agent definition name '${name}'`,
+    );
+    expect(() => writeAgentDefinition(name, DEFINITION, tmpDir)).toThrow(
+      `Invalid agent definition name '${name}'`,
+    );
+    expect(() => deleteAgentDefinition(name, tmpDir)).toThrow(
+      `Invalid agent definition name '${name}'`,
+    );
+  });
+});
+
+describe('planAgentDelete', () => {
+  test('reports workspaces whose tools install the definition package', () => {
+    const impact = planAgentDelete({
+      name: 'oh-my-pi',
+      package: 'oh-my-pi@latest',
+      workspaces: [
+        { name: 'zeta', tools: [{ package: 'oh-my-pi@1.0.0' }] },
+        { name: 'alpha', tools: [{ package: 'OH-MY-PI' }, { package: 'other@latest' }] },
+        { name: 'unrelated', tools: [{ package: 'oh-my-pi-extras@latest' }] },
+      ],
+      allAgentProfiles: [],
+    });
+
+    expect(impact).toEqual({
+      name: 'oh-my-pi',
+      referencedBy: ['alpha', 'zeta'],
+      agentProfiles: [],
+    });
+  });
+
+  test('reports no workspace references when the definition package is unknown', () => {
+    const impact = planAgentDelete({
+      name: 'oh-my-pi',
+      workspaces: [{ name: 'zeta', tools: [{ package: 'oh-my-pi@latest' }] }],
+      allAgentProfiles: [{ name: 'omp-work', agent: 'oh-my-pi' }],
+    });
+
+    expect(impact).toEqual({
+      name: 'oh-my-pi',
+      referencedBy: [],
+      agentProfiles: ['omp-work'],
+    });
+  });
+
+  test('matches agent profiles on the agent handle case-insensitively, sorted', () => {
+    const impact = planAgentDelete({
+      name: 'oh-my-pi',
+      package: 'oh-my-pi@latest',
+      workspaces: [],
+      allAgentProfiles: [
+        { name: 'omp-two', agent: 'OH-MY-PI' },
+        { name: 'claude', agent: 'Claude Code' },
+        { name: 'omp-one', agent: 'oh-my-pi' },
+      ],
+    });
+
+    expect(impact).toEqual({
+      name: 'oh-my-pi',
+      referencedBy: [],
+      agentProfiles: ['omp-one', 'omp-two'],
+    });
   });
 });

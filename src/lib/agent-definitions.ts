@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import YAML from 'yaml';
+import { atomicWriteFile } from './atomic-write.js';
 import { getAgentDefinitionsDir, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
 import { parseYaml } from './yaml.js';
 import { validateAgentDefinition } from './validators.js';
@@ -104,4 +106,94 @@ function collisionReason(
   }
 
   return undefined;
+}
+
+// A definition name is interpolated into a config path, so it must stay a
+// single path segment — checked before any path is joined or read.
+function definitionPath(name: string, dir: string): string {
+  if (!isSafePathSegment(name)) {
+    throw new Error(`Invalid agent definition name '${name}'. ${SAFE_PATH_SEGMENT_RULE}`);
+  }
+  return path.join(dir, `${name}${YAML_SUFFIX}`);
+}
+
+export function loadAgentDefinition(
+  name: string,
+  dir: string = getAgentDefinitionsDir(),
+): AgentDefinitionFile {
+  const filePath = definitionPath(name, dir);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Agent definition '${name}' not found.`);
+  }
+  const raw: unknown = parseYaml(fs.readFileSync(filePath, 'utf-8'), filePath);
+  return validateAgentDefinition(raw);
+}
+
+// Existence probe for paths that don't need a parsed definition (e.g. delete):
+// checks the file only, so a corrupt or schema-invalid definition still counts
+// as existing rather than being rewritten into "not found".
+export function agentDefinitionExists(
+  name: string,
+  dir: string = getAgentDefinitionsDir(),
+): boolean {
+  return fs.existsSync(definitionPath(name, dir));
+}
+
+// Full-replace write of an agent definition. Definitions stay hand-editable
+// YAML, so nothing is stamped into the file beyond the definition itself.
+export function writeAgentDefinition(
+  name: string,
+  definition: AgentDefinitionFile,
+  dir: string = getAgentDefinitionsDir(),
+): void {
+  const filePath = definitionPath(name, dir);
+  fs.mkdirSync(dir, { recursive: true });
+  atomicWriteFile(filePath, YAML.stringify(definition));
+}
+
+export function deleteAgentDefinition(name: string, dir: string = getAgentDefinitionsDir()): void {
+  const filePath = definitionPath(name, dir);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Agent definition '${name}' not found.`);
+  }
+  fs.rmSync(filePath, { force: true });
+}
+
+export interface AgentDeleteImpact {
+  name: string;
+  referencedBy: string[];
+  agentProfiles: string[];
+}
+
+/**
+ * Pure impact report for an agent-definition delete: the workspaces installing
+ * its package and the agent profiles claiming its name. `package` is absent
+ * when the definition could not be parsed — the workspace half is then
+ * unknowable and reported as empty, while the name-keyed profile half still
+ * holds. Built-in and not-found are the command's pre-checks, so no verdict of
+ * that kind is returned here.
+ */
+export function planAgentDelete(input: {
+  name: string;
+  package?: string;
+  workspaces: Array<{ name: string; tools: Array<{ package: string }> }>;
+  allAgentProfiles: Array<{ name: string; agent: string }>;
+}): AgentDeleteImpact {
+  const definitionPackage = input.package;
+  const referencedBy =
+    definitionPackage === undefined
+      ? []
+      : input.workspaces
+          .filter((workspace) =>
+            workspace.tools.some((tool) => packagesCollide(tool.package, definitionPackage)),
+          )
+          .map((workspace) => workspace.name)
+          .sort((a, b) => a.localeCompare(b));
+
+  const agentProfiles = input.allAgentProfiles
+    .filter((profile) => profile.agent.toLowerCase() === input.name.toLowerCase())
+    .map((profile) => profile.name)
+    .sort((a, b) => a.localeCompare(b));
+
+  return { name: input.name, referencedBy, agentProfiles };
 }
