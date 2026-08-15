@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerAgentProfileAddCommand } from './agent-profile-add.js';
 import { createAgentProfile } from '../lib/agent-profiles.js';
+import { KNOWN_AGENTS } from '../lib/agents.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 
 // The validation envelope (exit 2, validValues) is reserved for genuinely
@@ -80,7 +81,7 @@ describe('agent-profile add', () => {
   });
 
   test('already-exists is not a validation error and keeps its real message', async () => {
-    createAgentProfile('dupe', 'Pi', 'isolated');
+    createAgentProfile('dupe', 'Pi', 'isolated', KNOWN_AGENTS);
 
     const program = new Command();
     registerAgentProfileAddCommand(program);

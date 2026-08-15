@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { generateDockerfile, detectPackageManager } from './dockerfile.js';
+import { KNOWN_AGENTS } from './agents.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
 const baseProfile: ContainerProfile = {
@@ -15,7 +16,7 @@ const baseProfile: ContainerProfile = {
   workspace_state: [],
 };
 
-const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null };
+const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
 
 describe('generateDockerfile', () => {
   test('produces basic Dockerfile structure', () => {
@@ -182,6 +183,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     const settingsFile = extras.find((extra) => extra.name === 'claude-managed-settings.json');
@@ -200,6 +202,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings: null,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     const wrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-codex');
@@ -248,6 +251,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     expect(extras.find((extra) => extra.name === 'pi-tin-wrapper-claude')).toBeUndefined();
@@ -273,6 +277,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings: null,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
@@ -291,6 +296,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings: null,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     expect(dockerfile).not.toContain('CLAUDE_CODE_SANDBOXED');
@@ -383,6 +389,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings: null,
       claudeConfig,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     // Copied before the home-dir chown so the file ends up owned by the user.
@@ -408,6 +415,7 @@ describe('generateDockerfile', () => {
       claudeManagedSettings: null,
       claudeConfig: null,
       sshd: null,
+      agents: KNOWN_AGENTS,
     });
 
     expect(dockerfile).not.toContain('.claude.json');

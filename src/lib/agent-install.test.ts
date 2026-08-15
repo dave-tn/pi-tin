@@ -5,7 +5,7 @@ import {
   type AgentInstallDeps,
   type AgentInstallProbe,
 } from './agent-install.js';
-import { nativeInstallTargets } from './agents.js';
+import { KNOWN_AGENTS, nativeInstallTargets } from './agents.js';
 import type { NativeInstallTarget } from './agents.js';
 import type { ProgressOutput } from './sync-progress.js';
 
@@ -14,7 +14,7 @@ import type { ProgressOutput } from './sync-progress.js';
 const NATIVE_TARGETS = nativeInstallTargets([
   { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
   { name: 'OpenCode', package: 'opencode-ai@latest' },
-]);
+], KNOWN_AGENTS);
 
 function nativeTarget(binary: string): NativeInstallTarget {
   const target = NATIVE_TARGETS.find((candidate) => candidate.binary === binary);

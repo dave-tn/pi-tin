@@ -13,6 +13,7 @@ import {
   syncWorkspaceState,
   workspaceStateMountDir,
 } from './workspace-state.js';
+import { KNOWN_AGENTS } from './agents.js';
 import type { SyncProgressReporter } from './sync-progress.js';
 import type { Workspace } from './validators.js';
 
@@ -53,28 +54,28 @@ const CODEX_TOOL = { name: 'Codex', package: '@openai/codex@latest' };
 
 describe('managedInstallMountPaths', () => {
   test('herdr workspaces mount the server bin dir, session state and detection cache', () => {
-    expect(managedInstallMountPaths({ attach: 'herdr', tools: [] }))
+    expect(managedInstallMountPaths({ attach: 'herdr', tools: [] }, KNOWN_AGENTS))
       .toEqual(['.local/bin', '.config/herdr', '.local/state/herdr']);
   });
 
   test('shell workspaces without native agents mount nothing', () => {
-    expect(managedInstallMountPaths({ attach: 'shell', tools: [CODEX_TOOL] })).toEqual([]);
+    expect(managedInstallMountPaths({ attach: 'shell', tools: [CODEX_TOOL] }, KNOWN_AGENTS)).toEqual([]);
   });
 
   test('Claude Code mounts its versions dir and launcher bin dir', () => {
-    expect(managedInstallMountPaths({ attach: 'shell', tools: [CLAUDE_TOOL] }))
+    expect(managedInstallMountPaths({ attach: 'shell', tools: [CLAUDE_TOOL] }, KNOWN_AGENTS))
       .toEqual(['.local/share/claude', '.local/bin']);
   });
 
   test('OpenCode mounts its bin dir; npm agents add nothing', () => {
-    expect(managedInstallMountPaths({ attach: 'shell', tools: [CODEX_TOOL, OPENCODE_TOOL] }))
+    expect(managedInstallMountPaths({ attach: 'shell', tools: [CODEX_TOOL, OPENCODE_TOOL] }, KNOWN_AGENTS))
       .toEqual(['.opencode/bin']);
   });
 
   // Two mounts at the same container path would be a duplicate --volume for
   // the same host dir, and would double-count against MAX_SHARED_DIRECTORIES.
   test('.local/bin is deduped across Claude Code and herdr', () => {
-    expect(managedInstallMountPaths({ attach: 'herdr', tools: [CLAUDE_TOOL] }))
+    expect(managedInstallMountPaths({ attach: 'herdr', tools: [CLAUDE_TOOL] }, KNOWN_AGENTS))
       .toEqual(['.local/share/claude', '.local/bin', '.config/herdr', '.local/state/herdr']);
   });
 });

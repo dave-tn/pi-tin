@@ -29,9 +29,9 @@ export function registerAgentProfileAddCommand(
         );
       }
 
-      if (!findCreatableAgent(opts.agent)) {
+      if (!findCreatableAgent(opts.agent, KNOWN_AGENTS)) {
         throw new CliError(
-          unknownAgentMessage(opts.agent),
+          unknownAgentMessage(opts.agent, KNOWN_AGENTS),
           EXIT.VALIDATION,
           { code: 'validation', badInput: opts.agent, validValues: KNOWN_AGENTS.map((a) => a.name) },
         );
@@ -42,7 +42,7 @@ export function registerAgentProfileAddCommand(
       // Deliberately not wrapped: already-exists, host-mode-unsupported, and
       // I/O failures are not input validation — they surface their real
       // message via the general error path (exit 1).
-      const profileDir = createAgentProfile(name, opts.agent, mode);
+      const profileDir = createAgentProfile(name, opts.agent, mode, KNOWN_AGENTS);
 
       if (shouldEmitJson(opts.json)) {
         printJson({ action: 'created', profile: name, agent: opts.agent, mode, path: profileDir });

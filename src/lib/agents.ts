@@ -43,8 +43,22 @@ function packageMatchesAgent(packageSpec: string, agent: KnownAgent): boolean {
   return packageName(packageSpec) === packageName(agent.package);
 }
 
-function knownAgentForPackage(pkg: Tool): KnownAgent | undefined {
-  return KNOWN_AGENTS.find((agent) => packageMatchesAgent(pkg.package, agent));
+function knownAgentForPackage(pkg: Tool, agents: readonly KnownAgent[]): KnownAgent | undefined {
+  return agents.find((agent) => packageMatchesAgent(pkg.package, agent));
+}
+
+/**
+ * Find a built-in agent by display name, case-insensitively. Searches
+ * KNOWN_AGENTS only, never a caller-supplied table: this answers "is this one
+ * of ours?", a question a merged built-in-plus-custom table cannot answer.
+ */
+export function findBuiltInByName(name: string): KnownAgent | undefined {
+  return KNOWN_AGENTS.find((agent) => agent.name.toLowerCase() === name.toLowerCase());
+}
+
+/** As findBuiltInByName, but keyed on package spec with the version suffix ignored. */
+export function findBuiltInByPackage(packageSpec: string): KnownAgent | undefined {
+  return KNOWN_AGENTS.find((agent) => packageMatchesAgent(packageSpec, agent));
 }
 
 /**
@@ -79,9 +93,12 @@ export type NativeInstallTarget = Pick<KnownAgent, 'name' | 'binary'> & {
 };
 
 /** Native-install agents among the workspace's tools, in tool order. */
-export function nativeInstallTargets(packages: Tool[]): NativeInstallTarget[] {
+export function nativeInstallTargets(
+  packages: Tool[],
+  agents: readonly KnownAgent[],
+): NativeInstallTarget[] {
   return packages.flatMap((pkg): NativeInstallTarget[] => {
-    const agent = knownAgentForPackage(pkg);
+    const agent = knownAgentForPackage(pkg, agents);
     return agent !== undefined && agent.install.method === 'native'
       ? [{ name: agent.name, binary: agent.binary, install: agent.install }]
       : [];
@@ -89,9 +106,9 @@ export function nativeInstallTargets(packages: Tool[]): NativeInstallTarget[] {
 }
 
 /** Package specs still installed and refreshed via npm (unknown packages stay npm). */
-export function npmToolSpecs(packages: Tool[]): string[] {
+export function npmToolSpecs(packages: Tool[], agents: readonly KnownAgent[]): string[] {
   return packages
-    .filter((pkg) => knownAgentForPackage(pkg)?.install.method !== 'native')
+    .filter((pkg) => knownAgentForPackage(pkg, agents)?.install.method !== 'native')
     .map((pkg) => pkg.package);
 }
 
@@ -100,8 +117,8 @@ function usesManagedSkipPermissions(agent: KnownAgent): boolean {
 }
 
 /** Return whether the workspace includes Claude Code. */
-export function workspaceHasClaudeCode(packages: Tool[]): boolean {
-  return packages.some((pkg) => knownAgentForPackage(pkg)?.binary === 'claude');
+export function workspaceHasClaudeCode(packages: Tool[], agents: readonly KnownAgent[]): boolean {
+  return packages.some((pkg) => knownAgentForPackage(pkg, agents)?.binary === 'claude');
 }
 
 /**
@@ -111,8 +128,12 @@ export function workspaceHasClaudeCode(packages: Tool[]): boolean {
  * bypassPermissions is set and Claude Code's own sandbox is disabled;
  * otherwise no managed settings are baked and Claude Code's defaults apply.
  */
-export function claudeManagedSettingsJson(packages: Tool[], skipPermissions: boolean): string | null {
-  if (!workspaceHasClaudeCode(packages) || !skipPermissions) return null;
+export function claudeManagedSettingsJson(
+  packages: Tool[],
+  skipPermissions: boolean,
+  agents: readonly KnownAgent[],
+): string | null {
+  if (!workspaceHasClaudeCode(packages, agents) || !skipPermissions) return null;
   return JSON.stringify({
     permissions: { defaultMode: 'bypassPermissions' },
     sandbox: {
@@ -136,8 +157,12 @@ export function claudeManagedSettingsJson(packages: Tool[], skipPermissions: boo
  * persistence, no other pre-grant mechanism, and anything an import could
  * reach is already inside the container.
  */
-export function claudeConfigJson(packages: Tool[], projectContainerPaths: string[]): string | null {
-  if (!workspaceHasClaudeCode(packages)) return null;
+export function claudeConfigJson(
+  packages: Tool[],
+  projectContainerPaths: string[],
+  agents: readonly KnownAgent[],
+): string | null {
+  if (!workspaceHasClaudeCode(packages, agents)) return null;
   const projects = Object.fromEntries(
     projectContainerPaths.map((projectPath) => [
       projectPath,
@@ -154,10 +179,13 @@ export function claudeConfigJson(packages: Tool[], projectContainerPaths: string
 }
 
 /** Return container env vars needed by the workspace's agents. */
-export function agentContainerEnv(packages: Tool[]): Record<string, string> {
+export function agentContainerEnv(
+  packages: Tool[],
+  agents: readonly KnownAgent[],
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const pkg of packages) {
-    const agent = knownAgentForPackage(pkg);
+    const agent = knownAgentForPackage(pkg, agents);
     if (agent !== undefined) {
       Object.assign(env, agent.container_env);
     }
@@ -166,10 +194,13 @@ export function agentContainerEnv(packages: Tool[]): Record<string, string> {
 }
 
 /** Return the agents that still require launcher wrapping to enable skip-permissions mode. */
-export function agentsWithSkipPermissions(packages: Tool[]): Array<{ binary: string; flag: string }> {
+export function agentsWithSkipPermissions(
+  packages: Tool[],
+  agents: readonly KnownAgent[],
+): Array<{ binary: string; flag: string }> {
   const results: Array<{ binary: string; flag: string }> = [];
   for (const pkg of packages) {
-    const agent = knownAgentForPackage(pkg);
+    const agent = knownAgentForPackage(pkg, agents);
     if (agent?.skip_permissions_flag && !usesManagedSkipPermissions(agent)) {
       results.push({ binary: agent.binary, flag: agent.skip_permissions_flag });
     }

@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { confirm, input, select } from '@inquirer/prompts';
-import { dotDirsLabel } from '../lib/agents.js';
+import { KNOWN_AGENTS, dotDirsLabel } from '../lib/agents.js';
 import { ensureInitialised } from '../lib/init-guard.js';
 import { createAgentProfile, listAgentProfiles } from '../lib/agent-profiles.js';
 import type { AgentProfileMode } from '../lib/agent-profiles.js';
@@ -55,7 +55,7 @@ export async function runAgentProfileDiscover(): Promise<void> {
     });
 
     try {
-      const profileDir = createAgentProfile(name.trim(), agent.name, mode);
+      const profileDir = createAgentProfile(name.trim(), agent.name, mode, KNOWN_AGENTS);
       takenNames = [...takenNames, name.trim()];
       console.log(chalk.green(`  \u2714 Created '${name.trim()}' (${mode}) at ${profileDir}`));
     } catch (err) {

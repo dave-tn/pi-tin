@@ -47,7 +47,7 @@ import { isRecord } from './guards.js';
 import { spawnAutoStopHelper, queryHerdrAgentStates } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs } from './agents.js';
 import {
   chmodSeededHerdrBinary,
   ensureWorkspaceStateMountDir,
@@ -211,12 +211,13 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
 
 function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const tools = context.workspace.tools ?? [];
+  const agents = KNOWN_AGENTS;
   const skipPermissions = context.workspace.agent?.skipPermissions ?? true;
-  const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools) : [];
-  const agentEnv = agentContainerEnv(tools);
-  const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions);
+  const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools, agents) : [];
+  const agentEnv = agentContainerEnv(tools, agents);
+  const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions, agents);
   const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
-  const claudeConfig = claudeConfigJson(tools, projectContainerPaths);
+  const claudeConfig = claudeConfigJson(tools, projectContainerPaths, agents);
   // Keypair creation is idempotent and must precede Dockerfile generation —
   // the public key is baked into the image's authorized_keys (and therefore
   // the build hash, so key rotation rebuilds via the normal drift path).
@@ -229,6 +230,7 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
     claudeManagedSettings,
     claudeConfig,
     sshd,
+    agents,
   });
 
   const hashInput = dockerfile + extras.map((file) => file.name + file.content).join('');
@@ -388,7 +390,7 @@ function resolveWorkspaceVolumes(
   // created when a container actually starts (see prepareManagedStateMounts),
   // never here — this resolver also runs for joins and refusals.
   const managedStateMountPaths: string[] = [];
-  for (const relPath of managedInstallMountPaths(workspace)) {
+  for (const relPath of managedInstallMountPaths(workspace, KNOWN_AGENTS)) {
     const containerPath = `${homeContainer}/${relPath}`;
     if (volumes.some((volume) => volume.container === containerPath)) {
       notices.push({
@@ -756,7 +758,7 @@ function startWorkspaceContainer(options: {
 // missed refresh (script absent in a pre-upgrade image, container gone) keeps
 // existing versions.
 function spawnAgentRefresh(context: WorkspaceContext): void {
-  if (npmToolSpecs(context.workspace.tools ?? []).length === 0) {
+  if (npmToolSpecs(context.workspace.tools ?? [], KNOWN_AGENTS).length === 0) {
     return;
   }
   try {
@@ -1164,7 +1166,7 @@ export async function openWorkspace(
       workspaceName: context.wsName,
       containerName: context.containerName,
       user: context.containerProfile.user,
-      targets: nativeInstallTargets(context.workspace.tools ?? []),
+      targets: nativeInstallTargets(context.workspace.tools ?? [], KNOWN_AGENTS),
     });
 
     spawnAgentRefresh(context);

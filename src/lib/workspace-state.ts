@@ -13,7 +13,7 @@ import {
   streamToContainer,
 } from './container.js';
 import { formatDurationMs } from './duration.js';
-import { nativeInstallTargets } from './agents.js';
+import { KNOWN_AGENTS, nativeInstallTargets, type KnownAgent } from './agents.js';
 import type { SyncEntryOutcome, SyncProgressReporter } from './sync-progress.js';
 import type { ContainerProfile, Workspace } from './validators.js';
 
@@ -113,8 +113,11 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
  * herdr. Keyed off workspace config (attach/tools), never the per-invocation
  * attach override.
  */
-export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | 'tools'>): string[] {
-  const installDirs = nativeInstallTargets(workspace.tools).flatMap(
+export function managedInstallMountPaths(
+  workspace: Pick<Workspace, 'attach' | 'tools'>,
+  agents: readonly KnownAgent[],
+): string[] {
+  const installDirs = nativeInstallTargets(workspace.tools, agents).flatMap(
     (target) => target.install.persist_dirs,
   );
   const herdrDirs =
@@ -162,7 +165,7 @@ export function syncableWorkspaceStatePaths(input: {
   const containerHome = containerHomeDir(input.containerProfile.user);
   const mountPaths = (
     input.mountedContainerPaths
-    ?? managedInstallMountPaths(input.workspace).map((relPath) => path.posix.join(containerHome, relPath))
+    ?? managedInstallMountPaths(input.workspace, KNOWN_AGENTS).map((relPath) => path.posix.join(containerHome, relPath))
   ).map(normalizeContainerPath);
 
   const syncable: string[] = [];

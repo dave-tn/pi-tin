@@ -1,4 +1,4 @@
-import { nativeInstallTargets, npmToolSpecs } from './agents.js';
+import { nativeInstallTargets, npmToolSpecs, type KnownAgent } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -244,14 +244,15 @@ export function generateDockerfile(
     claudeManagedSettings: string | null;
     claudeConfig: string | null;
     sshd: { authorizedKey: string } | null;
+    agents: readonly KnownAgent[];
   },
 ): DockerfileResult {
   const lines: string[] = [];
   const extras: Array<{ name: string; content: string }> = [];
 
   const pm = resolvePackageManager(profile);
-  const nativeInstalls = nativeInstallTargets(packages).map((target) => target.install);
-  const npmSpecs = npmToolSpecs(packages);
+  const nativeInstalls = nativeInstallTargets(packages, opts.agents).map((target) => target.install);
+  const npmSpecs = npmToolSpecs(packages, opts.agents);
 
   lines.push(`FROM ${profile.base_image}`);
   lines.push('');

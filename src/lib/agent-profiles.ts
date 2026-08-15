@@ -5,7 +5,7 @@ import YAML from 'yaml';
 import { getAgentProfilesDir, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { parseYaml } from './yaml.js';
-import { KNOWN_AGENTS, type KnownAgent } from './agents.js';
+import type { KnownAgent } from './agents.js';
 import { validateAgentProfileMeta, type AgentProfileMeta } from './validators.js';
 
 export type AgentProfileMode = AgentProfileMeta['mode'];
@@ -26,22 +26,26 @@ function getProfileDir(name: string): string {
 // Single source of truth for which agents a profile can be created for: the
 // agent must be known and have dot-dirs to mount. Shared with the add
 // command's up-front validation so the two checks cannot drift.
-export function findCreatableAgent(agentName: string): KnownAgent | undefined {
-  return KNOWN_AGENTS.find((agent) => agent.name === agentName && agent.dot_dirs.length > 0);
+export function findCreatableAgent(
+  agentName: string,
+  agents: readonly KnownAgent[],
+): KnownAgent | undefined {
+  return agents.find((agent) => agent.name === agentName && agent.dot_dirs.length > 0);
 }
 
-export function unknownAgentMessage(agentName: string): string {
-  return `Unknown agent: '${agentName}'. Known agents: ${KNOWN_AGENTS.map((a) => a.name).join(', ')}`;
+export function unknownAgentMessage(agentName: string, agents: readonly KnownAgent[]): string {
+  return `Unknown agent: '${agentName}'. Known agents: ${agents.map((a) => a.name).join(', ')}`;
 }
 
 export function createAgentProfile(
   name: string,
   agentName: string,
-  mode: AgentProfileMode = 'isolated',
+  mode: AgentProfileMode,
+  agents: readonly KnownAgent[],
 ): string {
-  const agent = findCreatableAgent(agentName);
+  const agent = findCreatableAgent(agentName, agents);
   if (!agent) {
-    throw new Error(unknownAgentMessage(agentName));
+    throw new Error(unknownAgentMessage(agentName, agents));
   }
 
   if (mode === 'host' && !agent.host_mode_supported) {

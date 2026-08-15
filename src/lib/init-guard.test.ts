@@ -11,6 +11,7 @@ import {
 } from './init-guard.js';
 import { validateContainerProfile } from './validators.js';
 import { generateDockerfile } from './dockerfile.js';
+import { KNOWN_AGENTS } from './agents.js';
 
 describe('syncDefaultContainerProfiles', () => {
   let tmpDir: string;
@@ -100,7 +101,7 @@ describe('syncDefaultContainerProfiles', () => {
   });
 
   test('default profiles generate a Dockerfile without throwing', () => {
-    const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null };
+    const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
     for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
       const profile = validateContainerProfile(YAML.parse(content));
       expect(() => generateDockerfile(profile, [], noWraps)).not.toThrow();

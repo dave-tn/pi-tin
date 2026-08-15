@@ -177,7 +177,7 @@ async function promptAndCreateAgentProfile(agent: KnownAgent): Promise<string> {
   });
 
   const name = profileName.trim();
-  createAgentProfile(name, agent.name, 'isolated');
+  createAgentProfile(name, agent.name, 'isolated', KNOWN_AGENTS);
   console.log(chalk.green(`  ✔ Created agent profile '${name}'`));
   return name;
 }
@@ -213,7 +213,7 @@ async function promptAgentProfile(agent: KnownAgent): Promise<string> {
       return chosen.existingProfileName;
     }
     const name = hostProfileNameFor(agent);
-    createAgentProfile(name, agent.name, 'host');
+    createAgentProfile(name, agent.name, 'host', KNOWN_AGENTS);
     console.log(chalk.green(`  ✔ Created host agent profile '${name}'`));
     return name;
   }

@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, nativeInstallTargets, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, findBuiltInByName, findBuiltInByPackage, nativeInstallTargets, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import type { KnownAgent, NativeAgentInstall } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
 
@@ -121,16 +122,16 @@ describe('install method helpers', () => {
   ];
 
   test('nativeInstallTargets pairs native metadata with agent identity, in tool order', () => {
-    expect(nativeInstallTargets(mixed).map((target) => [target.name, target.binary, target.install.bin_dir]))
+    expect(nativeInstallTargets(mixed, KNOWN_AGENTS).map((target) => [target.name, target.binary, target.install.bin_dir]))
       .toEqual([
         ['Claude Code', 'claude', '.local/bin'],
         ['OpenCode', 'opencode', '.opencode/bin'],
       ]);
-    expect(nativeInstallTargets([])).toEqual([]);
+    expect(nativeInstallTargets([], KNOWN_AGENTS)).toEqual([]);
   });
 
   test('npmToolSpecs keeps npm agents and unknown packages, excluding native agents', () => {
-    expect(npmToolSpecs(mixed)).toEqual(['@openai/codex@latest', 'some-unknown-cli@latest']);
+    expect(npmToolSpecs(mixed, KNOWN_AGENTS)).toEqual(['@openai/codex@latest', 'some-unknown-cli@latest']);
   });
 });
 
@@ -140,7 +141,7 @@ describe('agentContainerEnv', () => {
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
     ];
-    const env = agentContainerEnv(packages);
+    const env = agentContainerEnv(packages, KNOWN_AGENTS);
     expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' });
   });
 
@@ -148,7 +149,7 @@ describe('agentContainerEnv', () => {
     const packages: Tool[] = [
       { name: 'OpenCode', package: 'opencode-ai@latest' },
     ];
-    expect(agentContainerEnv(packages)).toEqual({
+    expect(agentContainerEnv(packages, KNOWN_AGENTS)).toEqual({
       OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
     });
   });
@@ -157,14 +158,14 @@ describe('agentContainerEnv', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    expect(agentContainerEnv(packages)).toEqual({});
+    expect(agentContainerEnv(packages, KNOWN_AGENTS)).toEqual({});
   });
 
   test('does not match packages that only share a prefix with a known agent', () => {
     const packages: Tool[] = [
       { name: 'Custom', package: '@anthropic-ai/claude-code-proxy@latest' },
     ];
-    expect(agentContainerEnv(packages)).toEqual({});
+    expect(agentContainerEnv(packages, KNOWN_AGENTS)).toEqual({});
   });
 });
 
@@ -174,7 +175,7 @@ describe('agentsWithSkipPermissions', () => {
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    const wraps = agentsWithSkipPermissions(packages);
+    const wraps = agentsWithSkipPermissions(packages, KNOWN_AGENTS);
     expect(wraps).toHaveLength(1);
     expect(wraps).toContainEqual({ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' });
   });
@@ -184,25 +185,25 @@ describe('agentsWithSkipPermissions', () => {
       { name: 'Pi', package: '@earendil-works/pi-coding-agent@latest' },
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    expect(agentsWithSkipPermissions(packages)).toEqual([]);
+    expect(agentsWithSkipPermissions(packages, KNOWN_AGENTS)).toEqual([]);
   });
 
   test('returns empty array for empty packages', () => {
-    expect(agentsWithSkipPermissions([])).toEqual([]);
+    expect(agentsWithSkipPermissions([], KNOWN_AGENTS)).toEqual([]);
   });
 
   test('returns empty array for unknown packages', () => {
     const packages: Tool[] = [
       { name: 'Custom', package: 'my-custom-agent@latest' },
     ];
-    expect(agentsWithSkipPermissions(packages)).toEqual([]);
+    expect(agentsWithSkipPermissions(packages, KNOWN_AGENTS)).toEqual([]);
   });
 
   test('does not match packages that only share a prefix with a known agent', () => {
     const packages: Tool[] = [
       { name: 'Custom', package: '@openai/codex-helper@latest' },
     ];
-    expect(agentsWithSkipPermissions(packages)).toEqual([]);
+    expect(agentsWithSkipPermissions(packages, KNOWN_AGENTS)).toEqual([]);
   });
 });
 
@@ -211,21 +212,21 @@ describe('workspaceHasClaudeCode', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    expect(workspaceHasClaudeCode(packages)).toBe(true);
+    expect(workspaceHasClaudeCode(packages, KNOWN_AGENTS)).toBe(true);
   });
 
   test('returns false when Claude Code is not installed', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    expect(workspaceHasClaudeCode(packages)).toBe(false);
+    expect(workspaceHasClaudeCode(packages, KNOWN_AGENTS)).toBe(false);
   });
 
   test('does not match packages that only share a prefix with Claude Code', () => {
     const packages: Tool[] = [
       { name: 'Custom', package: '@anthropic-ai/claude-code-proxy@latest' },
     ];
-    expect(workspaceHasClaudeCode(packages)).toBe(false);
+    expect(workspaceHasClaudeCode(packages, KNOWN_AGENTS)).toBe(false);
   });
 });
 
@@ -238,11 +239,11 @@ describe('claudeManagedSettingsJson', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    expect(claudeManagedSettingsJson(packages, true)).toBeNull();
+    expect(claudeManagedSettingsJson(packages, true, KNOWN_AGENTS)).toBeNull();
   });
 
   test('bypasses permissions and disables sandboxing when skip-permissions is on', () => {
-    const settings = JSON.parse(claudeManagedSettingsJson(claudeCode, true)!);
+    const settings = JSON.parse(claudeManagedSettingsJson(claudeCode, true, KNOWN_AGENTS)!);
     expect(settings).toEqual({
       permissions: { defaultMode: 'bypassPermissions' },
       sandbox: { enabled: false },
@@ -250,7 +251,7 @@ describe('claudeManagedSettingsJson', () => {
   });
 
   test('returns null when skip-permissions is off so Claude Code defaults apply', () => {
-    expect(claudeManagedSettingsJson(claudeCode, false)).toBeNull();
+    expect(claudeManagedSettingsJson(claudeCode, false, KNOWN_AGENTS)).toBeNull();
   });
 });
 
@@ -263,11 +264,11 @@ describe('claudeConfigJson', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    expect(claudeConfigJson(packages, ['/workspace/pi-tin'])).toBeNull();
+    expect(claudeConfigJson(packages, ['/workspace/pi-tin'], KNOWN_AGENTS)).toBeNull();
   });
 
   test('marks onboarding complete and each mounted project trusted', () => {
-    const config = JSON.parse(claudeConfigJson(claudeCode, ['/workspace/pi-tin', '/workspace/other'])!);
+    const config = JSON.parse(claudeConfigJson(claudeCode, ['/workspace/pi-tin', '/workspace/other'], KNOWN_AGENTS)!);
     expect(config).toEqual({
       hasCompletedOnboarding: true,
       projects: {
@@ -290,7 +291,7 @@ describe('claudeConfigJson', () => {
   });
 
   test('seeds onboarding with an empty trust map when no projects are mounted', () => {
-    const config = JSON.parse(claudeConfigJson(claudeCode, [])!);
+    const config = JSON.parse(claudeConfigJson(claudeCode, [], KNOWN_AGENTS)!);
     expect(config).toEqual({ hasCompletedOnboarding: true, projects: {} });
   });
 });
@@ -344,5 +345,109 @@ describe('toWorkspaceTool', () => {
     expect(() =>
       validateWorkspace({ profile: 'default', projects: ['/tmp/x'], tools }),
     ).not.toThrow();
+  });
+});
+
+// The helpers take the table they search, so an entry that is not built in is
+// found on exactly the same terms as one that is.
+describe('lookup helpers over an extended agents table', () => {
+  const CUSTOM: KnownAgent = {
+    name: 'Oh My Pi',
+    package: 'oh-my-pi@latest',
+    binary: 'omp',
+    dot_dirs: ['.oh-my-pi'],
+    host_mode_supported: true,
+    install: { method: 'npm' },
+    skip_permissions_flag: '--yolo',
+    container_env: { OMP_LOG: 'info' },
+    isolated_seed_files: [],
+  };
+
+  const CUSTOM_NATIVE_INSTALL: NativeAgentInstall = {
+    method: 'native',
+    install_command: 'curl -fsSL https://example.invalid/install -o /tmp/z.sh && bash /tmp/z.sh',
+    installed_path: '.zed-agent/bin/zedagent',
+    persist_dirs: ['.zed-agent/bin'],
+    bin_dir: '.zed-agent/bin',
+    musl_packages: [],
+    musl_env: {},
+  };
+
+  const CUSTOM_NATIVE: KnownAgent = {
+    name: 'Zed Agent',
+    package: 'zed-agent@latest',
+    binary: 'zedagent',
+    dot_dirs: ['.zed-agent'],
+    host_mode_supported: true,
+    install: CUSTOM_NATIVE_INSTALL,
+    container_env: {},
+    isolated_seed_files: [],
+  };
+
+  const TABLE = [...KNOWN_AGENTS, CUSTOM, CUSTOM_NATIVE];
+  const ompTool: Tool = { name: 'Oh My Pi', package: 'oh-my-pi@latest' };
+  const zedTool: Tool = { name: 'Zed Agent', package: 'zed-agent@latest' };
+  const claudeTool: Tool = { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' };
+
+  test('npmToolSpecs keeps an npm custom entry', () => {
+    expect(npmToolSpecs([ompTool], TABLE)).toEqual(['oh-my-pi@latest']);
+  });
+
+  test('npmToolSpecs excludes a native custom entry only when the table carries it', () => {
+    expect(npmToolSpecs([zedTool], TABLE)).toEqual([]);
+    expect(npmToolSpecs([zedTool], KNOWN_AGENTS)).toEqual(['zed-agent@latest']);
+  });
+
+  test('nativeInstallTargets picks up a native custom entry', () => {
+    expect(nativeInstallTargets([zedTool], TABLE)).toEqual([
+      { name: 'Zed Agent', binary: 'zedagent', install: CUSTOM_NATIVE_INSTALL },
+    ]);
+    expect(nativeInstallTargets([zedTool], KNOWN_AGENTS)).toEqual([]);
+  });
+
+  test('agentsWithSkipPermissions wraps a custom entry with a flag', () => {
+    expect(agentsWithSkipPermissions([ompTool], TABLE)).toEqual([
+      { binary: 'omp', flag: '--yolo' },
+    ]);
+    expect(agentsWithSkipPermissions([ompTool], KNOWN_AGENTS)).toEqual([]);
+  });
+
+  test('agentContainerEnv merges a custom entry env alongside a built-in', () => {
+    expect(agentContainerEnv([claudeTool, ompTool], TABLE)).toEqual({
+      CLAUDE_CODE_SANDBOXED: '1',
+      OMP_LOG: 'info',
+    });
+  });
+});
+
+describe('findBuiltInByName', () => {
+  test('matches a built-in name case-insensitively', () => {
+    expect(findBuiltInByName('claude code')?.name).toBe('Claude Code');
+    expect(findBuiltInByName('Claude Code')?.name).toBe('Claude Code');
+    expect(findBuiltInByName('GEMINI CLI')?.name).toBe('Gemini CLI');
+  });
+
+  test('does not match on a partial name', () => {
+    expect(findBuiltInByName('claude')).toBeUndefined();
+  });
+
+  test('never matches a name that is not built in', () => {
+    expect(findBuiltInByName('Oh My Pi')).toBeUndefined();
+  });
+});
+
+describe('findBuiltInByPackage', () => {
+  test('matches a built-in package regardless of version suffix', () => {
+    expect(findBuiltInByPackage('@anthropic-ai/claude-code@1.2.3')?.name).toBe('Claude Code');
+    expect(findBuiltInByPackage('@anthropic-ai/claude-code')?.name).toBe('Claude Code');
+    expect(findBuiltInByPackage('opencode-ai@latest')?.name).toBe('OpenCode');
+  });
+
+  test('does not match a package that only shares a prefix', () => {
+    expect(findBuiltInByPackage('@anthropic-ai/claude-code-proxy@latest')).toBeUndefined();
+  });
+
+  test('never matches a package that is not built in', () => {
+    expect(findBuiltInByPackage('oh-my-pi@latest')).toBeUndefined();
   });
 });
