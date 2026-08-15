@@ -4,6 +4,7 @@ import * as v from 'valibot';
 const imageRefPattern = /^[a-zA-Z0-9][a-zA-Z0-9._\/-]*(:[a-zA-Z0-9._-]+)?$/;
 const posixUserPattern = /^[a-z_][a-z0-9_-]*$/;
 const packageNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9.+_-]*$/;
+const npmPackagePattern = /^[@a-zA-Z0-9][a-zA-Z0-9._\/-]*(@[a-zA-Z0-9._-]+)?$/i;
 const singleLinePattern = /^[^\n\r]+$/;
 const envKeyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const durationPattern = /^[1-9]\d*[smh]$/;
@@ -16,13 +17,13 @@ const PositiveIntegerSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
 
 const BaseImageSchema = v.pipe(v.string(), v.regex(imageRefPattern));
 
-// Workspace-state entries are home-relative paths used as filesystem targets
-// for `container cp` and `container exec`. Config is trusted input, so these
-// constraints are robustness, not security: reject a leading '/' or any
-// '.'/'..' segment so a path cannot escape the home dir, and keep the charset
-// to simple path characters.
+// Workspace-state entries and agent-definition paths are home-relative paths
+// used as filesystem targets for `container cp` and `container exec`. Config is
+// trusted input, so these constraints are robustness, not security: reject a
+// leading '/' or any '.'/'..' segment so a path cannot escape the home dir, and
+// keep the charset to simple path characters.
 const workspaceStatePathSegmentPattern = /^[A-Za-z0-9._-]+$/;
-function isWorkspaceStatePath(value: string): boolean {
+export function isHomeRelativePath(value: string): boolean {
   return value
     .split('/')
     .every((segment) => segment !== '.' && segment !== '..' && workspaceStatePathSegmentPattern.test(segment));
@@ -30,10 +31,51 @@ function isWorkspaceStatePath(value: string): boolean {
 const WorkspaceStatePathSchema = v.pipe(
   v.string(),
   v.check(
-    isWorkspaceStatePath,
+    isHomeRelativePath,
     'Workspace state paths must be home-relative (e.g. ".zsh_history" or ".local/share/zoxide"): no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".',
   ),
 );
+
+// Agent definitions: user-authored YAML describing a custom agent in the same
+// shape as a KNOWN_AGENTS entry. Path fields share the workspace_state
+// predicate but carry their own message (a workspace-state error would
+// mislead here).
+const binaryPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+const HomeRelativePathSchema = v.pipe(
+  v.string(),
+  v.check(isHomeRelativePath, 'Agent path must be home-relative (e.g. ".local/share/agent"): no leading "/", no "." or ".." segments.'),
+);
+
+const NpmInstallSchema = v.strictObject({ method: v.literal('npm') });
+const NativeInstallSchema = v.strictObject({
+  method: v.literal('native'),
+  install_command: v.pipe(v.string(), v.minLength(1), v.regex(singleLinePattern)),
+  installed_path: HomeRelativePathSchema,
+  persist_dirs: v.array(HomeRelativePathSchema),
+  bin_dir: HomeRelativePathSchema,
+  musl_packages: v.optional(v.array(v.pipe(v.string(), v.regex(packageNamePattern))), []),
+  musl_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
+});
+const AgentInstallSchema = v.union([NpmInstallSchema, NativeInstallSchema]);
+
+const SeedFileSchema = v.strictObject({
+  path: HomeRelativePathSchema,
+  content: v.string(),
+});
+
+// File contents. `name` is deliberately NOT a field — it is the filename.
+export const AgentDefinitionFileSchema = v.strictObject({
+  package: v.pipe(v.string(), v.regex(npmPackagePattern)),
+  binary: v.pipe(v.string(), v.regex(binaryPattern)),
+  dot_dirs: v.optional(v.array(HomeRelativePathSchema), []),
+  host_mode_supported: v.optional(v.boolean(), true),
+  install: v.optional(AgentInstallSchema, { method: 'npm' as const }),
+  host_mode_warning: v.optional(v.string()),
+  skip_permissions_flag: v.optional(v.pipe(v.string(), v.regex(singleLinePattern))),
+  container_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
+  isolated_seed_files: v.optional(v.array(SeedFileSchema), []),
+});
 
 export const ContainerProfileSchema = v.strictObject({
   description: v.string(),
@@ -56,8 +98,6 @@ const HostMountSchema = v.strictObject({
   container: v.string(),
   readonly: v.boolean(),
 });
-
-const npmPackagePattern = /^[@a-zA-Z0-9][a-zA-Z0-9._\/-]*(@[a-zA-Z0-9._-]+)?$/i;
 
 const ToolSchema = v.strictObject({
   name: v.string(),
@@ -242,6 +282,7 @@ export const GitHubReleaseSchema = v.object({
   assets: v.array(GitHubAssetSchema),
 });
 
+export type AgentDefinitionFile = v.InferOutput<typeof AgentDefinitionFileSchema>;
 export type ContainerProfile = v.InferOutput<typeof ContainerProfileSchema>;
 export type HostMount = v.InferOutput<typeof HostMountSchema>;
 export type Tool = v.InferOutput<typeof ToolSchema>;
@@ -287,6 +328,10 @@ export function validateWorkspace(raw: unknown): Workspace {
 
 export function validateAgentProfileMeta(raw: unknown): AgentProfileMeta {
   return parseWithContext('agent profile', AgentProfileMetaSchema, raw);
+}
+
+export function validateAgentDefinition(raw: unknown): AgentDefinitionFile {
+  return parseWithContext('agent definition', AgentDefinitionFileSchema, raw);
 }
 
 // npm dist-tags response: GET https://registry.npmjs.org/-/package/pi-tin/dist-tags

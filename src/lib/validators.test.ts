@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
+  AgentDefinitionFileSchema,
   ContainerListSchema,
   ContainerSystemStatusSchema,
   ContainerSystemVersionSchema,
@@ -897,5 +898,139 @@ describe('UpdateCheckCacheSchema', () => {
 
   test('rejects a cache missing latestVersion', () => {
     expect(v.safeParse(UpdateCheckCacheSchema, { lastCheckMs: 1 }).success).toBe(false);
+  });
+});
+
+// Hand-written for the same reason as WORKSPACE_STATE_RULE: importing the
+// message would make the expectation move with the code it is meant to pin.
+const AGENT_PATH_RULE =
+  'Agent path must be home-relative (e.g. ".local/share/agent"): '
+  + 'no leading "/", no "." or ".." segments.';
+
+describe('AgentDefinitionFileSchema', () => {
+  const minimalDefinition = { package: 'oh-my-pi@latest', binary: 'omp' };
+  const nativeInstall = {
+    method: 'native',
+    install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
+    installed_path: '.local/bin/some-agent',
+    persist_dirs: ['.local/share/some-agent'],
+    bin_dir: '.local/bin',
+  };
+
+  test('minimal definition parses with defaults', () => {
+    const parsed = v.parse(AgentDefinitionFileSchema, { package: 'oh-my-pi@latest', binary: 'omp' });
+    expect(parsed).toEqual({
+      package: 'oh-my-pi@latest',
+      binary: 'omp',
+      dot_dirs: [],
+      host_mode_supported: true,
+      install: { method: 'npm' },
+      container_env: {},
+      isolated_seed_files: [],
+    });
+  });
+
+  test('full native definition parses', () => {
+    const parsed = v.parse(AgentDefinitionFileSchema, {
+      package: 'some-agent@latest',
+      binary: 'some-agent',
+      dot_dirs: ['.config/some-agent'],
+      install: {
+        method: 'native',
+        install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
+        installed_path: '.local/bin/some-agent',
+        persist_dirs: ['.local/share/some-agent'],
+        bin_dir: '.local/bin',
+        musl_packages: ['libgcc', 'libstdc++'],
+      },
+    });
+    expect(parsed.install).toEqual({
+      method: 'native',
+      install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
+      installed_path: '.local/bin/some-agent',
+      persist_dirs: ['.local/share/some-agent'],
+      bin_dir: '.local/bin',
+      musl_packages: ['libgcc', 'libstdc++'],
+      musl_env: {},
+    });
+  });
+
+  // The path fields share the workspace_state predicate but carry their own
+  // message, so the message itself is what must not regress.
+  test('rejects an absolute dot_dirs path, restating the agent-path rule', () => {
+    const parsed = v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, dot_dirs: ['/abs'] });
+    expect(parsed.success).toBe(false);
+    expect(parsed.issues?.[0]?.message).toBe(AGENT_PATH_RULE);
+  });
+
+  test('rejects a dot_dirs path that escapes home via .. segments', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, dot_dirs: ['../x'] }).success)
+      .toBe(false);
+  });
+
+  test('rejects a dot_dirs path containing a space', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, dot_dirs: ['my dir'] }).success)
+      .toBe(false);
+  });
+
+  test('rejects a dot_dirs path containing non-ASCII characters', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, dot_dirs: ['.pí'] }).success)
+      .toBe(false);
+  });
+
+  test('rejects binary names that are not bare PATH executables', () => {
+    for (const binary of ['my agent', 'a/b', '.hidden', '']) {
+      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, binary }).success).toBe(false);
+    }
+  });
+
+  test('rejects a malformed package spec', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, package: 'not a package!' }).success)
+      .toBe(false);
+  });
+
+  test('rejects a multi-line install_command', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      install: { ...nativeInstall, install_command: 'a\nb' },
+    }).success).toBe(false);
+  });
+
+  test('rejects an absolute installed_path', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      install: { ...nativeInstall, installed_path: '/usr/bin/x' },
+    }).success).toBe(false);
+  });
+
+  test('rejects a malformed container_env key', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      container_env: { '1BAD': 'x' },
+    }).success).toBe(false);
+  });
+
+  test('rejects a malformed musl_packages entry', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      install: { ...nativeInstall, musl_packages: ['bad pkg'] },
+    }).success).toBe(false);
+  });
+
+  test('rejects an isolated_seed_files path that escapes home', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      isolated_seed_files: [{ path: '../x', content: '' }],
+    }).success).toBe(false);
+  });
+
+  test('rejects unknown top-level keys', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { package: 'p@1', binary: 'b', bogus: true }).success)
+      .toBe(false);
+  });
+
+  test('rejects an install method outside the union', () => {
+    expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, install: { method: 'brew' } }).success)
+      .toBe(false);
   });
 });
