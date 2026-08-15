@@ -152,6 +152,13 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       stdin: 'agent-definition JSON',
       flags: ['--dry-run', '--json'],
     },
+    {
+      command: 'agent delete',
+      summary: 'Delete a custom agent definition (built-ins cannot be deleted)',
+      args: ['<name>'],
+      flags: ['--force', '--dry-run', '--json'],
+      destructive: true,
+    },
   ],
   interactiveOnly: [
     { command: 'create', use: 'Use `apply <name>` with workspace JSON on stdin.' },
