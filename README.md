@@ -411,7 +411,7 @@ of the following to a non-empty value:
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
 | `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 | `pi-tin agent list [--json]` | List agents, built-in and custom, with each entry's source (`--json` for machine-readable output; JSON is the default when output is piped) |
-| `pi-tin agent apply <name> [--dry-run]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; built-in agents cannot be overridden) |
+| `pi-tin agent apply <name> [--dry-run]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; built-in agents cannot be overridden, and a `package` another definition already claims is rejected) |
 | `pi-tin agent delete <name> [--force] [--dry-run] [--json]` | Delete a custom agent definition (`--dry-run` previews the impact, including referencing workspaces and agent profiles; non-interactive callers must pass `--force` or get exit code 4) |
 
 `pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.

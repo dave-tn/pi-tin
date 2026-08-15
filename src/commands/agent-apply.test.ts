@@ -152,8 +152,14 @@ describe('agent apply', () => {
     const envelope = run.envelope as { action: string; changes: Array<{ kind: string }> };
     expect(envelope.action).toBe('updated');
     expect(envelope.changes.every((change) => change.kind === 'added')).toBe(true);
-    expect(run.warnings.length).toBe(1);
-    expect(run.warnings[0]).toContain("agent definition 'broken'");
+    // Two warnings: the collision check loads the whole definitions dir, which
+    // skips the corrupt file with its own warning, then the diff base fails to
+    // parse it. Both are about the pre-existing file, not this write.
+    expect(run.warnings.length).toBe(2);
+    expect(run.warnings[0]).toContain("skipping invalid agent definition 'broken'");
+    expect(run.warnings[1]).toContain(
+      "existing agent definition 'broken' could not be parsed; apply replaces it",
+    );
 
     const written = YAML.parse(fs.readFileSync(definitionPath('broken'), 'utf-8')) as {
       binary: string;
@@ -231,6 +237,26 @@ describe('agent apply', () => {
       "Package '@anthropic-ai/claude-code@latest' belongs to the built-in agent 'Claude Code'.",
     );
     expect(fs.existsSync(definitionPath('claude-code'))).toBe(false);
+  });
+
+  // The loader drops one of two definitions sharing a package, so accepting the
+  // write here would report success for a file that never takes effect.
+  test('refuses a package already claimed by another custom definition', async () => {
+    writeDefinition('oh-my-pi', 'package: oh-my-pi@latest\nbinary: omp\n');
+
+    const run = await runApply(
+      ['apply', 'oh-my-pi-fork'],
+      JSON.stringify({ package: 'oh-my-pi@1.2.3', binary: 'ompf' }),
+    );
+
+    const err = asCliError(run.err);
+    expect(err.exitCode).toBe(EXIT.VALIDATION);
+    expect(err.detail.code).toBe('validation');
+    expect(err.detail.badInput).toBe('oh-my-pi@1.2.3');
+    expect(err.message).toBe(
+      "Package 'oh-my-pi@1.2.3' is already defined by the agent definition 'oh-my-pi'.",
+    );
+    expect(fs.existsSync(definitionPath('oh-my-pi-fork'))).toBe(false);
   });
 
   test('matches built-in packages with a different version suffix', async () => {

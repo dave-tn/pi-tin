@@ -2,9 +2,10 @@ import { ensureInitialised } from '../lib/init-guard.js';
 import {
   agentDefinitionExists,
   loadAgentDefinition,
+  loadAgentDefinitions,
   writeAgentDefinition,
 } from '../lib/agent-definitions.js';
-import { findBuiltInByName, findBuiltInByPackage } from '../lib/agents.js';
+import { findBuiltInByName, findBuiltInByPackage, packagesCollide } from '../lib/agents.js';
 import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 import { validateAgentDefinition } from '../lib/validators.js';
@@ -55,6 +56,25 @@ export function registerAgentApplyCommand(group: import('commander').Command): v
       if (builtInPackage !== undefined) {
         throw new CliError(
           `Package '${definition.package}' belongs to the built-in agent '${builtInPackage.name}'.`,
+          EXIT.VALIDATION,
+          { code: 'validation', badInput: definition.package },
+        );
+      }
+
+      // The loader also drops a definition whose package duplicates another
+      // custom's, so writing one would report success for a file that never
+      // takes effect anywhere. Entries under this name are the file being
+      // written, not a rival — an in-place update keeps its own package.
+      // Warnings this load prints concern pre-existing bad files, not this write.
+      const otherDefinitions = loadAgentDefinitions().filter(
+        (agent) => agent.name.toLowerCase() !== name.toLowerCase(),
+      );
+      const samePackage = otherDefinitions.find((agent) =>
+        packagesCollide(agent.package, definition.package),
+      );
+      if (samePackage !== undefined) {
+        throw new CliError(
+          `Package '${definition.package}' is already defined by the agent definition '${samePackage.name}'.`,
           EXIT.VALIDATION,
           { code: 'validation', badInput: definition.package },
         );
