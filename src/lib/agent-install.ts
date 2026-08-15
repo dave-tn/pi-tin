@@ -25,7 +25,7 @@ import type { ProgressOutput } from './sync-progress.js';
 export const AGENT_INSTALL_TIMEOUT_MS = 600_000;
 
 /**
- * In-container `test -x` on the agent's installedPath. 'unavailable' is a
+ * In-container `test -x` on the agent's installed_path. 'unavailable' is a
  * probe *timeout* only: the probe runs after the attach probe has already
  * proved exec works, so a timeout is anomalous and must never be answered
  * with a ten-minute install against a runtime that just failed a 5s command.
@@ -96,7 +96,7 @@ function defaultDeps(options: AgentInstallOptions): AgentInstallDeps {
       await execContainerCommandWithDeadline({
         name: options.containerName,
         user: options.user,
-        command: ['sh', '-c', target.install.installCommand],
+        command: ['sh', '-c', target.install.install_command],
         timeoutMs: AGENT_INSTALL_TIMEOUT_MS,
         // ^C skips the install and continues to the shell — on a host,
         // interrupting an installer returns you to your prompt. The copy
@@ -168,7 +168,7 @@ export async function runAgentInstallStep(
 
   const probes: AgentInstallProbeEntry[] = [];
   for (const target of options.targets) {
-    const probe = deps.probe(path.posix.join(containerHome, target.install.installedPath));
+    const probe = deps.probe(path.posix.join(containerHome, target.install.installed_path));
     probes.push({ target, probe });
     // Don't queue more doomed 5s waits against a runtime that just timed out.
     if (probe === 'unavailable') break;

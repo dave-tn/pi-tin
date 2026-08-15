@@ -69,8 +69,8 @@ describe('findConfiguredAgents', () => {
 });
 
 describe('planDiscoveredAgentProfile', () => {
-  const hostCapable = { name: 'Pi', hostModeSupported: true } as const;
-  const keychainOnly = { name: 'Claude Code', hostModeSupported: false } as const;
+  const hostCapable = { name: 'Pi', host_mode_supported: true } as const;
+  const keychainOnly = { name: 'Claude Code', host_mode_supported: false } as const;
 
   test('offers the mode choice with no note for a host-capable agent without a warning', () => {
     expect(planDiscoveredAgentProfile({ agent: hostCapable, existingProfileNames: [] })).toEqual({
@@ -83,8 +83,8 @@ describe('planDiscoveredAgentProfile', () => {
   test("prefixes the agent's host-mode warning with 'Note: '", () => {
     const codex = {
       name: 'Codex',
-      hostModeSupported: true,
-      hostModeWarning:
+      host_mode_supported: true,
+      host_mode_warning:
         'Shared mode persists login via ~/.codex/auth.json, which is the default. If you set cli_auth_credentials_store = "keyring" (or "auto" on macOS, which prefers the OS keychain), the credential lives outside ~/.codex and will not transfer — choose Isolated instead.',
     } as const;
     expect(planDiscoveredAgentProfile({ agent: codex, existingProfileNames: [] })).toEqual({

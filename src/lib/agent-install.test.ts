@@ -10,7 +10,7 @@ import type { NativeInstallTarget } from './agents.js';
 import type { ProgressOutput } from './sync-progress.js';
 
 // Real KNOWN_AGENTS entries, so a change to the table's install shape
-// (installedPath in particular) surfaces here rather than against a fixture.
+// (installed_path in particular) surfaces here rather than against a fixture.
 const NATIVE_TARGETS = nativeInstallTargets([
   { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
   { name: 'OpenCode', package: 'opencode-ai@latest' },

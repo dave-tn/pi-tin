@@ -18,7 +18,7 @@ export function findConfiguredAgents(home: string = os.homedir()): KnownAgent[] 
   // configured here. Host-mode mounting asks a different question — it needs
   // every dir to exist — and answers it separately in create.ts.
   return KNOWN_AGENTS.filter((agent) =>
-    agent.dotDirs.some((dir) => isExistingDirectory(path.join(home, dir))),
+    agent.dot_dirs.some((dir) => isExistingDirectory(path.join(home, dir))),
   );
 }
 
@@ -49,17 +49,17 @@ export type DiscoveredAgentPlan =
 
 /** Whether the user is offered a host/isolated choice, and the name to pre-fill. */
 export function planDiscoveredAgentProfile(options: {
-  agent: Pick<KnownAgent, 'name' | 'hostModeSupported' | 'hostModeWarning'>;
+  agent: Pick<KnownAgent, 'name' | 'host_mode_supported' | 'host_mode_warning'>;
   existingProfileNames: readonly string[];
 }): DiscoveredAgentPlan {
   const { agent, existingProfileNames } = options;
   const suggestedName = suggestAgentProfileName(defaultProfileNameFor(agent), existingProfileNames);
 
-  if (agent.hostModeSupported) {
+  if (agent.host_mode_supported) {
     return {
       mode: 'select',
       suggestedName,
-      hostModeNote: agent.hostModeWarning ? `Note: ${agent.hostModeWarning}` : undefined,
+      hostModeNote: agent.host_mode_warning ? `Note: ${agent.host_mode_warning}` : undefined,
     };
   }
 

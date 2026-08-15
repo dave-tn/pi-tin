@@ -15,7 +15,7 @@ import {
 } from './create-flow.js';
 
 describe('planAgentProfileSelection', () => {
-  const agent = { dotDirs: ['.claude'] };
+  const agent = { dot_dirs: ['.claude'] };
 
   test('creates a default profile when no profiles or host config exist', () => {
     expect(planAgentProfileSelection(agent, [], false)).toEqual({
@@ -47,7 +47,7 @@ describe('planAgentProfileSelection', () => {
 
   test('puts the host config option first when host config exists', () => {
     const plan = planAgentProfileSelection(
-      { dotDirs: ['.local/share/opencode', '.config/opencode'] },
+      { dot_dirs: ['.local/share/opencode', '.config/opencode'] },
       [{ name: 'oc', mode: 'isolated', mounts: ['.local/share/opencode', '.config/opencode'] }],
       true,
     );

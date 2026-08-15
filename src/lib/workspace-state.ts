@@ -115,7 +115,7 @@ export function planWorkspaceStateSync(input: WorkspaceStatePlanInput): Workspac
  */
 export function managedInstallMountPaths(workspace: Pick<Workspace, 'attach' | 'tools'>): string[] {
   const installDirs = nativeInstallTargets(workspace.tools).flatMap(
-    (target) => target.install.persistDirs,
+    (target) => target.install.persist_dirs,
   );
   const herdrDirs =
     workspace.attach === 'herdr' ? ['.local/bin', '.config/herdr', '.local/state/herdr'] : [];

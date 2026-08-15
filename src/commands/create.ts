@@ -185,8 +185,8 @@ async function promptAndCreateAgentProfile(agent: KnownAgent): Promise<string> {
 // Check if host config exists for host-capable agents
 function hostAgentConfigExists(agent: KnownAgent): boolean {
   return (
-    agent.hostModeSupported &&
-    agent.dotDirs.every((dir) => {
+    agent.host_mode_supported &&
+    agent.dot_dirs.every((dir) => {
       const dotPath = path.join(os.homedir(), dir);
       return fs.existsSync(dotPath) && fs.statSync(dotPath).isDirectory();
     })
@@ -206,8 +206,8 @@ async function promptAgentProfile(agent: KnownAgent): Promise<string> {
   });
 
   if (chosen.kind === 'use-host') {
-    if (agent.hostModeWarning) {
-      console.log(chalk.yellow(`  Note: ${agent.hostModeWarning}`));
+    if (agent.host_mode_warning) {
+      console.log(chalk.yellow(`  Note: ${agent.host_mode_warning}`));
     }
     if (chosen.existingProfileName !== undefined) {
       return chosen.existingProfileName;

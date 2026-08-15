@@ -1,56 +1,34 @@
-import type { Tool } from './validators.js';
+import type { AgentDefinitionFile, Tool } from './validators.js';
 
-// Plain interface rather than a valibot schema: KNOWN_AGENTS is compile-time
-// data that never crosses a parse boundary, so there is nothing to validate.
-export interface KnownAgent {
-  name: string;
-  package: string;
-  binary: string;
-  dotDirs: string[];
-  hostModeSupported: boolean;
-  install: AgentInstall;
-  hostModeWarning?: string;
-  skipPermissionsFlag?: string;
-  containerEnv?: Record<string, string>;
-  /** Files written into a freshly created isolated agent-profile dir, path relative to the profile dir. */
-  isolatedSeedFiles?: Array<{ path: string; content: string }>;
-}
+/**
+ * A built-in agent: the agent-definition shape, plus the identity a definition
+ * file leaves implicit (there the file name is the agent name). One type for
+ * both sources, so a built-in entry and a user-authored definition are
+ * interchangeable everywhere downstream. `isolated_seed_files` are written into
+ * a freshly created isolated agent-profile dir, path relative to that dir.
+ */
+export type KnownAgent = AgentDefinitionFile & { name: string };
 
 /**
  * How an agent is installed and kept fresh. `npm` agents are baked with
  * `npm install -g` and refreshed into the shadow prefix on every open.
  * `native` agents run their official install script in-container at first
- * open, onto live host mounts (`persistDirs`) backed by the workspace-state
+ * open, onto live host mounts (`persist_dirs`) backed by the workspace-state
  * dir — so their own auto-updaters keep them current and every update
  * persists across container lives, exactly as on a plain host.
+ *
+ * Its fields: `install_command` is the shell command run in-container (under
+ * the host-side install lock) when `installed_path` probes absent.
+ * `installed_path` is a home-relative path checked in-container with `test -x`
+ * — for Claude the launcher symlink, so a dangling link or non-executable
+ * target reads as "not installed" and self-heals via reinstall. `persist_dirs`
+ * are the home-relative dirs live-mounted from the workspace-state dir.
+ * `bin_dir` is the home-relative bin dir appended to the image PATH; it
+ * duplicates an element of `persist_dirs` deliberately, and the invariant is
+ * tested. `musl_packages` and `musl_env` are the extra apk packages and image
+ * ENV the binary needs on musl bases.
  */
-export type AgentInstall = { method: 'npm' } | NativeAgentInstall;
-
-export interface NativeAgentInstall {
-  method: 'native';
-  /**
-   * Shell command run in-container (under the host-side install lock) when
-   * `installedPath` probes absent.
-   */
-  installCommand: string;
-  /**
-   * Home-relative path checked in-container with `test -x` — for Claude the
-   * launcher symlink, so a dangling link or non-executable target reads as
-   * "not installed" and self-heals via reinstall.
-   */
-  installedPath: string;
-  /** Home-relative dirs live-mounted from the workspace-state dir. */
-  persistDirs: string[];
-  /**
-   * Home-relative bin dir appended to the image PATH. Duplicates an element
-   * of persistDirs deliberately; the invariant is tested.
-   */
-  binDir: string;
-  /** Extra apk packages the binary needs on musl bases. */
-  muslPackages: string[];
-  /** Extra image ENV on musl bases. */
-  muslEnv: Record<string, string>;
-}
+export type NativeAgentInstall = Extract<KnownAgent['install'], { method: 'native' }>;
 
 function packageName(packageSpec: string): string {
   return packageSpec.replace(/@[^/@]*$/, '');
@@ -71,9 +49,10 @@ function knownAgentForPackage(pkg: Tool): KnownAgent | undefined {
 
 /**
  * Project a KNOWN_AGENTS entry down to the public Tool shape persisted in a
- * workspace YAML. Internal fields (binary, skipPermissionsFlag, containerEnv,
- * dotDirs, hostMode*) are re-derived from `package` at runtime, so we never
- * write them to disk — only `name` and `package` identify the tool.
+ * workspace YAML. Internal fields (binary, skip_permissions_flag,
+ * container_env, dot_dirs, host_mode_*) are re-derived from `package` at
+ * runtime, so we never write them to disk — only `name` and `package`
+ * identify the tool.
  */
 export function toWorkspaceTool(agent: KnownAgent): Tool {
   return { name: agent.name, package: agent.package };
@@ -85,8 +64,8 @@ export function defaultProfileNameFor(agent: Pick<KnownAgent, 'name'>): string {
 }
 
 /** Human-readable list of an agent's host config directories, tilde-relative. */
-export function dotDirsLabel(agent: Pick<KnownAgent, 'dotDirs'>): string {
-  return agent.dotDirs.map((dir) => `~/${dir}`).join(', ');
+export function dotDirsLabel(agent: Pick<KnownAgent, 'dot_dirs'>): string {
+  return agent.dot_dirs.map((dir) => `~/${dir}`).join(', ');
 }
 
 /**
@@ -179,8 +158,8 @@ export function agentContainerEnv(packages: Tool[]): Record<string, string> {
   const env: Record<string, string> = {};
   for (const pkg of packages) {
     const agent = knownAgentForPackage(pkg);
-    if (agent?.containerEnv) {
-      Object.assign(env, agent.containerEnv);
+    if (agent !== undefined) {
+      Object.assign(env, agent.container_env);
     }
   }
   return env;
@@ -191,8 +170,8 @@ export function agentsWithSkipPermissions(packages: Tool[]): Array<{ binary: str
   const results: Array<{ binary: string; flag: string }> = [];
   for (const pkg of packages) {
     const agent = knownAgentForPackage(pkg);
-    if (agent?.skipPermissionsFlag && !usesManagedSkipPermissions(agent)) {
-      results.push({ binary: agent.binary, flag: agent.skipPermissionsFlag });
+    if (agent?.skip_permissions_flag && !usesManagedSkipPermissions(agent)) {
+      results.push({ binary: agent.binary, flag: agent.skip_permissions_flag });
     }
   }
   return results;
@@ -220,10 +199,11 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     name: 'Claude Code',
     package: '@anthropic-ai/claude-code@latest',
     binary: 'claude',
-    dotDirs: ['.claude'],
-    hostModeSupported: false,
-    skipPermissionsFlag: '--dangerously-skip-permissions',
-    containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
+    dot_dirs: ['.claude'],
+    host_mode_supported: false,
+    skip_permissions_flag: '--dangerously-skip-permissions',
+    container_env: { CLAUDE_CODE_SANDBOXED: '1' },
+    isolated_seed_files: [],
     // Native layout: ~/.local/bin/claude is a symlink into
     // ~/.local/share/claude/versions/<v>; the auto-updater swaps it atomically,
     // so freshness comes from the agent itself, and both dirs are live host
@@ -232,79 +212,86 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     // a piped curl failure would still look like a successful install.
     install: {
       method: 'native',
-      installCommand:
+      install_command:
         'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
-      installedPath: '.local/bin/claude',
-      persistDirs: ['.local/share/claude', '.local/bin'],
-      binDir: '.local/bin',
-      muslPackages: ['libgcc', 'libstdc++', 'ripgrep'],
-      muslEnv: { USE_BUILTIN_RIPGREP: '0' },
+      installed_path: '.local/bin/claude',
+      persist_dirs: ['.local/share/claude', '.local/bin'],
+      bin_dir: '.local/bin',
+      musl_packages: ['libgcc', 'libstdc++', 'ripgrep'],
+      musl_env: { USE_BUILTIN_RIPGREP: '0' },
     },
   },
   {
     name: 'Pi',
     package: '@earendil-works/pi-coding-agent@latest',
     binary: 'pi',
-    dotDirs: ['.pi'],
-    hostModeSupported: true,
+    dot_dirs: ['.pi'],
+    host_mode_supported: true,
     install: { method: 'npm' },
+    container_env: {},
     // Pi always runs in skip-permissions mode — no flag needed
-    isolatedSeedFiles: [{ path: '.pi/agent/trust.json', content: PI_TRUST_SEED }],
+    isolated_seed_files: [{ path: '.pi/agent/trust.json', content: PI_TRUST_SEED }],
   },
   {
     name: 'Codex',
     package: '@openai/codex@latest',
     binary: 'codex',
-    dotDirs: ['.codex'],
-    hostModeSupported: true,
+    dot_dirs: ['.codex'],
+    host_mode_supported: true,
     // Codex ships a native installer but no self-update mechanism, so the npm
     // refresh path stays its freshness story.
     install: { method: 'npm' },
-    hostModeWarning:
+    host_mode_warning:
       'Shared mode persists login via ~/.codex/auth.json, which is the default. If you set cli_auth_credentials_store = "keyring" (or "auto" on macOS, which prefers the OS keychain), the credential lives outside ~/.codex and will not transfer — choose Isolated instead.',
-    skipPermissionsFlag: '--dangerously-bypass-approvals-and-sandbox',
+    skip_permissions_flag: '--dangerously-bypass-approvals-and-sandbox',
+    container_env: {},
+    isolated_seed_files: [],
   },
   {
     name: 'OpenCode',
     package: 'opencode-ai@latest',
     binary: 'opencode',
-    dotDirs: ['.local/share/opencode', '.config/opencode'],
-    hostModeSupported: true,
+    dot_dirs: ['.local/share/opencode', '.config/opencode'],
+    host_mode_supported: true,
     // Flat single binary; opencode replaces it by rename when it auto-updates
     // on startup, and the bin dir is a live host mount so the update persists.
     // --no-modify-path: the image ENV PATH covers ~/.opencode/bin.
     // Download-then-run for the same no-pipefail reason as Claude above.
     install: {
       method: 'native',
-      installCommand:
+      install_command:
         'curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
-      installedPath: '.opencode/bin/opencode',
-      persistDirs: ['.opencode/bin'],
-      binDir: '.opencode/bin',
-      muslPackages: [],
-      muslEnv: {},
+      installed_path: '.opencode/bin/opencode',
+      persist_dirs: ['.opencode/bin'],
+      bin_dir: '.opencode/bin',
+      musl_packages: [],
+      musl_env: {},
     },
     // No skip-permissions flag needed (edit/bash default to "allow"); see
     // OPENCODE_SANDBOX_CONFIG above for the external_directory bypass.
-    containerEnv: { OPENCODE_CONFIG_CONTENT: OPENCODE_SANDBOX_CONFIG },
+    container_env: { OPENCODE_CONFIG_CONTENT: OPENCODE_SANDBOX_CONFIG },
+    isolated_seed_files: [],
   },
   {
     name: 'Amp',
     package: '@ampcode/cli@latest',
     binary: 'amp',
-    dotDirs: ['.local/share/amp', '.config/amp'],
-    hostModeSupported: true,
+    dot_dirs: ['.local/share/amp', '.config/amp'],
+    host_mode_supported: true,
     install: { method: 'npm' },
+    container_env: {},
+    isolated_seed_files: [],
     // Amp runs without approval prompts by default — no flag needed.
   },
   {
     name: 'Gemini CLI',
     package: '@google/gemini-cli@latest',
     binary: 'gemini',
-    dotDirs: ['.gemini'],
-    hostModeSupported: true,
+    dot_dirs: ['.gemini'],
+    host_mode_supported: true,
     install: { method: 'npm' },
-    skipPermissionsFlag: '--approval-mode=yolo',
-    containerEnv: { NO_BROWSER: 'true' },
+    skip_permissions_flag: '--approval-mode=yolo',
+    container_env: { NO_BROWSER: 'true' },
+    isolated_seed_files: [],
   },
 ];

@@ -581,28 +581,28 @@ describe('WorkspaceSchema tools', () => {
         tool: {
           name: 'Claude Code',
           package: '@anthropic-ai/claude-code@latest',
-          dotDirs: ['.claude'],
+          dot_dirs: ['.claude'],
         },
         message: 'Invalid workspace configuration:\n'
-          + '  tools.0.dotDirs: Invalid key: Expected never but received "dotDirs"',
+          + '  tools.0.dot_dirs: Invalid key: Expected never but received "dot_dirs"',
       },
       {
         tool: {
           name: 'Claude Code',
           package: '@anthropic-ai/claude-code@latest',
-          hostModeSupported: false,
+          host_mode_supported: false,
         },
         message: 'Invalid workspace configuration:\n'
-          + '  tools.0.hostModeSupported: Invalid key: Expected never but received "hostModeSupported"',
+          + '  tools.0.host_mode_supported: Invalid key: Expected never but received "host_mode_supported"',
       },
       {
         tool: {
           name: 'Codex',
           package: '@openai/codex@latest',
-          hostModeWarning: 'warning',
+          host_mode_warning: 'warning',
         },
         message: 'Invalid workspace configuration:\n'
-          + '  tools.0.hostModeWarning: Invalid key: Expected never but received "hostModeWarning"',
+          + '  tools.0.host_mode_warning: Invalid key: Expected never but received "host_mode_warning"',
       },
       {
         tool: {
@@ -617,19 +617,19 @@ describe('WorkspaceSchema tools', () => {
         tool: {
           name: 'Claude Code',
           package: '@anthropic-ai/claude-code@latest',
-          skipPermissionsFlag: '--dangerously-skip-permissions',
+          skip_permissions_flag: '--dangerously-skip-permissions',
         },
         message: 'Invalid workspace configuration:\n'
-          + '  tools.0.skipPermissionsFlag: Invalid key: Expected never but received "skipPermissionsFlag"',
+          + '  tools.0.skip_permissions_flag: Invalid key: Expected never but received "skip_permissions_flag"',
       },
       {
         tool: {
           name: 'Claude Code',
           package: '@anthropic-ai/claude-code@latest',
-          containerEnv: { CLAUDE_CODE_SANDBOXED: '1' },
+          container_env: { CLAUDE_CODE_SANDBOXED: '1' },
         },
         message: 'Invalid workspace configuration:\n'
-          + '  tools.0.containerEnv: Invalid key: Expected never but received "containerEnv"',
+          + '  tools.0.container_env: Invalid key: Expected never but received "container_env"',
       },
     ];
 

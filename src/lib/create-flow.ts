@@ -34,12 +34,12 @@ export function hostProfileNameFor(agent: Pick<KnownAgent, 'name'>): string {
 }
 
 export function planAgentProfileSelection(
-  agent: Pick<KnownAgent, 'dotDirs'>,
+  agent: Pick<KnownAgent, 'dot_dirs'>,
   allProfiles: ReadonlyArray<AgentProfileSummary>,
   hostConfigExists: boolean,
 ): AgentProfilePlan {
   const agentProfiles = allProfiles.filter((p) =>
-    p.mounts.some((m) => agent.dotDirs.includes(m)),
+    p.mounts.some((m) => agent.dot_dirs.includes(m)),
   );
   const hostProfile = agentProfiles.find((p) => p.mode === 'host');
   const visibleProfiles = agentProfiles.filter((p) => p.mode !== 'host');

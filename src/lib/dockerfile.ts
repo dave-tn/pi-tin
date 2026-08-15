@@ -260,7 +260,7 @@ export function generateDockerfile(
   // build, but still need curl+bash baked (same package names across
   // apt/apk/dnf); musl bases additionally need each agent's runtime libs.
   const nativeMuslPackages =
-    pm === 'apk' ? [...new Set(nativeInstalls.flatMap((install) => install.muslPackages))] : [];
+    pm === 'apk' ? [...new Set(nativeInstalls.flatMap((install) => install.musl_packages))] : [];
   const allPackages = [
     ...profile.packages,
     ...profile.extra_packages,
@@ -312,7 +312,7 @@ export function generateDockerfile(
   // it is a build-time snapshot of a directory that is live-mounted at
   // runtime, so the mounted copy must win — but still ahead of $PATH, keeping
   // today's behaviour where a ~/.local/bin tool shadows the distro's.
-  const nativeBinDirs = [...new Set(nativeInstalls.map((install) => install.binDir))]
+  const nativeBinDirs = [...new Set(nativeInstalls.map((install) => install.bin_dir))]
     .filter((binDir) => binDir !== '.local/bin');
   const nativeBinSuffix = nativeBinDirs.map((binDir) => `:$HOME_DIR/${binDir}`).join('');
   lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin${nativeBinSuffix}:${BAKED_BIN_DIR}:$PATH`);
@@ -322,7 +322,7 @@ export function generateDockerfile(
   }
   if (pm === 'apk') {
     for (const install of nativeInstalls) {
-      for (const [key, value] of Object.entries(install.muslEnv)) {
+      for (const [key, value] of Object.entries(install.musl_env)) {
         lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
       }
     }

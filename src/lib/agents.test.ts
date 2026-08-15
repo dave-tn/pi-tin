@@ -6,21 +6,21 @@ import type { Tool } from './validators.js';
 describe('KNOWN_AGENTS', () => {
   test('every agent has at least one dot-prefixed dotDir', () => {
     for (const agent of KNOWN_AGENTS) {
-      expect(agent.dotDirs.length).toBeGreaterThan(0);
-      for (const d of agent.dotDirs) {
+      expect(agent.dot_dirs.length).toBeGreaterThan(0);
+      for (const d of agent.dot_dirs) {
         expect(d.startsWith('.')).toBe(true);
       }
     }
   });
 
-  test('dotDirs are unique across agents', () => {
-    const allDirs = KNOWN_AGENTS.flatMap((a) => a.dotDirs);
+  test('dot_dirs are unique across agents', () => {
+    const allDirs = KNOWN_AGENTS.flatMap((a) => a.dot_dirs);
     expect(new Set(allDirs).size).toBe(allDirs.length);
   });
 
   test('claude agent has .claude dotDir', () => {
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.dotDirs).toContain('.claude');
+    expect(claude?.dot_dirs).toContain('.claude');
   });
 
   test('every agent has a non-empty binary', () => {
@@ -31,36 +31,36 @@ describe('KNOWN_AGENTS', () => {
 
   test('agents with skip-permissions flags have the expected flags', () => {
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.skipPermissionsFlag).toBe('--dangerously-skip-permissions');
+    expect(claude?.skip_permissions_flag).toBe('--dangerously-skip-permissions');
 
     const codex = KNOWN_AGENTS.find((a) => a.name === 'Codex');
-    expect(codex?.skipPermissionsFlag).toBe('--dangerously-bypass-approvals-and-sandbox');
+    expect(codex?.skip_permissions_flag).toBe('--dangerously-bypass-approvals-and-sandbox');
 
     const amp = KNOWN_AGENTS.find((a) => a.name === 'Amp');
-    expect(amp?.skipPermissionsFlag).toBeUndefined();
+    expect(amp?.skip_permissions_flag).toBeUndefined();
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
-    expect(gemini?.skipPermissionsFlag).toBe('--approval-mode=yolo');
+    expect(gemini?.skip_permissions_flag).toBe('--approval-mode=yolo');
   });
 
-  test('agents with containerEnv have the expected env vars', () => {
+  test('agents with container_env have the expected env vars', () => {
     // No DISABLE_AUTOUPDATER: native-installed Claude Code keeps itself fresh
     // with its own auto-updater.
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.containerEnv).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
+    expect(claude?.container_env).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
-    expect(gemini?.containerEnv).toEqual({ NO_BROWSER: 'true' });
+    expect(gemini?.container_env).toEqual({ NO_BROWSER: 'true' });
 
     const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
-    expect(opencode?.containerEnv).toEqual({
+    expect(opencode?.container_env).toEqual({
       OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
     });
   });
 
   test('pi has no skip-permissions flag (always in skip mode)', () => {
     const pi = KNOWN_AGENTS.find((a) => a.name === 'Pi');
-    expect(pi?.skipPermissionsFlag).toBeUndefined();
+    expect(pi?.skip_permissions_flag).toBeUndefined();
   });
 
   test('every agent has an install method; exactly Claude Code and OpenCode are native', () => {
@@ -75,13 +75,13 @@ describe('KNOWN_AGENTS', () => {
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
     expect(claude?.install).toEqual({
       method: 'native',
-      installCommand:
+      install_command:
         'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && bash /tmp/claude-install.sh && rm /tmp/claude-install.sh',
-      installedPath: '.local/bin/claude',
-      persistDirs: ['.local/share/claude', '.local/bin'],
-      binDir: '.local/bin',
-      muslPackages: ['libgcc', 'libstdc++', 'ripgrep'],
-      muslEnv: { USE_BUILTIN_RIPGREP: '0' },
+      installed_path: '.local/bin/claude',
+      persist_dirs: ['.local/share/claude', '.local/bin'],
+      bin_dir: '.local/bin',
+      musl_packages: ['libgcc', 'libstdc++', 'ripgrep'],
+      musl_env: { USE_BUILTIN_RIPGREP: '0' },
     });
   });
 
@@ -89,25 +89,25 @@ describe('KNOWN_AGENTS', () => {
     const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
     expect(opencode?.install).toEqual({
       method: 'native',
-      installCommand:
+      install_command:
         'curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh && bash /tmp/opencode-install.sh --no-modify-path && rm /tmp/opencode-install.sh',
-      installedPath: '.opencode/bin/opencode',
-      persistDirs: ['.opencode/bin'],
-      binDir: '.opencode/bin',
-      muslPackages: [],
-      muslEnv: {},
+      installed_path: '.opencode/bin/opencode',
+      persist_dirs: ['.opencode/bin'],
+      bin_dir: '.opencode/bin',
+      musl_packages: [],
+      musl_env: {},
     });
   });
 
-  // binDir joins the image PATH; persistDirs become the live mounts. A binDir
-  // outside persistDirs would put the agent's own binary somewhere the mount
+  // bin_dir joins the image PATH; persist_dirs become the live mounts. A bin_dir
+  // outside persist_dirs would put the agent's own binary somewhere the mount
   // never persists — installed once, gone the next container life.
-  test('every native agent mounts its binDir and installs inside a mounted dir', () => {
+  test('every native agent mounts its bin_dir and installs inside a mounted dir', () => {
     for (const agent of KNOWN_AGENTS) {
       if (agent.install.method !== 'native') continue;
-      const { binDir, persistDirs, installedPath } = agent.install;
-      expect(persistDirs).toContain(binDir);
-      expect(persistDirs.some((dir) => installedPath.startsWith(`${dir}/`))).toBe(true);
+      const { bin_dir, persist_dirs, installed_path } = agent.install;
+      expect(persist_dirs).toContain(bin_dir);
+      expect(persist_dirs.some((dir) => installed_path.startsWith(`${dir}/`))).toBe(true);
     }
   });
 });
@@ -121,7 +121,7 @@ describe('install method helpers', () => {
   ];
 
   test('nativeInstallTargets pairs native metadata with agent identity, in tool order', () => {
-    expect(nativeInstallTargets(mixed).map((target) => [target.name, target.binary, target.install.binDir]))
+    expect(nativeInstallTargets(mixed).map((target) => [target.name, target.binary, target.install.bin_dir]))
       .toEqual([
         ['Claude Code', 'claude', '.local/bin'],
         ['OpenCode', 'opencode', '.opencode/bin'],
@@ -153,7 +153,7 @@ describe('agentContainerEnv', () => {
     });
   });
 
-  test('returns empty object for agents without containerEnv', () => {
+  test('returns empty object for agents with an empty container_env', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];

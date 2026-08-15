@@ -27,7 +27,7 @@ function getProfileDir(name: string): string {
 // agent must be known and have dot-dirs to mount. Shared with the add
 // command's up-front validation so the two checks cannot drift.
 export function findCreatableAgent(agentName: string): KnownAgent | undefined {
-  return KNOWN_AGENTS.find((agent) => agent.name === agentName && agent.dotDirs.length > 0);
+  return KNOWN_AGENTS.find((agent) => agent.name === agentName && agent.dot_dirs.length > 0);
 }
 
 export function unknownAgentMessage(agentName: string): string {
@@ -44,7 +44,7 @@ export function createAgentProfile(
     throw new Error(unknownAgentMessage(agentName));
   }
 
-  if (mode === 'host' && !agent.hostModeSupported) {
+  if (mode === 'host' && !agent.host_mode_supported) {
     throw new Error(
       `${agentName} does not support host mode. Its auth depends on macOS Keychain, which is unavailable in containers.`,
     );
@@ -60,17 +60,17 @@ export function createAgentProfile(
   fs.mkdirSync(profileDir, { recursive: true });
 
   if (mode === 'isolated') {
-    for (const mount of agent.dotDirs) {
+    for (const mount of agent.dot_dirs) {
       fs.mkdirSync(path.join(profileDir, mount), { recursive: true });
     }
-    for (const seedFile of agent.isolatedSeedFiles ?? []) {
+    for (const seedFile of agent.isolated_seed_files) {
       const seedPath = path.join(profileDir, seedFile.path);
       fs.mkdirSync(path.dirname(seedPath), { recursive: true });
       fs.writeFileSync(seedPath, seedFile.content, 'utf-8');
     }
   }
 
-  const meta: AgentProfileMeta = { agent: agentName, mode, mounts: [...agent.dotDirs] };
+  const meta: AgentProfileMeta = { agent: agentName, mode, mounts: [...agent.dot_dirs] };
   atomicWriteFile(path.join(profileDir, 'profile.yaml'), YAML.stringify(meta));
 
   return profileDir;
