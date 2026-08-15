@@ -16,6 +16,21 @@ describe('agent-guide content', () => {
     expect(AGENT_HELP_SCHEMA.exitCodes['3']).toBeDefined();
   });
 
+  test('the schema documents the agent definition commands', () => {
+    const summaries = new Map(AGENT_HELP_SCHEMA.commands.map((c) => [c.command, c.summary]));
+    expect(summaries.get('agent list')).toBe('List agents (built-in and custom definitions)');
+    expect(summaries.get('agent apply')).toBe(
+      'Create or update a custom agent definition (built-in agents cannot be overridden)',
+    );
+    expect(summaries.get('agent delete')).toBe('Delete a custom agent definition');
+  });
+
+  test('the guide shows the custom agent definition flow', () => {
+    expect(AGENT_GUIDE).toContain('pi-tin agent list --json');
+    expect(AGENT_GUIDE).toContain('pi-tin agent apply <name> --dry-run < a.json');
+    expect(AGENT_GUIDE).toContain('pi-tin agent apply <name> < a.json');
+  });
+
   test('the natural-language UI skill is embedded and gated to interactive use', () => {
     expect(AGENT_GUIDE).toContain('NATURAL-LANGUAGE UI');
     expect(AGENT_GUIDE).toContain('natural-language UI');

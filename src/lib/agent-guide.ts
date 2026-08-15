@@ -154,7 +154,7 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
     },
     {
       command: 'agent delete',
-      summary: 'Delete a custom agent definition (built-ins cannot be deleted)',
+      summary: 'Delete a custom agent definition',
       args: ['<name>'],
       flags: ['--force', '--dry-run', '--json'],
       destructive: true,
@@ -200,6 +200,10 @@ TYPICAL FLOWS
     pi-tin agent-profile add <name> --agent "Claude Code"
     pi-tin agent-profile delete <name> --dry-run   # preview blast radius
     pi-tin agent-profile delete <name> --force     # after confirming with the user
+- Custom agent definition (makes a non-built-in agent first-class):
+    pi-tin agent list --json                       # built-ins + customs
+    pi-tin agent apply <name> --dry-run < a.json   # preview
+    pi-tin agent apply <name> < a.json             # write
 - Stop or delete a workspace (destructive — preview, confirm with the user, then --force):
     pi-tin delete <name> --dry-run
     pi-tin delete <name> --force
