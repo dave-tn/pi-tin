@@ -44,7 +44,7 @@ const binaryPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 const HomeRelativePathSchema = v.pipe(
   v.string(),
-  v.check(isHomeRelativePath, 'Agent path must be home-relative (e.g. ".local/share/agent"): no leading "/", no "." or ".." segments.'),
+  v.check(isHomeRelativePath, 'Agent path must be home-relative (e.g. ".local/share/agent"): no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".'),
 );
 
 const NpmInstallSchema = v.strictObject({ method: v.literal('npm') });

@@ -905,7 +905,7 @@ describe('UpdateCheckCacheSchema', () => {
 // message would make the expectation move with the code it is meant to pin.
 const AGENT_PATH_RULE =
   'Agent path must be home-relative (e.g. ".local/share/agent"): '
-  + 'no leading "/", no "." or ".." segments.';
+  + 'no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".';
 
 describe('AgentDefinitionFileSchema', () => {
   const minimalDefinition = { package: 'oh-my-pi@latest', binary: 'omp' };

@@ -331,7 +331,7 @@ A defined agent is then treated like a built-in: it is offered by `pi-tin create
 | `container_env`         | no       | Environment variables baked into the image of any workspace including this agent. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings. Defaults to `{}`. |
 | `isolated_seed_files`   | no       | Files written into a freshly created **isolated** agent profile, each `{ path, content }` with `path` relative to the profile directory. Defaults to `[]`. |
 
-Every path field is home-relative: no leading `/`, no `.`/`..` segments.
+Every path field is home-relative: no leading `/`, no `.`/`..` segments, and only letters, digits, `.`, `_`, `-`.
 
 An agent with its own installer uses a `native` install block instead of npm, mirroring how pi-tin installs Claude Code and OpenCode — in-container on first open, onto [live host mounts](#agent-install-mounts) so its self-updates persist:
 
