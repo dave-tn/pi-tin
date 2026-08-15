@@ -16,6 +16,7 @@ import { registerAgentProfileShowCommand } from './commands/agent-profile-show.j
 import { registerAgentProfileDeleteCommand } from './commands/agent-profile-delete.js';
 import { registerAgentProfileDiscoverCommand } from './commands/agent-profile-discover.js';
 import { registerAgentProfileFinderCommand } from './commands/agent-profile-finder.js';
+import { registerAgentListCommand } from './commands/agent-list.js';
 import { registerAgentGuideCommand } from './commands/agent-guide.js';
 import { runDefaultAction } from './lib/default-action.js';
 import { CliError, EXIT } from './lib/cli-errors.js';
@@ -65,6 +66,13 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   registerAgentProfileDeleteCommand(agentProfileCmd);
   registerAgentProfileDiscoverCommand(agentProfileCmd);
   registerAgentProfileFinderCommand(agentProfileCmd);
+
+  // Agent definition subcommands
+  const agentCmd = program
+    .command('agent')
+    .description('Manage agent definitions');
+
+  registerAgentListCommand(agentCmd);
 
   // Machine-oriented usage guide
   registerAgentGuideCommand(program);

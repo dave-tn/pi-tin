@@ -140,6 +140,11 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       flags: ['--force', '--dry-run', '--json'],
       destructive: true,
     },
+    {
+      command: 'agent list',
+      summary: 'List agents (built-in and custom definitions)',
+      flags: ['--json'],
+    },
   ],
   interactiveOnly: [
     { command: 'create', use: 'Use `apply <name>` with workspace JSON on stdin.' },

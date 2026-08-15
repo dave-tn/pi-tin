@@ -18,6 +18,7 @@ describe('buildProgram', () => {
       'detect-host',
       'container-profile',
       'agent-profile',
+      'agent',
       'agent-guide',
     ]) {
       expect(names).toContain(expected);
@@ -70,7 +71,8 @@ describe('command surface helpers', () => {
 
   test('groupSubcommandNames maps exactly the subcommand groups', () => {
     const groups = groupSubcommandNames(buildProgram(meta));
-    expect([...groups.keys()].sort()).toEqual(['agent-profile', 'container-profile']);
+    expect([...groups.keys()].sort()).toEqual(['agent', 'agent-profile', 'container-profile']);
+    expect(groups.get('agent')?.slice().sort()).toEqual(['list']);
     expect(groups.get('container-profile')?.slice().sort()).toEqual(['apply', 'delete', 'list', 'show']);
     expect(groups.get('agent-profile')?.slice().sort()).toEqual(['add', 'delete', 'discover', 'finder', 'list', 'show']);
   });
