@@ -16,6 +16,10 @@ export function getAgentProfilesDir(): string {
   return path.join(getConfigDir(), 'agent-profiles');
 }
 
+export function getAgentDefinitionsDir(): string {
+  return path.join(getConfigDir(), 'agents');
+}
+
 export function getTmuxConfigsDir(): string {
   return path.join(getConfigDir(), 'tmux');
 }

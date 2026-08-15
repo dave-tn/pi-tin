@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { containerHomeDir, findProjectRoot, getAgentProfilesDir, getUpdateCheckPath, getWorkspaceStateDir, isSafePathSegment, isWithinDir } from './paths.js';
+import { containerHomeDir, findProjectRoot, getAgentDefinitionsDir, getAgentProfilesDir, getUpdateCheckPath, getWorkspaceStateDir, isSafePathSegment, isWithinDir } from './paths.js';
 
 describe('isSafePathSegment', () => {
   test('accepts names without a charset rule', () => {
@@ -106,6 +106,22 @@ describe('getAgentProfilesDir', () => {
   test('lives under the config dir honoring XDG_CONFIG_HOME', () => {
     process.env['XDG_CONFIG_HOME'] = '/tmp/xdg-example';
     expect(getAgentProfilesDir()).toBe('/tmp/xdg-example/pi-tin/agent-profiles');
+  });
+});
+
+describe('getAgentDefinitionsDir', () => {
+  const original = process.env['XDG_CONFIG_HOME'];
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env['XDG_CONFIG_HOME'];
+    } else {
+      process.env['XDG_CONFIG_HOME'] = original;
+    }
+  });
+
+  test('lives under the config dir honoring XDG_CONFIG_HOME', () => {
+    process.env['XDG_CONFIG_HOME'] = '/tmp/xdg-example';
+    expect(getAgentDefinitionsDir()).toBe('/tmp/xdg-example/pi-tin/agents');
   });
 });
 

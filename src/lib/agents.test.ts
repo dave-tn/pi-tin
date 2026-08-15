@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, findBuiltInByName, findBuiltInByPackage, nativeInstallTargets, npmToolSpecs, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, findBuiltInByName, findBuiltInByPackage, nativeInstallTargets, npmToolSpecs, packagesCollide, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
 import type { KnownAgent, NativeAgentInstall } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
@@ -449,5 +449,19 @@ describe('findBuiltInByPackage', () => {
 
   test('never matches a package that is not built in', () => {
     expect(findBuiltInByPackage('oh-my-pi@latest')).toBeUndefined();
+  });
+});
+
+describe('packagesCollide', () => {
+  test('two specs of the same package collide across versions and case', () => {
+    expect(packagesCollide('oh-my-pi@latest', 'oh-my-pi@1.0.0')).toBe(true);
+    expect(packagesCollide('oh-my-pi', 'oh-my-pi@2.3.4')).toBe(true);
+    expect(packagesCollide('OH-MY-PI@latest', 'oh-my-pi@1.0.0')).toBe(true);
+    expect(packagesCollide('@scope/tool@latest', '@scope/tool@0.1.0')).toBe(true);
+  });
+
+  test('different packages do not collide, prefix overlap included', () => {
+    expect(packagesCollide('oh-my-pi@latest', 'oh-my-pi-extras@latest')).toBe(false);
+    expect(packagesCollide('@scope/tool@latest', 'tool@latest')).toBe(false);
   });
 });

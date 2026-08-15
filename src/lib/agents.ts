@@ -34,13 +34,22 @@ function packageName(packageSpec: string): string {
   return packageSpec.replace(/@[^/@]*$/, '');
 }
 
+/**
+ * Whether two package specs name the same package, ignoring the version suffix
+ * and case. The single home of that comparison: agent definitions and the
+ * delete planner need it too, and the version strip must not be duplicated.
+ */
+export function packagesCollide(a: string, b: string): boolean {
+  return packageName(a).toLowerCase() === packageName(b).toLowerCase();
+}
+
 export function toolDisplayName(packageSpec: string): string {
   const parts = packageName(packageSpec).split('/');
   return parts[parts.length - 1] ?? packageSpec;
 }
 
 function packageMatchesAgent(packageSpec: string, agent: KnownAgent): boolean {
-  return packageName(packageSpec) === packageName(agent.package);
+  return packagesCollide(packageSpec, agent.package);
 }
 
 function knownAgentForPackage(pkg: Tool, agents: readonly KnownAgent[]): KnownAgent | undefined {
