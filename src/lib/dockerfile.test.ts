@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { generateDockerfile, detectPackageManager } from './dockerfile.js';
-import { KNOWN_AGENTS } from './agents.js';
+import { KNOWN_AGENTS, agentContainerEnv, agentsWithSkipPermissions } from './agents.js';
+import type { KnownAgent } from './agents.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
 const baseProfile: ContainerProfile = {
@@ -214,6 +215,75 @@ describe('generateDockerfile', () => {
     expect(dockerfile).toContain('COPY pi-tin-wrapper-codex /usr/local/pi-tin/bin/codex');
     expect(dockerfile).toContain('RUN mkdir -p /usr/local/pi-tin/bin');
     expect(dockerfile).toContain('RUN chmod +x /usr/local/pi-tin/bin/codex');
+  });
+
+  // The whole custom-agent chain in one place: a user-authored definition
+  // reaches the wrap list and the container env, and its package reaches the
+  // npm install — all of it keyed off the merged table this call is handed,
+  // never KNOWN_AGENTS.
+  test('bakes the wrapper, env and npm install for a custom agent in the merged table', () => {
+    const ohMyPi: KnownAgent = {
+      name: 'Oh My Pi',
+      package: 'oh-my-pi@latest',
+      binary: 'omp',
+      dot_dirs: ['.oh-my-pi'],
+      host_mode_supported: true,
+      install: { method: 'npm' },
+      skip_permissions_flag: '--yolo',
+      container_env: { OMP_LOG: 'info' },
+      isolated_seed_files: [],
+    };
+    const agents = [...KNOWN_AGENTS, ohMyPi];
+    const packages: Tool[] = [{ name: 'Oh My Pi', package: 'oh-my-pi@latest' }];
+
+    const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
+      // As computeBuildPlan derives them, with skipPermissions on.
+      agentWraps: agentsWithSkipPermissions(packages, agents),
+      agentEnv: agentContainerEnv(packages, agents),
+      claudeManagedSettings: null,
+      claudeConfig: null,
+      sshd: null,
+      agents,
+    });
+
+    const wrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-omp');
+    expect(wrapper?.content).toContain('--yolo "$@"');
+    expect(dockerfile).toContain('COPY pi-tin-wrapper-omp /usr/local/pi-tin/bin/omp');
+    expect(dockerfile).toContain('ENV OMP_LOG="info"');
+    expect(dockerfile).toContain('RUN npm install -g oh-my-pi@latest');
+  });
+
+  // A custom native agent must take the native path for the same reason: its
+  // installer runs in-container at first open, so the image must not npm-install
+  // it and must put its bin dir on PATH.
+  test('a custom native agent skips the npm install and joins PATH from the merged table', () => {
+    const zed: KnownAgent = {
+      name: 'Zed Agent',
+      package: 'zed-agent@latest',
+      binary: 'zedagent',
+      dot_dirs: ['.zed-agent'],
+      host_mode_supported: true,
+      install: {
+        method: 'native',
+        install_command: 'curl -fsSL https://example.invalid/install -o /tmp/z.sh && bash /tmp/z.sh',
+        installed_path: '.zed-agent/bin/zedagent',
+        persist_dirs: ['.zed-agent/bin'],
+        bin_dir: '.zed-agent/bin',
+        musl_packages: [],
+        musl_env: {},
+      },
+      container_env: {},
+      isolated_seed_files: [],
+    };
+    const packages: Tool[] = [{ name: 'Zed Agent', package: 'zed-agent@latest' }];
+
+    const { dockerfile } = generateDockerfile(baseProfile, packages, {
+      ...noWraps,
+      agents: [...KNOWN_AGENTS, zed],
+    });
+
+    expect(dockerfile).not.toContain('npm install -g zed-agent@latest');
+    expect(dockerfile).toContain(':$HOME_DIR/.zed-agent/bin:');
   });
 
   test('refresh script preserves original npm package specs and excludes native agents', () => {
