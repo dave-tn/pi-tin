@@ -48,15 +48,25 @@ const HomeRelativePathSchema = v.pipe(
 );
 
 const NpmInstallSchema = v.strictObject({ method: v.literal('npm') });
-const NativeInstallSchema = v.strictObject({
-  method: v.literal('native'),
-  install_command: v.pipe(v.string(), v.minLength(1), v.regex(singleLinePattern)),
-  installed_path: HomeRelativePathSchema,
-  persist_dirs: v.array(HomeRelativePathSchema),
-  bin_dir: HomeRelativePathSchema,
-  musl_packages: v.optional(v.array(v.pipe(v.string(), v.regex(packageNamePattern))), []),
-  musl_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
-});
+// bin_dir joins the image PATH; persist_dirs become the live host mounts. A
+// bin_dir outside them puts the agent's own binary somewhere no mount persists,
+// so it reinstalls on every fresh container — the built-ins hold the same
+// invariant, and it is tested there too.
+const NativeInstallSchema = v.pipe(
+  v.strictObject({
+    method: v.literal('native'),
+    install_command: v.pipe(v.string(), v.minLength(1), v.regex(singleLinePattern)),
+    installed_path: HomeRelativePathSchema,
+    persist_dirs: v.array(HomeRelativePathSchema),
+    bin_dir: HomeRelativePathSchema,
+    musl_packages: v.optional(v.array(v.pipe(v.string(), v.regex(packageNamePattern))), []),
+    musl_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
+  }),
+  v.check(
+    (install) => install.persist_dirs.includes(install.bin_dir),
+    'Agent native install "bin_dir" must also appear in "persist_dirs", or the install is lost on every fresh container.',
+  ),
+);
 const AgentInstallSchema = v.union([NpmInstallSchema, NativeInstallSchema]);
 
 const SeedFileSchema = v.strictObject({

@@ -343,7 +343,7 @@ install:
   method: native
   install_command: "curl -fsSL https://example.com/install.sh -o /tmp/i.sh && bash /tmp/i.sh && rm /tmp/i.sh"
   installed_path: ".local/bin/some-agent"
-  persist_dirs: [".local/share/some-agent"]
+  persist_dirs: [".local/share/some-agent", ".local/bin"]
   bin_dir: ".local/bin"
   musl_packages: [libgcc, libstdc++]
   musl_env: {}
@@ -356,7 +356,7 @@ The `native` block's own fields (the `npm` block has nothing beyond `method`):
 | `install_command` | yes      | Single-line shell command, run in-container on the first open. |
 | `installed_path`  | yes      | Path probed with `test -x` to decide whether the agent is already installed. |
 | `persist_dirs`    | yes      | Directories live-mounted from the workspace state tree, so the install and its updates survive container recreation. |
-| `bin_dir`         | yes      | Directory appended to the image `PATH`; must also appear in `persist_dirs`. |
+| `bin_dir`         | yes      | Directory appended to the image `PATH`; must also appear in `persist_dirs`, or the definition is rejected — a bin dir outside the live mounts loses the install on every fresh container. |
 | `musl_packages`   | no       | Extra system packages the binary needs on musl (Alpine) bases. Defaults to `[]`. |
 | `musl_env`        | no       | Extra image environment for musl bases. Defaults to `{}`. |
 

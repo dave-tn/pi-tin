@@ -909,11 +909,13 @@ const AGENT_PATH_RULE =
 
 describe('AgentDefinitionFileSchema', () => {
   const minimalDefinition = { package: 'oh-my-pi@latest', binary: 'omp' };
+  // bin_dir is inside persist_dirs, as a native install must be: the bin dir is
+  // on PATH, so leaving it unmounted reinstalls the agent every container life.
   const nativeInstall = {
     method: 'native',
     install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
     installed_path: '.local/bin/some-agent',
-    persist_dirs: ['.local/share/some-agent'],
+    persist_dirs: ['.local/share/some-agent', '.local/bin'],
     bin_dir: '.local/bin',
   };
 
@@ -939,7 +941,7 @@ describe('AgentDefinitionFileSchema', () => {
         method: 'native',
         install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
         installed_path: '.local/bin/some-agent',
-        persist_dirs: ['.local/share/some-agent'],
+        persist_dirs: ['.local/share/some-agent', '.local/bin'],
         bin_dir: '.local/bin',
         musl_packages: ['libgcc', 'libstdc++'],
       },
@@ -948,7 +950,7 @@ describe('AgentDefinitionFileSchema', () => {
       method: 'native',
       install_command: 'curl -fsSL https://example.com/i.sh -o /tmp/i.sh && bash /tmp/i.sh',
       installed_path: '.local/bin/some-agent',
-      persist_dirs: ['.local/share/some-agent'],
+      persist_dirs: ['.local/share/some-agent', '.local/bin'],
       bin_dir: '.local/bin',
       musl_packages: ['libgcc', 'libstdc++'],
       musl_env: {},
@@ -1022,6 +1024,22 @@ describe('AgentDefinitionFileSchema', () => {
       ...minimalDefinition,
       isolated_seed_files: [{ path: '../x', content: '' }],
     }).success).toBe(false);
+  });
+
+  // bin_dir joins the image PATH while persist_dirs become the live mounts, so
+  // a bin_dir outside them installs the agent onto PATH but outside the mounts:
+  // it reinstalls on every fresh container. Hand-written literal, not the
+  // imported message, so a regression in the wording fails here.
+  test('rejects a native install whose bin_dir is not persisted', () => {
+    const parsed = v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      install: { ...nativeInstall, persist_dirs: ['.local/share/some-agent'] },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.issues?.[0]?.message).toBe(
+      'Agent native install "bin_dir" must also appear in "persist_dirs", '
+      + 'or the install is lost on every fresh container.',
+    );
   });
 
   test('rejects unknown top-level keys', () => {
