@@ -231,7 +231,12 @@ describe('container-profile apply', () => {
     expect(run.err.message).toBe(
       "Container profile 'Custom-Dev' differs only by case from the existing 'custom-dev'; delete 'custom-dev' first, or choose another name.",
     );
-    expect(fs.existsSync(containerProfilePath('Custom-Dev'))).toBe(false);
+    // Not `existsSync(containerProfilePath('Custom-Dev'))`: on a
+    // case-insensitive volume that folds onto the existing file and answers
+    // true. Compare the stored stems, as the guard itself does.
+    const stems = fs.readdirSync(path.join(tmpDir, 'pi-tin', 'profiles'));
+    expect(stems).toContain('custom-dev.yaml');
+    expect(stems).not.toContain('Custom-Dev.yaml');
     expect(run.envelope).toBeUndefined();
   });
 

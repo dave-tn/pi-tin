@@ -274,7 +274,12 @@ describe('agent apply', () => {
     expect(err.message).toBe(
       "Agent definition 'Oh-My-Pi' differs only by case from the existing 'oh-my-pi'; delete 'oh-my-pi' first, or choose another name.",
     );
-    expect(fs.existsSync(definitionPath('Oh-My-Pi'))).toBe(false);
+    // Not `existsSync(definitionPath('Oh-My-Pi'))`: on a case-insensitive
+    // volume that folds onto the existing file and answers true. Compare the
+    // stored stems, for the same reason the guard itself enumerates them.
+    const stems = fs.readdirSync(path.join(tmpDir, 'pi-tin', 'agents'));
+    expect(stems).toContain('oh-my-pi.yaml');
+    expect(stems).not.toContain('Oh-My-Pi.yaml');
     expect(fs.readFileSync(definitionPath('oh-my-pi'), 'utf-8')).toBe(
       'package: oh-my-pi@latest\nbinary: omp\n',
     );
