@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { getContainerProfilesDir, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
+import {
+  caseFoldingNameMessage,
+  findCaseFoldingStemOnDisk,
+  getContainerProfilesDir,
+  isSafePathSegment,
+  SAFE_PATH_SEGMENT_RULE,
+} from './paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { parseYaml } from './yaml.js';
 import { validateContainerProfile } from './validators.js';
@@ -32,11 +38,18 @@ export function containerProfileExists(name: string): boolean {
 // Full-replace write of a container profile. No managed header is emitted, so
 // an applied profile is user-managed (pi-tin's default sync will not overwrite
 // it) — matching the documented "remove the managed header to customize" rule.
+// The enforcement floor for the case-folding rule sits here rather than in the
+// command, so every writer inherits it; `container-profile apply` pre-checks as
+// well to fail on the structured validation path.
 export function writeContainerProfile(name: string, profile: ContainerProfile): void {
   if (!isSafePathSegment(name)) {
     throw new Error(`Invalid container profile name '${name}'. ${SAFE_PATH_SEGMENT_RULE}`);
   }
   const dir = getContainerProfilesDir();
+  const foldingStem = findCaseFoldingStemOnDisk(name, dir);
+  if (foldingStem !== undefined) {
+    throw new Error(caseFoldingNameMessage('Container profile', name, foldingStem));
+  }
   fs.mkdirSync(dir, { recursive: true });
   atomicWriteFile(path.join(dir, `${name}.yaml`), YAML.stringify(profile));
 }

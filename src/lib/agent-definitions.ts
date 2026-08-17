@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { atomicWriteFile } from './atomic-write.js';
-import { getAgentDefinitionsDir, isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from './paths.js';
+import {
+  caseFoldingNameMessage,
+  findCaseFoldingStemOnDisk,
+  getAgentDefinitionsDir,
+  isSafePathSegment,
+  SAFE_PATH_SEGMENT_RULE,
+} from './paths.js';
 import { parseYaml } from './yaml.js';
 import { validateAgentDefinition } from './validators.js';
 import type { AgentDefinitionFile } from './validators.js';
@@ -179,13 +185,20 @@ export function agentDefinitionExists(
 }
 
 // Full-replace write of an agent definition. Definitions stay hand-editable
-// YAML, so nothing is stamped into the file beyond the definition itself.
+// YAML, so nothing is stamped into the file beyond the definition itself. The
+// enforcement floor for the case-folding rule sits here rather than in the
+// command, so every writer inherits it; `agent apply` pre-checks as well to
+// fail on the structured validation path.
 export function writeAgentDefinition(
   name: string,
   definition: AgentDefinitionFile,
   dir: string = getAgentDefinitionsDir(),
 ): void {
   const filePath = definitionPath(name, dir);
+  const foldingStem = findCaseFoldingStemOnDisk(name, dir);
+  if (foldingStem !== undefined) {
+    throw new Error(caseFoldingNameMessage('Agent definition', name, foldingStem));
+  }
   fs.mkdirSync(dir, { recursive: true });
   atomicWriteFile(filePath, YAML.stringify(definition));
 }

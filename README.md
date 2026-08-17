@@ -317,6 +317,8 @@ container_env: { OMP_LOG: "info" }
 
 A defined agent is then treated like a built-in: it is offered by `pi-tin create`, takes [agent profiles](#agent-profiles) (`agent-profile add`, `agent-profile discover`), is listed by `detect-host`, and gets its `container_env` and skip-permissions wrapper in the image. Write definitions with `pi-tin agent apply <name>` (JSON on stdin) or by hand; `pi-tin agent list` shows the merged table with each entry's source.
 
+Two names differing only by case cannot coexist: on a case-insensitive volume — the macOS default — `OMP.yaml` and `omp.yaml` are the same file. `agent apply` refuses such a name (exit `2`) rather than replacing the definition already there, and the loader drops one of a pair reaching it by hand.
+
 #### Agent definition schema
 
 | Field                   | Required | Description |
@@ -411,7 +413,7 @@ of the following to a non-empty value:
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
 | `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 | `pi-tin agent list [--json]` | List agents, built-in and custom, with each entry's source (`--json` for machine-readable output; JSON is the default when output is piped) |
-| `pi-tin agent apply <name> [--dry-run] [--json]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; `--json` is accepted for consistency; built-in agents cannot be overridden, and a `package` another definition already claims is rejected) |
+| `pi-tin agent apply <name> [--dry-run] [--json]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; `--json` is accepted for consistency; built-in agents cannot be overridden, and a `package` another definition already claims is rejected; so is a name differing from an existing definition only by case) |
 | `pi-tin agent delete <name> [--force] [--dry-run] [--json]` | Delete a custom agent definition (`--dry-run` previews the impact, including referencing workspaces and agent profiles; non-interactive callers must pass `--force` or get exit code 4) |
 
 `pi-tin -v` (`--version`) prints the version; `--force` accepts `-f` everywhere it appears.
@@ -478,6 +480,7 @@ pi-tin container-profile apply node-dev < p.json             # write
 ```
 
 - The JSON is validated against the container-profile schema before anything is written; invalid input exits with code `2` (`VALIDATION`) and a field-naming message.
+- A name differing from an existing container profile only by case is refused with code `2` as well: on a case-insensitive volume — the macOS default — `Node-Dev.yaml` and `node-dev.yaml` are the same file, so the write would replace a different profile.
 - `apply` is a **full replace**, not a merge: the file is rewritten from the JSON object, so any YAML comments (including the managed container-profile header) are dropped. An applied container profile is therefore **user-managed** — pi-tin's default container-profile sync will not overwrite it.
 - `--dry-run` prints the diff envelope (`{ "action": "create" | "update", "name", "dryRun": true, "changes": [...] }`) and writes nothing. A real apply prints the result envelope (`{ "action": "created" | "updated", "name", "changes": [...] }`). Each `changes` entry is `{ "path", "kind": "added" | "removed" | "changed", "before"?, "after"? }`. Output is always JSON.
 

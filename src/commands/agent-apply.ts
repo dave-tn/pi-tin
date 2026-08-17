@@ -6,7 +6,13 @@ import {
   writeAgentDefinition,
 } from '../lib/agent-definitions.js';
 import { findBuiltInByName, findBuiltInByPackage, packagesCollide } from '../lib/agents.js';
-import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
+import {
+  caseFoldingNameMessage,
+  findCaseFoldingStemOnDisk,
+  getAgentDefinitionsDir,
+  isSafePathSegment,
+  SAFE_PATH_SEGMENT_RULE,
+} from '../lib/paths.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 import { validateAgentDefinition } from '../lib/validators.js';
 import type { AgentDefinitionFile } from '../lib/validators.js';
@@ -77,6 +83,18 @@ export function registerAgentApplyCommand(group: import('commander').Command): v
           `Package '${definition.package}' is already defined by the agent definition '${samePackage.name}'.`,
           EXIT.VALIDATION,
           { code: 'validation', badInput: definition.package },
+        );
+      }
+
+      // Before the exists/diff computation: `agentDefinitionExists` folds case,
+      // so a variant of an existing name would otherwise diff as an update of
+      // the definition it is about to destroy (and --dry-run would print it).
+      const foldingStem = findCaseFoldingStemOnDisk(name, getAgentDefinitionsDir());
+      if (foldingStem !== undefined) {
+        throw new CliError(
+          caseFoldingNameMessage('Agent definition', name, foldingStem),
+          EXIT.VALIDATION,
+          { code: 'validation', badInput: name },
         );
       }
 

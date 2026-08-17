@@ -1,6 +1,12 @@
 import { ensureInitialised } from '../lib/init-guard.js';
 import { listContainerProfiles, loadContainerProfile, writeContainerProfile } from '../lib/profiles.js';
-import { isSafePathSegment, SAFE_PATH_SEGMENT_RULE } from '../lib/paths.js';
+import {
+  caseFoldingNameMessage,
+  findCaseFoldingStemOnDisk,
+  getContainerProfilesDir,
+  isSafePathSegment,
+  SAFE_PATH_SEGMENT_RULE,
+} from '../lib/paths.js';
 import { CliError, EXIT } from '../lib/cli-errors.js';
 import { validateContainerProfile } from '../lib/validators.js';
 import type { ContainerProfile } from '../lib/validators.js';
@@ -34,6 +40,18 @@ export function registerContainerProfileApplyCommand(
 
       const raw = parseJsonInput(await readStdin());
       const profile = parseProfile(raw);
+
+      // Before the exists/diff computation: `exists` is an exact-case test, so a
+      // variant of an existing name would otherwise diff as a create against an
+      // empty baseline while replacing that profile (--dry-run included).
+      const foldingStem = findCaseFoldingStemOnDisk(name, getContainerProfilesDir());
+      if (foldingStem !== undefined) {
+        throw new CliError(
+          caseFoldingNameMessage('Container profile', name, foldingStem),
+          EXIT.VALIDATION,
+          { code: 'validation', badInput: name },
+        );
+      }
 
       const exists = listContainerProfiles().includes(name);
       const before = exists

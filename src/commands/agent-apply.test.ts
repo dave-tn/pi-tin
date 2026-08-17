@@ -259,6 +259,42 @@ describe('agent apply', () => {
     expect(fs.existsSync(definitionPath('oh-my-pi-fork'))).toBe(false);
   });
 
+  // The name-collision guard in the loader filters this very variant out of the
+  // package check, and `agentDefinitionExists` folds case, so before the write
+  // guard existed this reported a clean 'updated' while replacing 'oh-my-pi'.
+  test('refuses a name that differs from an existing definition only by case', async () => {
+    writeDefinition('oh-my-pi', 'package: oh-my-pi@latest\nbinary: omp\n');
+
+    const run = await runApply(['apply', 'Oh-My-Pi'], definitionJson);
+
+    const err = asCliError(run.err);
+    expect(err.exitCode).toBe(EXIT.VALIDATION);
+    expect(err.detail.code).toBe('validation');
+    expect(err.detail.badInput).toBe('Oh-My-Pi');
+    expect(err.message).toBe(
+      "Agent definition 'Oh-My-Pi' differs only by case from the existing 'oh-my-pi'; delete 'oh-my-pi' first, or choose another name.",
+    );
+    expect(fs.existsSync(definitionPath('Oh-My-Pi'))).toBe(false);
+    expect(fs.readFileSync(definitionPath('oh-my-pi'), 'utf-8')).toBe(
+      'package: oh-my-pi@latest\nbinary: omp\n',
+    );
+  });
+
+  // The check precedes the exists/diff computation, so --dry-run refuses too
+  // rather than printing a create diff against an empty baseline.
+  test('refuses the case-variant under --dry-run as well', async () => {
+    writeDefinition('oh-my-pi', 'package: oh-my-pi@latest\nbinary: omp\n');
+
+    const run = await runApply(['apply', 'Oh-My-Pi', '--dry-run'], definitionJson);
+
+    const err = asCliError(run.err);
+    expect(err.exitCode).toBe(EXIT.VALIDATION);
+    expect(err.message).toBe(
+      "Agent definition 'Oh-My-Pi' differs only by case from the existing 'oh-my-pi'; delete 'oh-my-pi' first, or choose another name.",
+    );
+    expect(run.envelope).toBeUndefined();
+  });
+
   test('matches built-in packages with a different version suffix', async () => {
     const run = await runApply(
       ['apply', 'claude-code'],

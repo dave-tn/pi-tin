@@ -97,6 +97,56 @@ export function isSafePathSegment(name: string): boolean {
 export const SAFE_PATH_SEGMENT_RULE =
   "Names must not be '.' or '..', and must not contain '/' or '\\'.";
 
+const YAML_SUFFIX = '.yaml';
+
+/**
+ * The stem a `<name>.yaml` write would fold onto, or undefined when the write is
+ * safe. The invariant: a stem must be brand-new, or exactly the one already
+ * there. macOS volumes are case-insensitive by default, so a rename of
+ * `OMP.yaml` lands on an existing `omp.yaml` — replacing a different entity
+ * while the on-disk name keeps its old spelling. Rejected on case-sensitive
+ * volumes too: the loaders drop one of a folding pair as a name collision
+ * anyway, so identical behaviour everywhere beats a platform-shaped footgun.
+ */
+export function findCaseFoldingStem(
+  name: string,
+  existingStems: readonly string[],
+): string | undefined {
+  if (existingStems.includes(name)) {
+    return undefined;
+  }
+  return existingStems.find((stem) => stem.toLowerCase() === name.toLowerCase());
+}
+
+/**
+ * `findCaseFoldingStem` over the `*.yaml` stems in `dir` (a missing directory
+ * holds nothing, so the write is safe). The stems must come from a directory
+ * read compared exactly: `fs.existsSync` of the target path folds case as well,
+ * so it reports the exact stem as present for the very pair this rejects.
+ */
+export function findCaseFoldingStemOnDisk(name: string, dir: string): string | undefined {
+  return findCaseFoldingStem(name, readYamlStems(dir));
+}
+
+/** Only files are loadable as definitions or profiles, matching the loaders. */
+function readYamlStems(dir: string): string[] {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(YAML_SUFFIX))
+    .map((entry) => entry.name.slice(0, -YAML_SUFFIX.length));
+}
+
+export function caseFoldingNameMessage(
+  entity: 'Agent definition' | 'Container profile',
+  name: string,
+  existingStem: string,
+): string {
+  return `${entity} '${name}' differs only by case from the existing '${existingStem}'; delete '${existingStem}' first, or choose another name.`;
+}
+
 /** Home directory of `user` inside a workspace container. */
 export function containerHomeDir(user: string): string {
   return user === 'root' ? '/root' : `/home/${user}`;

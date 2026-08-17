@@ -234,6 +234,30 @@ describe('agent definition CRUD', () => {
     expect(agentDefinitionExists('oh-my-pi', definitionsDir)).toBe(false);
   });
 
+  // A macOS volume is case-insensitive by default, so the atomic write's rename
+  // of 'OMP.yaml' lands on an existing 'omp.yaml' — replacing a different
+  // definition while the on-disk name keeps the old spelling. Rejected on every
+  // platform: the loader drops one of a folding pair anyway.
+  test('refuses a write whose name differs from an existing one only by case', () => {
+    fs.writeFileSync(path.join(tmpDir, 'omp.yaml'), MINIMAL_YAML);
+
+    expect(() => writeAgentDefinition('OMP', DEFINITION, tmpDir)).toThrow(
+      "Agent definition 'OMP' differs only by case from the existing 'omp'; delete 'omp' first, or choose another name.",
+    );
+
+    expect(fs.readdirSync(tmpDir)).toEqual(['omp.yaml']);
+    expect(fs.readFileSync(path.join(tmpDir, 'omp.yaml'), 'utf-8')).toBe(MINIMAL_YAML);
+  });
+
+  test('writing the exact existing name is an ordinary update', () => {
+    fs.writeFileSync(path.join(tmpDir, 'omp.yaml'), MINIMAL_YAML);
+
+    writeAgentDefinition('omp', DEFINITION, tmpDir);
+
+    expect(loadAgentDefinition('omp', tmpDir)).toEqual(DEFINITION);
+    expect(fs.readdirSync(tmpDir)).toEqual(['omp.yaml']);
+  });
+
   // Existence, not parseability: a corrupt definition must stay deletable.
   test('reports an unparseable definition as existing', () => {
     fs.writeFileSync(path.join(tmpDir, 'corrupt.yaml'), 'binary: [unclosed\n');

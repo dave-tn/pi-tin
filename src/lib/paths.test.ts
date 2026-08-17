@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { containerHomeDir, findProjectRoot, getAgentDefinitionsDir, getAgentProfilesDir, getUpdateCheckPath, getWorkspaceStateDir, isSafePathSegment, isWithinDir } from './paths.js';
+import { containerHomeDir, findCaseFoldingStem, findCaseFoldingStemOnDisk, findProjectRoot, getAgentDefinitionsDir, getAgentProfilesDir, getUpdateCheckPath, getWorkspaceStateDir, isSafePathSegment, isWithinDir } from './paths.js';
 
 describe('isSafePathSegment', () => {
   test('accepts names without a charset rule', () => {
@@ -15,6 +15,66 @@ describe('isSafePathSegment', () => {
     for (const name of ['', '.', '..', 'a/b', 'a\\b', '../x', '..\\x', '/abs']) {
       expect(isSafePathSegment(name)).toBe(false);
     }
+  });
+});
+
+describe('findCaseFoldingStem', () => {
+  test('allows the stem that is exactly the one already there', () => {
+    expect(findCaseFoldingStem('omp', ['omp', 'other'])).toBeUndefined();
+  });
+
+  test('allows a stem with no sibling in any case', () => {
+    expect(findCaseFoldingStem('OMP', ['other', 'another'])).toBeUndefined();
+  });
+
+  test('allows a stem when nothing is there', () => {
+    expect(findCaseFoldingStem('OMP', [])).toBeUndefined();
+  });
+
+  test('reports the existing stem a case-variant would fold onto', () => {
+    expect(findCaseFoldingStem('OMP', ['other', 'omp'])).toBe('omp');
+    expect(findCaseFoldingStem('Omp', ['oMP'])).toBe('oMP');
+  });
+
+  // Only a case-sensitive volume can hold both, and then the exact stem is the
+  // update target — the variant beside it is a different entity, left alone.
+  test('allows the exact stem even when a case-variant sits beside it', () => {
+    expect(findCaseFoldingStem('OMP', ['omp', 'OMP'])).toBeUndefined();
+  });
+});
+
+describe('findCaseFoldingStemOnDisk', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tin-case-fold-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('treats a missing directory as empty', () => {
+    expect(findCaseFoldingStemOnDisk('omp', path.join(tmpDir, 'absent'))).toBeUndefined();
+  });
+
+  // The stems must come from a directory read compared exactly: an
+  // fs.existsSync of the target path folds case on a case-insensitive volume,
+  // so it would answer "the exact stem is there" for this very pair.
+  test('catches a case-variant and still allows the exact stem', () => {
+    fs.writeFileSync(path.join(tmpDir, 'omp.yaml'), 'package: omp@latest\n');
+
+    expect(findCaseFoldingStemOnDisk('OMP', tmpDir)).toBe('omp');
+    expect(findCaseFoldingStemOnDisk('omp', tmpDir)).toBeUndefined();
+  });
+
+  // Only `*.yaml` files are loadable, so nothing else can be folded onto.
+  test('ignores entries that are not yaml files', () => {
+    fs.writeFileSync(path.join(tmpDir, 'omp.txt'), '');
+    fs.mkdirSync(path.join(tmpDir, 'nested.yaml'));
+
+    expect(findCaseFoldingStemOnDisk('OMP', tmpDir)).toBeUndefined();
+    expect(findCaseFoldingStemOnDisk('Nested', tmpDir)).toBeUndefined();
   });
 });
 

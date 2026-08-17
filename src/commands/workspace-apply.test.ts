@@ -163,6 +163,102 @@ describe('workspace apply on a corrupt existing file', () => {
   });
 });
 
+const containerProfileJson = JSON.stringify({
+  description: 'custom dev',
+  base_image: 'debian:trixie-slim',
+  user: 'dev',
+});
+
+function containerProfilePath(name: string): string {
+  return path.join(tmpDir, 'pi-tin', 'profiles', `${name}.yaml`);
+}
+
+describe('container-profile apply', () => {
+  test('creates a profile from JSON on stdin', async () => {
+    const program = new Command();
+    registerContainerProfileApplyCommand(program);
+    const run = await runApplyWithStdin(program, ['apply', 'custom-dev'], containerProfileJson);
+
+    expect(run.err).toBeUndefined();
+    expect(run.envelope).toMatchObject({ action: 'created', name: 'custom-dev' });
+
+    const written = YAML.parse(fs.readFileSync(containerProfilePath('custom-dev'), 'utf-8')) as {
+      description: string;
+    };
+    expect(written.description).toBe('custom dev');
+  });
+
+  test('updates an existing profile and reports only the real change', async () => {
+    const first = new Command();
+    registerContainerProfileApplyCommand(first);
+    await runApplyWithStdin(first, ['apply', 'custom-dev'], containerProfileJson);
+
+    const second = new Command();
+    registerContainerProfileApplyCommand(second);
+    const run = await runApplyWithStdin(
+      second,
+      ['apply', 'custom-dev'],
+      JSON.stringify({ description: 'custom dev v2', base_image: 'debian:trixie-slim', user: 'dev' }),
+    );
+
+    expect(run.err).toBeUndefined();
+    expect(run.envelope).toEqual({
+      action: 'updated',
+      name: 'custom-dev',
+      changes: [
+        { path: 'description', kind: 'changed', before: 'custom dev', after: 'custom dev v2' },
+      ],
+    });
+  });
+
+  // `exists` is an exact-case membership test, so before the write guard existed
+  // this reported 'created' with a diff against an empty baseline and then
+  // replaced 'custom-dev.yaml' on a case-insensitive volume.
+  test('refuses a name that differs from an existing profile only by case', async () => {
+    const first = new Command();
+    registerContainerProfileApplyCommand(first);
+    await runApplyWithStdin(first, ['apply', 'custom-dev'], containerProfileJson);
+
+    const program = new Command();
+    registerContainerProfileApplyCommand(program);
+    const run = await runApplyWithStdin(program, ['apply', 'Custom-Dev'], containerProfileJson);
+
+    expect(run.err).toBeInstanceOf(CliError);
+    if (!(run.err instanceof CliError)) throw new Error('unreachable');
+    expect(run.err.exitCode).toBe(EXIT.VALIDATION);
+    expect(run.err.detail.code).toBe('validation');
+    expect(run.err.detail.badInput).toBe('Custom-Dev');
+    expect(run.err.message).toBe(
+      "Container profile 'Custom-Dev' differs only by case from the existing 'custom-dev'; delete 'custom-dev' first, or choose another name.",
+    );
+    expect(fs.existsSync(containerProfilePath('Custom-Dev'))).toBe(false);
+    expect(run.envelope).toBeUndefined();
+  });
+
+  // The check precedes the exists/diff computation, so --dry-run refuses too
+  // rather than printing a create diff against an empty baseline.
+  test('refuses the case-variant under --dry-run as well', async () => {
+    const first = new Command();
+    registerContainerProfileApplyCommand(first);
+    await runApplyWithStdin(first, ['apply', 'custom-dev'], containerProfileJson);
+
+    const program = new Command();
+    registerContainerProfileApplyCommand(program);
+    const run = await runApplyWithStdin(
+      program,
+      ['apply', 'Custom-Dev', '--dry-run'],
+      containerProfileJson,
+    );
+
+    expect(run.err).toBeInstanceOf(CliError);
+    if (!(run.err instanceof CliError)) throw new Error('unreachable');
+    expect(run.err.message).toBe(
+      "Container profile 'Custom-Dev' differs only by case from the existing 'custom-dev'; delete 'custom-dev' first, or choose another name.",
+    );
+    expect(run.envelope).toBeUndefined();
+  });
+});
+
 describe('container-profile apply on a corrupt existing file', () => {
   test('replaces the file, degrades the diff, and warns with the real parse error', async () => {
     const profilesDir = path.join(tmpDir, 'pi-tin', 'profiles');
