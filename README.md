@@ -327,7 +327,7 @@ A defined agent is then treated like a built-in: it is offered by `pi-tin create
 | `host_mode_supported`   | no       | Whether `agent-profile add --host` is allowed — see [Host mode](#host-mode). Defaults to `true`. |
 | `install`               | no       | `{ method: npm }` (the default) or a `native` block — see below. |
 | `host_mode_warning`     | no       | Caveat shown beside the host-mode option in `agent-profile discover`. |
-| `skip_permissions_flag` | no       | Flag the launcher wrapper adds when `agent.skipPermissions` is on (e.g. `--yolo`). Omit for agents that need none. |
+| `skip_permissions_flag` | no       | Flag the launcher wrapper adds when `agent.skipPermissions` is on (e.g. `--yolo`). Omit for agents that need none. Several space-separated tokens are allowed (`--sandbox danger-full-access`); the first must start with `-`, and only letters, digits and `. _ - = : , /` may appear. |
 | `container_env`         | no       | Environment variables baked into the image of any workspace including this agent. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings. Defaults to `{}`. |
 | `isolated_seed_files`   | no       | Files written into a freshly created **isolated** agent profile, each `{ path, content }` with `path` relative to the profile directory. Defaults to `[]`. |
 

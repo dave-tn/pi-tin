@@ -42,6 +42,17 @@ const WorkspaceStatePathSchema = v.pipe(
 // mislead here).
 const binaryPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
+// The skip-permissions flag is interpolated unquoted into the launcher wrapper
+// baked into the image (`exec "$bin_dir/<binary>" <flag> "$@"`), so the word
+// splitting is deliberate — an agent may need a flag plus its value, or two
+// flags. Word splitting is all it may do: the charset admits nothing the shell
+// would act on, and the first token must look like a flag.
+const skipPermissionsFlagPattern = /^-{1,2}[A-Za-z0-9][A-Za-z0-9._,:=\/-]*( -{0,2}[A-Za-z0-9][A-Za-z0-9._,:=\/-]*)*$/;
+const SKIP_PERMISSIONS_FLAG_RULE =
+  'Agent "skip_permissions_flag" must be a flag (starting with "-") optionally followed by '
+  + 'space-separated tokens (e.g. "--yolo", "--sandbox danger-full-access"), using only '
+  + 'letters, digits and ". _ - = : , /".';
+
 const HomeRelativePathSchema = v.pipe(
   v.string(),
   v.check(isHomeRelativePath, 'Agent path must be home-relative (e.g. ".local/share/agent"): no leading "/", no "." or ".." segments, and only letters, digits, ".", "_", "-".'),
@@ -82,7 +93,9 @@ export const AgentDefinitionFileSchema = v.strictObject({
   host_mode_supported: v.optional(v.boolean(), true),
   install: v.optional(AgentInstallSchema, { method: 'npm' as const }),
   host_mode_warning: v.optional(v.string()),
-  skip_permissions_flag: v.optional(v.pipe(v.string(), v.regex(singleLinePattern))),
+  skip_permissions_flag: v.optional(
+    v.pipe(v.string(), v.regex(skipPermissionsFlagPattern, SKIP_PERMISSIONS_FLAG_RULE)),
+  ),
   container_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
   isolated_seed_files: v.optional(v.array(SeedFileSchema), []),
 });
