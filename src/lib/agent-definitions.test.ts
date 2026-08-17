@@ -9,8 +9,10 @@ import {
   loadAgentDefinition,
   loadAgentDefinitions,
   planAgentDelete,
+  selectAgentDefinitions,
   writeAgentDefinition,
 } from './agent-definitions.js';
+import type { AgentDefinitionCandidate } from './agent-definitions.js';
 import { KNOWN_AGENTS } from './agents.js';
 import type { AgentDefinitionFile } from './validators.js';
 
@@ -86,54 +88,8 @@ describe('loadAgentDefinitions', () => {
     expect(result.filter((agent) => agent.package === '@anthropic-ai/claude-code@latest').length).toBe(1);
   });
 
-  test('drops the later definition when two customs share a package', () => {
-    writeDefinition('aaa.yaml', 'package: dup-pkg@latest\nbinary: aaa\n');
-    writeDefinition('bbb.yaml', 'package: dup-pkg@latest\nbinary: bbb\n');
-
-    const { result, warnings } = captureWarnings(() => loadAgentDefinitions(tmpDir));
-
-    expect(result.map((agent) => agent.name)).toEqual(['aaa']);
-    expect(warnings).toEqual([
-      "Warning: skipping agent definition 'bbb': package 'dup-pkg@latest' already defined by 'aaa'",
-    ]);
-  });
-
-  test('duplicate-package detection ignores version suffix and case', () => {
-    writeDefinition('aaa.yaml', 'package: dup-pkg@latest\nbinary: aaa\n');
-    writeDefinition('bbb.yaml', 'package: DUP-PKG@2.0.0\nbinary: bbb\n');
-
-    const { result, warnings } = captureWarnings(() => loadAgentDefinitions(tmpDir));
-
-    expect(result.map((agent) => agent.name)).toEqual(['aaa']);
-    expect(warnings).toEqual([
-      "Warning: skipping agent definition 'bbb': package 'DUP-PKG@2.0.0' already defined by 'aaa'",
-    ]);
-  });
-
-  test('drops a definition whose name collides with a built-in, case-insensitively', () => {
-    writeDefinition('CLAUDE CODE.yaml', 'package: not-claude@latest\nbinary: notclaude\n');
-
-    const { result, warnings } = captureWarnings(() => loadAgentDefinitions(tmpDir));
-
-    expect(result).toEqual([]);
-    expect(warnings).toEqual([
-      "Warning: skipping agent definition 'CLAUDE CODE': name collides with built-in agent 'Claude Code'",
-    ]);
-  });
-
-  // Filenames are unique, so the name-vs-earlier-custom axis is only reachable
-  // case-insensitively. This filesystem is case-sensitive; the check must not
-  // assume that of every host.
-  test('drops the later definition when two custom names differ only by case', () => {
-    writeDefinition('omp.yaml', 'package: omp-a@latest\nbinary: ompa\n');
-    writeDefinition('OMP.yaml', 'package: omp-b@latest\nbinary: ompb\n');
-
-    const { result, warnings } = captureWarnings(() => loadAgentDefinitions(tmpDir));
-
-    expect(result.map((agent) => agent.name)).toEqual(['omp']);
-    expect(warnings).toEqual(["Warning: skipping agent definition 'OMP': name collides with 'omp'"]);
-  });
-
+  // The collision rules themselves are pinned as data in the
+  // selectAgentDefinitions suite below; what this layer owns is the read.
   test('skips a file whose stem is not a safe path segment', () => {
     writeDefinition('...yaml', MINIMAL_YAML);
 
@@ -163,6 +119,84 @@ describe('loadAgentDefinitions', () => {
 
     expect(result).toEqual([]);
     expect(warnings).toEqual([]);
+  });
+});
+
+// The merge rules are tested as plain data because the filesystem cannot host
+// every case: on a case-insensitive volume (the macOS default) two definition
+// files whose stems differ only by case are the same file, so the
+// name-collision rule is unreachable through a directory of real files.
+describe('selectAgentDefinitions', () => {
+  function candidate(stem: string, packageSpec: string): AgentDefinitionCandidate {
+    return {
+      kind: 'parsed',
+      stem,
+      definition: {
+        package: packageSpec,
+        binary: 'bin',
+        dot_dirs: [],
+        host_mode_supported: true,
+        install: { method: 'npm' },
+        container_env: {},
+        isolated_seed_files: [],
+      },
+    };
+  }
+
+  test('accepts candidates in stem order, whatever order they arrive in', () => {
+    const selection = selectAgentDefinitions([
+      candidate('zed', 'zed@latest'),
+      candidate('alpha', 'alpha@latest'),
+    ]);
+
+    expect(selection.agents.map((agent) => agent.name)).toEqual(['alpha', 'zed']);
+    expect(selection.warnings).toEqual([]);
+  });
+
+  test('drops the later definition when two stems differ only by case', () => {
+    const selection = selectAgentDefinitions([
+      candidate('OMP', 'omp-b@latest'),
+      candidate('omp', 'omp-a@latest'),
+    ]);
+
+    expect(selection.agents.map((agent) => agent.name)).toEqual(['omp']);
+    expect(selection.agents[0]?.package).toBe('omp-a@latest');
+    expect(selection.warnings).toEqual([
+      "Warning: skipping agent definition 'OMP': name collides with 'omp'",
+    ]);
+  });
+
+  test('drops a definition whose name collides with a built-in, case-insensitively', () => {
+    const selection = selectAgentDefinitions([candidate('CLAUDE CODE', 'not-claude@latest')]);
+
+    expect(selection.agents).toEqual([]);
+    expect(selection.warnings).toEqual([
+      "Warning: skipping agent definition 'CLAUDE CODE': name collides with built-in agent 'Claude Code'",
+    ]);
+  });
+
+  test('drops the later definition when two customs share a package', () => {
+    const selection = selectAgentDefinitions([
+      candidate('aaa', 'dup-pkg@latest'),
+      candidate('bbb', 'dup-pkg@latest'),
+    ]);
+
+    expect(selection.agents.map((agent) => agent.name)).toEqual(['aaa']);
+    expect(selection.warnings).toEqual([
+      "Warning: skipping agent definition 'bbb': package 'dup-pkg@latest' already defined by 'aaa'",
+    ]);
+  });
+
+  test('duplicate-package detection ignores version suffix and case', () => {
+    const selection = selectAgentDefinitions([
+      candidate('aaa', 'dup-pkg@latest'),
+      candidate('bbb', 'DUP-PKG@2.0.0'),
+    ]);
+
+    expect(selection.agents.map((agent) => agent.name)).toEqual(['aaa']);
+    expect(selection.warnings).toEqual([
+      "Warning: skipping agent definition 'bbb': package 'DUP-PKG@2.0.0' already defined by 'aaa'",
+    ]);
   });
 });
 

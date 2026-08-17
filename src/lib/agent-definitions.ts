@@ -24,53 +24,92 @@ export function allAgents(dir: string = getAgentDefinitionsDir()): KnownAgent[] 
  * alphabetical order. A file that cannot be used is skipped with a warning on
  * stderr rather than aborting: one bad file must not take the CLI down, and
  * `--json` stdout stays parseable. Built-ins always win a collision — a broken
- * user file must never shadow a tested built-in.
+ * user file must never shadow a tested built-in. The directory read is the only
+ * effectful part; every rule lives in `selectAgentDefinitions`.
  */
 export function loadAgentDefinitions(dir: string = getAgentDefinitionsDir()): KnownAgent[] {
   if (!fs.existsSync(dir)) {
     return [];
   }
 
-  const stems = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(YAML_SUFFIX))
-    .map((entry) => entry.name.slice(0, -YAML_SUFFIX.length))
-    .sort((a, b) => a.localeCompare(b));
+  const { agents, warnings } = selectAgentDefinitions(readCandidates(dir));
+  warnings.forEach((warning) => console.warn(warning));
+  return agents;
+}
 
-  const accepted: KnownAgent[] = [];
-  for (const stem of stems) {
-    if (!isSafePathSegment(stem)) {
-      console.warn(
-        `Warning: skipping agent definition file '${stem}${YAML_SUFFIX}': ${SAFE_PATH_SEGMENT_RULE}`,
+/**
+ * A definition file as read from disk: `parsed` when it validated, `unreadable`
+ * with the error otherwise. `stem` is the filename without `.yaml` — the agent
+ * name, not yet checked against the name rules.
+ */
+export type AgentDefinitionCandidate =
+  | { kind: 'parsed'; stem: string; definition: AgentDefinitionFile }
+  | { kind: 'unreadable'; stem: string; error: string };
+
+export interface AgentDefinitionSelection {
+  agents: KnownAgent[];
+  warnings: string[];
+}
+
+/**
+ * Which candidates join the agent table, and the warning a user sees for each
+ * one dropped. Pure, and it sorts its own input: "alphabetically earlier wins"
+ * is one of the rules, not a property of the directory read. Kept separate from
+ * that read because a case-insensitive volume — the macOS default — cannot hold
+ * two files whose stems differ only by case, so the name-collision rule is only
+ * reachable as data.
+ */
+export function selectAgentDefinitions(
+  candidates: readonly AgentDefinitionCandidate[],
+): AgentDefinitionSelection {
+  const agents: KnownAgent[] = [];
+  const warnings: string[] = [];
+
+  for (const candidate of [...candidates].sort((a, b) => a.stem.localeCompare(b.stem))) {
+    if (!isSafePathSegment(candidate.stem)) {
+      warnings.push(
+        `Warning: skipping agent definition file '${candidate.stem}${YAML_SUFFIX}': ${SAFE_PATH_SEGMENT_RULE}`,
       );
       continue;
     }
 
-    const definition = readDefinition(path.join(dir, `${stem}${YAML_SUFFIX}`), stem);
-    if (definition === undefined) {
+    if (candidate.kind === 'unreadable') {
+      warnings.push(
+        `Warning: skipping invalid agent definition '${candidate.stem}': ${candidate.error}`,
+      );
       continue;
     }
 
-    const collision = collisionReason(stem, definition, accepted);
+    const collision = collisionReason(candidate.stem, candidate.definition, agents);
     if (collision !== undefined) {
-      console.warn(`Warning: skipping agent definition '${stem}': ${collision}`);
+      warnings.push(`Warning: skipping agent definition '${candidate.stem}': ${collision}`);
       continue;
     }
 
-    accepted.push({ name: stem, ...definition });
+    agents.push({ name: candidate.stem, ...candidate.definition });
   }
 
-  return accepted;
+  return { agents, warnings };
 }
 
-function readDefinition(filePath: string, name: string): AgentDefinitionFile | undefined {
+// Every `*.yaml` entry is read, name rules included: a readdir name carries no
+// path separator, so joining one cannot escape `dir`. The name rule guards the
+// agent *name*, which later interpolates into config paths, not this read.
+function readCandidates(dir: string): AgentDefinitionCandidate[] {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(YAML_SUFFIX))
+    .map((entry) =>
+      readCandidate(path.join(dir, entry.name), entry.name.slice(0, -YAML_SUFFIX.length)),
+    );
+}
+
+function readCandidate(filePath: string, stem: string): AgentDefinitionCandidate {
   try {
     const raw: unknown = parseYaml(fs.readFileSync(filePath, 'utf-8'), filePath);
-    return validateAgentDefinition(raw);
+    return { kind: 'parsed', stem, definition: validateAgentDefinition(raw) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`Warning: skipping invalid agent definition '${name}': ${message}`);
-    return undefined;
+    return { kind: 'unreadable', stem, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
