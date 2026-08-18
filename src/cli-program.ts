@@ -61,7 +61,7 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   // Agent profile subcommands
   const agentProfileCmd = program
     .command('agent-profile')
-    .description('Manage agent profiles');
+    .description('Manage agent profiles (a persistent login/identity for an agent)');
 
   registerAgentProfileAddCommand(agentProfileCmd);
   registerAgentProfileListCommand(agentProfileCmd);
@@ -73,7 +73,7 @@ export function buildProgram(meta: { version: string; homepage: string }): Comma
   // Agent definition subcommands
   const agentCmd = program
     .command('agent')
-    .description('Manage agent definitions');
+    .description('Manage agent definitions (register a new kind of agent)');
 
   registerAgentListCommand(agentCmd);
   registerAgentShowCommand(agentCmd);
