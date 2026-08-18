@@ -50,6 +50,8 @@ container profile ──┐
 agent profile(s) ───┘
 ```
 
+An agent pi-tin doesn't know out of the box is added with an **agent definition**: it registers the agent *kind* — how to install and launch it. An agent profile then holds a login for it, as for any built-in. → [Custom agents](#custom-agents)
+
 Everyday flow: `cd` into a project and run `pt` — it opens the matching workspace (and offers to create or pick one if needed).
 
 ## Prerequisites
@@ -315,7 +317,7 @@ skip_permissions_flag: "--yolo"
 container_env: { OMP_LOG: "info" }
 ```
 
-A defined agent is then treated like a built-in: it is offered by `pi-tin create`, takes [agent profiles](#agent-profiles) (`agent-profile add`, `agent-profile discover`), is listed by `detect-host`, and gets its `container_env` and skip-permissions wrapper in the image. Write definitions with `pi-tin agent apply <name>` (JSON on stdin) or by hand; `pi-tin agent list` shows the merged table with each entry's source.
+A defined agent is then treated like a built-in: it is offered by `pi-tin create`, takes [agent profiles](#agent-profiles) (`agent-profile add`, `agent-profile discover`), is listed by `detect-host`, and gets its `container_env` and skip-permissions wrapper in the image. Write definitions with `pi-tin agent apply <name>` (JSON on stdin) or by hand; read one back with `pi-tin agent show <name>` — a built-in's output serves as a template, given a new name and `package`. `pi-tin agent list` shows the merged table with each entry's source.
 
 Two names differing only by case cannot coexist: on a case-insensitive volume — the macOS default — `OMP.yaml` and `omp.yaml` are the same file. `agent apply` refuses such a name (exit `2`) rather than replacing the definition already there, and the loader drops one of a pair reaching it by hand.
 
@@ -413,6 +415,7 @@ of the following to a non-empty value:
 | `pi-tin agent-profile discover` | Scan for agents and create agent profiles (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile add`) |
 | `pi-tin agent-profile finder [name]` | Open agent profile directory in Finder (interactive; without a TTY exits 1 with error code `interactive_only` — use `agent-profile show --json`) |
 | `pi-tin agent list [--json]` | List agents, built-in and custom, with each entry's source (`--json` for machine-readable output; JSON is the default when output is piped) |
+| `pi-tin agent show <name> [--json]` | Show an agent definition, built-in or custom, as agent-definition JSON (output is always JSON; `--json` is accepted for consistency; a built-in's output is a template — it needs a new name and `package` before `agent apply`) |
 | `pi-tin agent apply <name> [--dry-run] [--json]` | Create or update a custom [agent definition](#custom-agents) from a JSON object on stdin (`--dry-run` prints the diff and writes nothing; `--json` is accepted for consistency; built-in agents cannot be overridden, and a `package` another definition already claims is rejected; so is a name differing from an existing definition only by case) |
 | `pi-tin agent delete <name> [--force] [--dry-run] [--json]` | Delete a custom agent definition (`--dry-run` previews the impact, including referencing workspaces and agent profiles; non-interactive callers must pass `--force` or get exit code 4) |
 
@@ -440,19 +443,19 @@ These commands form the JSON read-modify-write surface an agent uses to inspect 
 | `show <name>` (workspace) | `apply <name>` (workspace) |
 | `container-profile show <name>` | `container-profile apply <name>` |
 | `agent-profile show <name>` / `agent-profile list` | `agent-profile add <name> --agent <agent>` |
-| `agent list` (built-in and custom agents) | `agent apply <name>` ([agent definition](#custom-agents)) |
+| `agent show <name>` / `agent list` | `agent apply <name>` ([agent definition](#custom-agents)) |
 | `detect-host` (host facts, no name) | — |
 
 The contract is **JSON in, JSON out**:
 
-- Each `show` emits exactly the object its paired `apply` accepts on stdin, so the loop is: read with `show --json`, edit the object, write it back with `apply` (preview first with `--dry-run`). `detect-host` supplies host facts (`{ gitIdentity, tz, colorterm, apiKeys, agents }`) an agent composes into a workspace `apply` payload.
+- Each `show` emits exactly the object its paired `apply` accepts on stdin, so the loop is: read with `show --json`, edit the object, write it back with `apply` (preview first with `--dry-run`). The one asymmetry: `agent show` also prints built-ins, whose objects `agent apply` refuses under the same name or `package` — a built-in's output is a template for a custom definition, not a write-back. `detect-host` supplies host facts (`{ gitIdentity, tz, colorterm, apiKeys, agents }`) an agent composes into a workspace `apply` payload.
 - `apply` is a **full replace**, not a merge — the target file is rewritten from the JSON object, so any YAML comments are dropped. Always preview with `--dry-run` (it prints the diff and writes nothing) before a real write. An existing file that no longer parses doesn't block `apply`: the parse error becomes a warning on stderr and the diff treats the file as empty, so `apply` can repair a corrupt workspace or container profile.
 - Invalid input is rejected against the relevant schema before anything is written. Every command exits with a stable, semantic code (see the **Stable exit codes** table below) and, in JSON mode, a structured error envelope — so callers branch on `code`, never on prose.
 - `agent-profile add` is the non-interactive creation path; agent-profile credentials are populated by logging in on first workspace use, not via `apply`, so there is no `agent-profile apply`.
 
 The subsections below — [Editing container profiles](#editing-container-profiles) and [Editing workspaces](#editing-workspaces) — give the per-command detail.
 
-- **JSON output.** Data-returning commands (`list`, `show`, `container-profile list`, `container-profile show`, `agent-profile list`, `agent-profile show`, `agent list`) accept `--json`. They also emit JSON **by default when stdout is not a TTY** — i.e. when the output is piped or captured — so a script never has to remember the flag. Pass `--json` explicitly to force JSON even in an interactive terminal.
+- **JSON output.** Data-returning commands (`list`, `show`, `container-profile list`, `container-profile show`, `agent-profile list`, `agent-profile show`, `agent list`, `agent show`) accept `--json`. They also emit JSON **by default when stdout is not a TTY** — i.e. when the output is piped or captured — so a script never has to remember the flag. Pass `--json` explicitly to force JSON even in an interactive terminal.
 - **Channels.** Results go to **stdout** (the data channel); diagnostics, prompts, and errors go to **stderr**. Capturing stdout alone gives clean parseable output.
 - **Stable exit codes.** Every command exits with a semantic code so callers can branch on the outcome without parsing prose:
 
