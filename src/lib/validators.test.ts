@@ -1043,19 +1043,17 @@ describe('AgentDefinitionFileSchema', () => {
     );
   });
 
-  // The built-in table is a compile-time constant the schema never parses, so
-  // only this test keeps the two in step: whatever a built-in declares, a user
-  // definition must be able to declare too.
-  test('accepts every built-in skip-permissions flag', () => {
-    const flags = KNOWN_AGENTS.flatMap((agent) =>
-      agent.skip_permissions_flag === undefined ? [] : [agent.skip_permissions_flag],
-    );
-
-    // Guards the loop below against a silently empty list.
-    expect(flags.length).toBeGreaterThanOrEqual(3);
-    for (const flag of flags) {
-      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, skip_permissions_flag: flag }).success)
-        .toBe(true);
+  // The built-in table is a compile-time constant the schema never parses at
+  // runtime, so only this test keeps the two in step: `agent show` prints a
+  // built-in as an apply-able template, so every entry must round-trip whole.
+  test('accepts every built-in definition whole', () => {
+    // Guards the loop below against a silently empty table.
+    expect(KNOWN_AGENTS.length).toBeGreaterThanOrEqual(6);
+    for (const { name, ...definition } of KNOWN_AGENTS) {
+      const parsed = v.safeParse(AgentDefinitionFileSchema, definition);
+      // Failure diff names the agent and the schema's reason, not just false.
+      expect({ name, issues: parsed.issues?.map((i) => i.message) ?? [] })
+        .toEqual({ name, issues: [] });
     }
   });
 

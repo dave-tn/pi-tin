@@ -146,6 +146,13 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       flags: ['--json'],
     },
     {
+      command: 'agent show',
+      summary:
+        'Show an agent definition, built-in or custom, as agent-definition JSON. A built-in is a template: `agent apply` refuses built-in names and packages, so give it a new name and package.',
+      args: ['<name>'],
+      flags: ['--json'],
+    },
+    {
       command: 'agent apply',
       summary: 'Create or update a custom agent definition (built-in agents cannot be overridden)',
       args: ['<name>'],

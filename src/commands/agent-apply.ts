@@ -114,12 +114,10 @@ export function registerAgentApplyCommand(group: import('commander').Command): v
     });
 }
 
-// There is no `agent show`, so the example command is the listing — it prints
-// the same field shape for every agent, built-in and custom.
 function parseDefinition(raw: unknown): AgentDefinitionFile {
   try {
     return validateAgentDefinition(raw);
   } catch (err) {
-    throw toValidationError(err, 'pi-tin agent list --json');
+    throw toValidationError(err, 'pi-tin agent show "Claude Code" --json');
   }
 }

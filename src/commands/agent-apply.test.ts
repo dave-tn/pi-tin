@@ -177,7 +177,7 @@ describe('agent apply', () => {
     expect(fs.existsSync(definitionPath('oh-my-pi'))).toBe(false);
   });
 
-  test('rejects a schema-invalid definition and points at `agent list --json`', async () => {
+  test('rejects a schema-invalid definition and points at a built-in template', async () => {
     const run = await runApply(['apply', 'oh-my-pi'], JSON.stringify({ package: 'oh-my-pi@latest' }));
 
     const err = asCliError(run.err);
@@ -185,7 +185,7 @@ describe('agent apply', () => {
     expect(err.detail.code).toBe('validation');
     expect(err.message).toContain('Invalid agent definition configuration');
     expect(err.detail.remediation).toBe(
-      'Run `pi-tin agent list --json` to see a valid example object.',
+      'Run `pi-tin agent show "Claude Code" --json` to see a valid example object.',
     );
     expect(fs.existsSync(definitionPath('oh-my-pi'))).toBe(false);
   });
