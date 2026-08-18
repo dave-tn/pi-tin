@@ -34,6 +34,11 @@ export interface HelpSchema {
     interactive: string;
     sandboxing: string;
   };
+  concepts: {
+    agentDefinition: string;
+    agentProfile: string;
+    customAgentOrder: string;
+  };
   exitCodes: Record<string, string>;
   commands: HelpCommand[];
   interactiveOnly: { command: string; use: string }[];
@@ -55,6 +60,14 @@ export const AGENT_HELP_SCHEMA: HelpSchema = {
       'Interactive-only commands (listed under interactiveOnly) refuse without a TTY: exit 1, error code interactive_only. Use the listed alternative.',
     sandboxing:
       'pi-tin needs the Apple container system service. Some sandboxed shells block access to it, so a running service can be reported as not running (error code container_system_not_running). Before starting or restarting the service in response to that error, verify with `container system status` from an unsandboxed shell.',
+  },
+  concepts: {
+    agentDefinition:
+      'An agent definition registers an agent kind — how to install and launch it. Built-in agents need none; `agent apply` adds a custom one.',
+    agentProfile:
+      'An agent profile is a persistent login/identity for an agent (isolated auth + config), built-in or custom. Created with `agent-profile add`, never `apply`.',
+    customAgentOrder:
+      'New custom agent, in order: `agent apply` (define the kind) → `agent-profile add` (a login for it) → reference both from the workspace (`tools` + `agent.profiles`).',
   },
   exitCodes: {
     '0': 'success',
@@ -192,6 +205,11 @@ CONTRACT
 - ${AGENT_HELP_SCHEMA.contract.interactive}
 - ${AGENT_HELP_SCHEMA.contract.sandboxing}
 
+CONCEPTS
+- ${AGENT_HELP_SCHEMA.concepts.agentDefinition}
+- ${AGENT_HELP_SCHEMA.concepts.agentProfile}
+- ${AGENT_HELP_SCHEMA.concepts.customAgentOrder}
+
 TYPICAL FLOWS
 - New/edit workspace:
     pi-tin detect-host                         # git identity, tz, api keys, agents
@@ -203,12 +221,13 @@ TYPICAL FLOWS
     # edit p.json, then:
     pi-tin container-profile apply <name> --dry-run < p.json
     pi-tin container-profile apply <name> < p.json
-- Agent profiles (creation is flag-driven, not apply):
+- Agent profiles (a login for an agent; creation is flag-driven, not apply):
     pi-tin agent-profile add <name> --agent "Claude Code"
     pi-tin agent-profile delete <name> --dry-run   # preview blast radius
     pi-tin agent-profile delete <name> --force     # after confirming with the user
-- Custom agent definition (makes a non-built-in agent first-class):
+- Custom agent definition (registers a new agent kind — see CONCEPTS):
     pi-tin agent list --json                       # built-ins + customs
+    pi-tin agent show "Claude Code" --json         # a built-in as a template (new name + package)
     pi-tin agent apply <name> --dry-run < a.json   # preview
     pi-tin agent apply <name> < a.json             # write
 - Stop or delete a workspace (destructive — preview, confirm with the user, then --force):

@@ -23,10 +23,25 @@ describe('agent-guide content', () => {
       'Create or update a custom agent definition (built-in agents cannot be overridden)',
     );
     expect(summaries.get('agent delete')).toBe('Delete a custom agent definition');
+    expect(summaries.get('agent show')).toBe(
+      'Show an agent definition, built-in or custom, as agent-definition JSON. A built-in is a template: `agent apply` refuses built-in names and packages, so give it a new name and package.',
+    );
+  });
+
+  test('the guide separates agent definitions from agent profiles and gives the order', () => {
+    expect(AGENT_GUIDE).toContain('CONCEPTS');
+    expect(AGENT_HELP_SCHEMA.concepts.agentDefinition).toContain('agent kind');
+    expect(AGENT_HELP_SCHEMA.concepts.agentProfile).toContain('login');
+    expect(AGENT_HELP_SCHEMA.concepts.customAgentOrder).toContain('`agent apply`');
+    // The text guide carries the same three lines, so the two surfaces cannot drift.
+    expect(AGENT_GUIDE).toContain(AGENT_HELP_SCHEMA.concepts.agentDefinition);
+    expect(AGENT_GUIDE).toContain(AGENT_HELP_SCHEMA.concepts.agentProfile);
+    expect(AGENT_GUIDE).toContain(AGENT_HELP_SCHEMA.concepts.customAgentOrder);
   });
 
   test('the guide shows the custom agent definition flow', () => {
     expect(AGENT_GUIDE).toContain('pi-tin agent list --json');
+    expect(AGENT_GUIDE).toContain('pi-tin agent show "Claude Code" --json');
     expect(AGENT_GUIDE).toContain('pi-tin agent apply <name> --dry-run < a.json');
     expect(AGENT_GUIDE).toContain('pi-tin agent apply <name> < a.json');
   });
