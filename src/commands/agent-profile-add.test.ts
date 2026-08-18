@@ -80,7 +80,8 @@ describe('agent-profile add', () => {
     ]);
     expect(err.message).toBe(
       "Unknown agent: 'Nonexistent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, "
-      + 'Gemini CLI. To add a custom agent, create an agent definition (README: Custom agents).',
+      + 'Gemini CLI. To add a custom agent, define it with `pi-tin agent apply <name>` — '
+      + '`pi-tin agent show "Claude Code"` prints a template (README: Custom agents).',
     );
   });
 

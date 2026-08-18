@@ -37,7 +37,8 @@ export function findCreatableAgent(
 // the built-in table will never carry.
 export function unknownAgentMessage(agentName: string, agents: readonly KnownAgent[]): string {
   return `Unknown agent: '${agentName}'. Known agents: ${agents.map((a) => a.name).join(', ')}. `
-    + 'To add a custom agent, create an agent definition (README: Custom agents).';
+    + 'To add a custom agent, define it with `pi-tin agent apply <name>` — '
+    + '`pi-tin agent show "Claude Code"` prints a template (README: Custom agents).';
 }
 
 export function createAgentProfile(

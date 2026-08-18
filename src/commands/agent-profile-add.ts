@@ -13,11 +13,14 @@ export function registerAgentProfileAddCommand(
   agentProfileCmd
     .command('add <name>')
     .description('Create a new agent profile')
-    // Built-ins only: help text is assembled while the program is built, for
-    // every invocation, and that must not read the agent-definitions dir. The
-    // merged list — custom agents included — reaches the user through the
-    // unknown-agent error below.
-    .requiredOption('--agent <agent>', `Agent name (${KNOWN_AGENTS.map((a) => a.name).join(', ')})`)
+    // Built-in names only in the enum: help text is assembled while the
+    // program is built, for every invocation, and that must not read the
+    // agent-definitions dir. Customs reach the user through the `agent list`
+    // pointer here and the unknown-agent error below.
+    .requiredOption(
+      '--agent <agent>',
+      `Agent name (${KNOWN_AGENTS.map((a) => a.name).join(', ')}, or a custom agent from pi-tin agent list)`,
+    )
     .option('--host', 'Mount host config directly instead of creating an isolated copy')
     .option('--json', 'Output machine-readable JSON')
     .action((name: string, opts: { agent: string; host?: boolean; json?: boolean }) => {
