@@ -152,19 +152,24 @@ describe('gitIdentityEnv', () => {
 });
 
 describe('availableApiKeyVars', () => {
-  test('returns only the vars set on the host, in canonical order', () => {
-    expect(availableApiKeyVars({
-      OPENROUTER_API_KEY: 'sk-or',
+  const claude = { api_key_vars: ['ANTHROPIC_API_KEY'] };
+  const copilot = { api_key_vars: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN'] };
+  const pi = { api_key_vars: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] };
+
+  test("unions the selected agents' vars, deduplicated, filtered to those set on the host", () => {
+    expect(availableApiKeyVars([claude, pi, copilot], {
       ANTHROPIC_API_KEY: 'sk-ant',
+      GH_TOKEN: 'gho',
       UNRELATED: 'x',
-    })).toEqual([
-      { name: 'ANTHROPIC_API_KEY', label: 'Anthropic API key' },
-      { name: 'OPENROUTER_API_KEY', label: 'OpenRouter API key' },
-    ]);
+    })).toEqual(['ANTHROPIC_API_KEY', 'GH_TOKEN']);
   });
 
   test('treats empty values as unset', () => {
-    expect(availableApiKeyVars({ OPENAI_API_KEY: '' })).toEqual([]);
+    expect(availableApiKeyVars([claude], { ANTHROPIC_API_KEY: '' })).toEqual([]);
+  });
+
+  test('offers nothing when the selected agents declare no vars', () => {
+    expect(availableApiKeyVars([{ api_key_vars: [] }], { ANTHROPIC_API_KEY: 'sk-ant' })).toEqual([]);
   });
 });
 

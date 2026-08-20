@@ -234,7 +234,7 @@ async function promptAgentProfile(
 
 async function promptAgents(
   agents: readonly KnownAgent[],
-): Promise<{ tools: Tool[]; agentProfileNames: string[] }> {
+): Promise<{ tools: Tool[]; agentProfileNames: string[]; selectedAgents: KnownAgent[] }> {
   const selectedAgents = await checkbox({
     message: 'Select coding agents (space to toggle, enter to confirm):',
     choices: agents.map((agent) => ({
@@ -260,7 +260,7 @@ async function promptAgents(
     }
   }
 
-  return { tools, agentProfileNames };
+  return { tools, agentProfileNames, selectedAgents };
 }
 
 async function promptGitIdentityEnv(): Promise<Record<string, string>> {
@@ -279,20 +279,16 @@ async function promptGitIdentityEnv(): Promise<Record<string, string>> {
   return useGit ? gitIdentityEnv(gitName, gitEmail) : {};
 }
 
-// Offer to forward common API key env vars
-async function promptApiKeyEnv(): Promise<Record<string, string>> {
-  const commonEnvVars = availableApiKeyVars(process.env);
-  if (commonEnvVars.length === 0) {
+// Offer to forward the API-key vars the selected agents declare
+async function promptApiKeyEnv(selectedAgents: readonly KnownAgent[]): Promise<Record<string, string>> {
+  const agentKeyVars = availableApiKeyVars(selectedAgents, process.env);
+  if (agentKeyVars.length === 0) {
     return {};
   }
 
   const selectedVars = await checkbox({
     message: 'Forward API keys from host? (uses ${VAR} syntax — keys stay on host):',
-    choices: commonEnvVars.map((v) => ({
-      name: `${v.label} (${v.name})`,
-      value: v.name,
-      checked: true,
-    })),
+    choices: agentKeyVars.map((name) => ({ name, value: name, checked: true })),
   });
   return forwardedEnv(selectedVars);
 }
@@ -477,11 +473,11 @@ export async function runCreateFlow(nameArg?: string): Promise<void> {
     const { parentDir, projectNames } = await promptProjects();
     // Read once for the whole wizard: the agent choices, the profile prompts
     // and the profile creation must all see the same table.
-    const { tools, agentProfileNames } = await promptAgents(allAgents());
+    const { tools, agentProfileNames, selectedAgents } = await promptAgents(allAgents());
 
     // Environment variables — seeded with host terminal color support and timezone
     const gitEnv = await promptGitIdentityEnv();
-    const apiKeyEnv = await promptApiKeyEnv();
+    const apiKeyEnv = await promptApiKeyEnv(selectedAgents);
     const timezone = detectHostTimezone();
     if (timezone === undefined) {
       console.log(

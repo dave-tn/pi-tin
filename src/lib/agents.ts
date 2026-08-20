@@ -264,6 +264,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     host_mode_supported: false,
     skip_permissions_flag: '--dangerously-skip-permissions',
     container_env: { CLAUDE_CODE_SANDBOXED: '1' },
+    api_key_vars: ['ANTHROPIC_API_KEY'],
     isolated_seed_files: [],
     // Native layout: ~/.local/bin/claude is a symlink into
     // ~/.local/share/claude/versions/<v>; the auto-updater swaps it atomically,
@@ -290,6 +291,21 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     host_mode_supported: true,
     install: { method: 'npm' },
     container_env: {},
+    // The widely-used subset of Pi's provider env map (pi-ai env-api-keys.ts);
+    // Pi reads many more, forwardable by hand via workspace host.env.
+    api_key_vars: [
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'GEMINI_API_KEY',
+      'OPENROUTER_API_KEY',
+      'XAI_API_KEY',
+      'GROQ_API_KEY',
+      'DEEPSEEK_API_KEY',
+      'MISTRAL_API_KEY',
+      'CEREBRAS_API_KEY',
+      'ZAI_API_KEY',
+      'MOONSHOT_API_KEY',
+    ],
     // Pi always runs in skip-permissions mode — no flag needed
     isolated_seed_files: [{ path: '.pi/agent/trust.json', content: PI_TRUST_SEED }],
   },
@@ -306,6 +322,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
       'Shared mode persists login via ~/.codex/auth.json, which is the default. If you set cli_auth_credentials_store = "keyring" (or "auto" on macOS, which prefers the OS keychain), the credential lives outside ~/.codex and will not transfer — choose Isolated instead.',
     skip_permissions_flag: '--dangerously-bypass-approvals-and-sandbox',
     container_env: {},
+    api_key_vars: ['OPENAI_API_KEY'],
     isolated_seed_files: [],
   },
   {
@@ -331,6 +348,9 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     // No skip-permissions flag needed (edit/bash default to "allow"); see
     // OPENCODE_SANDBOX_CONFIG above for the external_directory bypass.
     container_env: { OPENCODE_CONFIG_CONTENT: OPENCODE_SANDBOX_CONFIG },
+    // GOOGLE_GENERATIVE_AI_API_KEY, not GEMINI_API_KEY: OpenCode's google
+    // provider reads the AI-SDK default name.
+    api_key_vars: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
     isolated_seed_files: [],
   },
   {
@@ -341,6 +361,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     host_mode_supported: true,
     install: { method: 'npm' },
     container_env: {},
+    api_key_vars: ['AMP_API_KEY'],
     isolated_seed_files: [],
     // Amp runs without approval prompts by default — no flag needed.
   },
@@ -353,6 +374,8 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     install: { method: 'npm' },
     skip_permissions_flag: '--approval-mode=yolo',
     container_env: { NO_BROWSER: 'true' },
+    // GOOGLE_API_KEY is the Vertex AI express-mode key, read alongside GEMINI_API_KEY.
+    api_key_vars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
     isolated_seed_files: [],
   },
 ];

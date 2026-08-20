@@ -24,6 +24,7 @@ const OH_MY_PI: KnownAgent = {
   host_mode_supported: true,
   install: { method: 'npm' },
   container_env: {},
+  api_key_vars: [],
   isolated_seed_files: [{ path: '.oh-my-pi/trust.json', content: '{}\n' }],
 };
 
@@ -35,6 +36,7 @@ const NO_HOST: KnownAgent = {
   host_mode_supported: false,
   install: { method: 'npm' },
   container_env: {},
+  api_key_vars: [],
   isolated_seed_files: [],
 };
 

@@ -37,25 +37,26 @@ export function buildHostInfo(input: {
   gitEmail: string | undefined;
   tz: string | undefined;
   colorterm: string | undefined;
-  apiKeyVars: Array<{ name: string; label: string }>;
+  apiKeyVars: string[];
   agents: ReadonlyArray<{ name: string; package: string }>;
 }): HostInfo {
   return {
     gitIdentity: { name: input.gitName ?? null, email: input.gitEmail ?? null },
     tz: input.tz ?? null,
     colorterm: input.colorterm ?? null,
-    apiKeys: input.apiKeyVars.map((v) => v.name),
+    apiKeys: input.apiKeyVars,
     agents: input.agents.map((a) => ({ name: a.name, package: a.package })),
   };
 }
 
 export function detectHost(): HostInfo {
+  const agents = allAgents();
   return buildHostInfo({
     gitName: getGitConfig('user.name'),
     gitEmail: getGitConfig('user.email'),
     tz: detectHostTimezone(),
     colorterm: process.env['COLORTERM'],
-    apiKeyVars: availableApiKeyVars(process.env),
-    agents: allAgents(),
+    apiKeyVars: availableApiKeyVars(agents, process.env),
+    agents,
   });
 }

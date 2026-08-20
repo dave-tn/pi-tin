@@ -231,6 +231,7 @@ describe('generateDockerfile', () => {
       install: { method: 'npm' },
       skip_permissions_flag: '--yolo',
       container_env: { OMP_LOG: 'info' },
+      api_key_vars: [],
       isolated_seed_files: [],
     };
     const agents = [...KNOWN_AGENTS, ohMyPi];
@@ -273,6 +274,7 @@ describe('generateDockerfile', () => {
         musl_env: {},
       },
       container_env: {},
+      api_key_vars: [],
       isolated_seed_files: [],
     };
     const packages: Tool[] = [{ name: 'Zed Agent', package: 'zed-agent@latest' }];
@@ -307,6 +309,7 @@ describe('generateDockerfile', () => {
       },
       skip_permissions_flag: '--yolo',
       container_env: {},
+      api_key_vars: [],
       isolated_seed_files: [],
     };
     const agents = [...KNOWN_AGENTS, zed];

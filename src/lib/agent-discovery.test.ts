@@ -24,6 +24,7 @@ const CUSTOM_AGENT: KnownAgent = {
   host_mode_supported: true,
   install: { method: 'npm' },
   container_env: {},
+  api_key_vars: [],
   isolated_seed_files: [],
 };
 

@@ -360,6 +360,7 @@ describe('lookup helpers over an extended agents table', () => {
     install: { method: 'npm' },
     skip_permissions_flag: '--yolo',
     container_env: { OMP_LOG: 'info' },
+    api_key_vars: [],
     isolated_seed_files: [],
   };
 
@@ -381,6 +382,7 @@ describe('lookup helpers over an extended agents table', () => {
     host_mode_supported: true,
     install: CUSTOM_NATIVE_INSTALL,
     container_env: {},
+    api_key_vars: [],
     isolated_seed_files: [],
   };
 
@@ -433,6 +435,7 @@ describe('a custom agent that declares binary: claude', () => {
     install: { method: 'npm' },
     skip_permissions_flag: '--yolo',
     container_env: {},
+    api_key_vars: [],
     isolated_seed_files: [],
   };
   const table = [...KNOWN_AGENTS, fork];

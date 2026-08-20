@@ -97,6 +97,7 @@ export const AgentDefinitionFileSchema = v.strictObject({
     v.pipe(v.string(), v.regex(skipPermissionsFlagPattern, SKIP_PERMISSIONS_FLAG_RULE)),
   ),
   container_env: v.optional(v.record(v.pipe(v.string(), v.regex(envKeyPattern)), v.string()), {}),
+  api_key_vars: v.optional(v.array(v.pipe(v.string(), v.regex(envKeyPattern))), []),
   isolated_seed_files: v.optional(v.array(SeedFileSchema), []),
 });
 

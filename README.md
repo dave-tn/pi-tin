@@ -315,6 +315,7 @@ binary: omp
 dot_dirs: [.oh-my-pi]
 skip_permissions_flag: "--yolo"
 container_env: { OMP_LOG: "info" }
+api_key_vars: [OPENROUTER_API_KEY]
 ```
 
 A defined agent is then treated like a built-in: it is offered by `pi-tin create`, takes [agent profiles](#agent-profiles) (`agent-profile add`, `agent-profile discover`), is listed by `detect-host`, and gets its `container_env` and skip-permissions wrapper in the image. Write definitions with `pi-tin agent apply <name>` (JSON on stdin) or by hand; read one back with `pi-tin agent show <name>` — a built-in's output serves as a template, given a new name and `package`. `pi-tin agent list` shows the merged table with each entry's source.
@@ -333,6 +334,7 @@ Two names differing only by case cannot coexist: on a case-insensitive volume �
 | `host_mode_warning`     | no       | Caveat shown beside the host-mode option in `agent-profile discover`. |
 | `skip_permissions_flag` | no       | Flag the launcher wrapper adds when `agent.skipPermissions` is on (e.g. `--yolo`). Omit for agents that need none. Several space-separated tokens are allowed (`--sandbox danger-full-access`); the first must start with `-`, and only letters, digits and `. _ - = : , /` may appear. |
 | `container_env`         | no       | Environment variables baked into the image of any workspace including this agent. Keys must match `^[A-Za-z_][A-Za-z0-9_]*$`; values must be strings. Defaults to `{}`. |
+| `api_key_vars`          | no       | API-key environment variables the agent reads (e.g. `[FACTORY_API_KEY]`). `pi-tin create` offers to forward those of the selected agents' vars set on the host — see [API key users](#api-key-users). Names must match `^[A-Za-z_][A-Za-z0-9_]*$`. Defaults to `[]`. |
 | `isolated_seed_files`   | no       | Files written into a freshly created **isolated** agent profile, each `{ path, content }` with `path` relative to the profile directory. Defaults to `[]`. |
 
 Every path field is home-relative: no leading `/`, no `.`/`..` segments, and only letters, digits, `.`, `_`, `-`.
@@ -363,6 +365,10 @@ The `native` block's own fields (the `npm` block has nothing beyond `method`):
 | `bin_dir`         | yes      | Directory appended to the image `PATH`; must also appear in `persist_dirs`, or the definition is rejected — a bin dir outside the live mounts loses the install on every fresh container. |
 | `musl_packages`   | no       | Extra system packages the binary needs on musl (Alpine) bases. Defaults to `[]`. |
 | `musl_env`        | no       | Extra image environment for musl bases. Defaults to `{}`. |
+
+A native-install agent with no npm package uses its upstream binary name as `package` (e.g. `package: some-agent`): the field is identity only there — shown by `agent list`, written into workspace `tools`, and compared for collisions.
+
+Agents authenticated by an API-key env var work on first open (declare the var in `api_key_vars` and forward it — see [API key users](#api-key-users)). Agents that only offer a browser login must complete it once from an attached session; some cannot inside a container at all — check before writing the definition.
 
 Built-ins always win. A definition whose name or `package` collides with a built-in — or with an earlier definition, compared case-insensitively and ignoring the version suffix — is skipped with a warning on stderr, as is one that fails to parse or validate. The remaining definitions still load, so one bad file never takes the CLI down.
 
@@ -682,7 +688,7 @@ host:
     OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
 ```
 
-The `pi-tin create` flow will detect keys in your host environment and offer to add them automatically. Keys are resolved at runtime — nothing secret is stored in the YAML.
+`pi-tin create` offers the keys the selected agents read (each agent definition's `api_key_vars`) that are set in the host environment. Keys are resolved at runtime — nothing secret is stored in the YAML.
 
 ### Commands
 

@@ -83,16 +83,13 @@ export function gitIdentityEnv(gitName: string | undefined, gitEmail: string | u
   return env;
 }
 
-const COMMON_API_KEY_VARS = [
-  { name: 'ANTHROPIC_API_KEY', label: 'Anthropic API key' },
-  { name: 'OPENAI_API_KEY', label: 'OpenAI API key' },
-  { name: 'OPENROUTER_API_KEY', label: 'OpenRouter API key' },
-] as const;
-
+/** Distinct API-key vars declared by the given agents and set on the host, in declaration order. */
 export function availableApiKeyVars(
+  agents: ReadonlyArray<Pick<KnownAgent, 'api_key_vars'>>,
   hostEnv: Record<string, string | undefined>,
-): Array<{ name: string; label: string }> {
-  return COMMON_API_KEY_VARS.filter((v) => hostEnv[v.name]);
+): string[] {
+  const declared = [...new Set(agents.flatMap((agent) => agent.api_key_vars))];
+  return declared.filter((name) => hostEnv[name]);
 }
 
 /** Forward host env vars by reference (`${VAR}` syntax) so values stay on the host. */

@@ -63,6 +63,7 @@ const OH_MY_PI_NATIVE: KnownAgent = {
   dot_dirs: ['.oh-my-pi'],
   host_mode_supported: true,
   container_env: {},
+  api_key_vars: [],
   isolated_seed_files: [],
   install: {
     method: 'native',

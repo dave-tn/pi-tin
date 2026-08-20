@@ -929,6 +929,7 @@ describe('AgentDefinitionFileSchema', () => {
       host_mode_supported: true,
       install: { method: 'npm' },
       container_env: {},
+      api_key_vars: [],
       isolated_seed_files: [],
     });
   });
@@ -990,6 +991,21 @@ describe('AgentDefinitionFileSchema', () => {
   test('rejects a malformed package spec', () => {
     expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, package: 'not a package!' }).success)
       .toBe(false);
+  });
+
+  test('api_key_vars parses a list of env var names', () => {
+    const parsed = v.parse(AgentDefinitionFileSchema, {
+      ...minimalDefinition,
+      api_key_vars: ['FACTORY_API_KEY', 'GH_TOKEN'],
+    });
+    expect(parsed.api_key_vars).toEqual(['FACTORY_API_KEY', 'GH_TOKEN']);
+  });
+
+  test('rejects an api_key_vars entry that is not an env var name', () => {
+    for (const name of ['HAS-HYPHEN', '1LEADING_DIGIT', 'HAS SPACE', '']) {
+      expect(v.safeParse(AgentDefinitionFileSchema, { ...minimalDefinition, api_key_vars: [name] }).success)
+        .toBe(false);
+    }
   });
 
   test('rejects a multi-line install_command', () => {
