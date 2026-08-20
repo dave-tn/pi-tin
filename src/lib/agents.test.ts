@@ -42,6 +42,12 @@ describe('KNOWN_AGENTS', () => {
 
     const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
     expect(gemini?.skip_permissions_flag).toBe('--approval-mode=yolo');
+
+    const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
+    expect(copilot?.skip_permissions_flag).toBe('--yolo');
+
+    const crush = KNOWN_AGENTS.find((a) => a.name === 'Crush');
+    expect(crush?.skip_permissions_flag).toBe('--yolo');
   });
 
   test('agents with container_env have the expected env vars', () => {
@@ -57,6 +63,16 @@ describe('KNOWN_AGENTS', () => {
     expect(opencode?.container_env).toEqual({
       OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
     });
+
+    // npm-installed Copilot must not self-update: its updater would race
+    // pi-tin's background npm refresh, unlinking the binary mid-session.
+    const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
+    expect(copilot?.container_env).toEqual({ COPILOT_AUTO_UPDATE: 'false' });
+  });
+
+  test('Copilot api_key_vars are in token precedence order', () => {
+    const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
+    expect(copilot?.api_key_vars).toEqual(['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']);
   });
 
   test('pi has no skip-permissions flag (always in skip mode)', () => {

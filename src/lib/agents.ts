@@ -366,6 +366,61 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     // Amp runs without approval prompts by default — no flag needed.
   },
   {
+    name: 'Copilot',
+    package: '@github/copilot@latest',
+    binary: 'copilot',
+    dot_dirs: ['.copilot'],
+    host_mode_supported: true,
+    // On macOS the login token lives in the Keychain; on headless Linux it
+    // falls back to a plain file under ~/.copilot, so an in-container
+    // `copilot login` (device code) persists via the shared dir.
+    host_mode_warning:
+      'A macOS login is stored in the Keychain and does not transfer. Authenticate in-container '
+      + 'instead: forward a GitHub token env var, or run `copilot login` once — the device-code '
+      + 'flow persists to the shared ~/.copilot.',
+    install: { method: 'npm' },
+    // --yolo = --allow-all-tools --allow-all-paths --allow-all-urls; the
+    // container is the boundary, and multi-project workspaces need the paths
+    // grant, not just the tools one.
+    skip_permissions_flag: '--yolo',
+    // Copilot self-updates by default, racing pi-tin's background npm refresh
+    // (an unlinked binary mid-session, same failure as Claude Code's updater).
+    container_env: { COPILOT_AUTO_UPDATE: 'false' },
+    // Precedence order. Fine-grained PATs need the "Copilot Requests"
+    // permission; classic ghp_ tokens are rejected.
+    api_key_vars: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
+    isolated_seed_files: [],
+  },
+  {
+    name: 'Crush',
+    // npm wrapper: postinstall downloads the static Go binary from GitHub
+    // releases (glibc and musl both fine), so image builds need network.
+    package: '@charmland/crush@latest',
+    binary: 'crush',
+    dot_dirs: ['.config/crush', '.local/share/crush'],
+    // `crush login` tokens land in ~/.local/share/crush/crush.json on every
+    // platform, so a host login transfers — no warning needed.
+    host_mode_supported: true,
+    install: { method: 'npm' },
+    skip_permissions_flag: '--yolo',
+    container_env: {},
+    // The widely-used subset of Crush's catwalk provider catalog; it reads
+    // more (MINIMAX_API_KEY, HF_TOKEN, …), forwardable via workspace env.
+    api_key_vars: [
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'GEMINI_API_KEY',
+      'OPENROUTER_API_KEY',
+      'XAI_API_KEY',
+      'GROQ_API_KEY',
+      'DEEPSEEK_API_KEY',
+      'CEREBRAS_API_KEY',
+      'ZAI_API_KEY',
+      'MOONSHOT_API_KEY',
+    ],
+    isolated_seed_files: [],
+  },
+  {
     name: 'Gemini CLI',
     package: '@google/gemini-cli@latest',
     binary: 'gemini',

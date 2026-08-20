@@ -16,7 +16,7 @@ cd ~/dev/my-app && pt        # opens a VM-isolated workspace, agent ready
 
 The full power of `--dangerously-skip-permissions` (and Codex's and Gemini's YOLO modes), without the danger. pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so agents can run with permission prompts bypassed, free to move fast _inside the box_, while your Mac, your keys, and your other projects and data stay outside it.
 
-**Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Gemini, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
+**Running free is the default.** Pi and Amp already work this way; Claude Code, Codex, Copilot, Crush, Gemini, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
 
 **Multiplex agents with [herdr](https://herdr.dev).** One config line (`attach: herdr`) and `pt` opens the workspace in herdr: agent panes rendered locally, drag-and-drop images straight into contained agents, detach freely. pi-tin wires everything (SSH endpoint, server install, session persistence) and adds an agent-aware lifecycle — after you detach, the workspace keeps running until the agents finish too, then stops; the next `pt` restores your layout and resumes the agents. → [herdr attach](#herdr-attach)
 
@@ -288,7 +288,7 @@ host:
 
 Notes:
 - `projects` must be absolute paths (set automatically by `pi-tin create`)
-- `tools` are installed by one of two methods. **Claude Code and OpenCode** use their official native installers, run in-container on the first `open` rather than at image build, into [live host mounts](#agent-install-mounts); each then keeps itself current with its own auto-updater, and every update persists across container recreations because the install directory is host-backed. **Everything else** (Codex, Pi, Amp, Gemini CLI, and unrecognised packages) installs globally via `npm install -g` at image build, then refreshes in the background on every open — including joins to a running workspace. The refresh installs into a separate prefix, so the current version stays available throughout; new sessions pick up the new version once it lands, and a failed refresh keeps the existing versions. The interactive `create` command writes only `name` and `package`. For known agents, pi-tin re-derives internal metadata (including the install method) from `package` at runtime. Manual tool entries should also use only `name` and `package`; extra keys are rejected.
+- `tools` are installed by one of two methods. **Claude Code and OpenCode** use their official native installers, run in-container on the first `open` rather than at image build, into [live host mounts](#agent-install-mounts); each then keeps itself current with its own auto-updater, and every update persists across container recreations because the install directory is host-backed. **Everything else** (Codex, Pi, Amp, Copilot, Crush, Gemini CLI, and unrecognised packages) installs globally via `npm install -g` at image build, then refreshes in the background on every open — including joins to a running workspace. The refresh installs into a separate prefix, so the current version stays available throughout; new sessions pick up the new version once it lands, and a failed refresh keeps the existing versions. The interactive `create` command writes only `name` and `package`. For known agents, pi-tin re-derives internal metadata (including the install method) from `package` at runtime. Manual tool entries should also use only `name` and `package`; extra keys are rejected.
 - `agent.profiles` names of agent profiles to mount (see Agent Profiles section below). Each profile provides isolated, persistent auth for an agent.
 - `agent.skipPermissions` (default `true`) configures supported agents to skip interactive permission prompts (see [Permissions](#permissions)).
 - `host.sshAgent` (default `true`) forwards your SSH agent for git auth with any provider.
@@ -306,7 +306,7 @@ Notes:
 
 ### Custom agents
 
-pi-tin knows Claude Code, Pi, Codex, OpenCode, Amp, and Gemini CLI out of the box. To add another, write an **agent definition**: a YAML file at `~/.config/pi-tin/agents/<name>.yaml`, where the filename is the agent name.
+pi-tin knows Claude Code, Pi, Codex, OpenCode, Amp, Copilot, Crush, and Gemini CLI out of the box. To add another, write an **agent definition**: a YAML file at `~/.config/pi-tin/agents/<name>.yaml`, where the filename is the agent name.
 
 ```yaml
 # ~/.config/pi-tin/agents/oh-my-pi.yaml
@@ -660,7 +660,7 @@ pi-tin agent-profile add my-codex --agent Codex --host
 
 In host mode the container shares your host identity with no separate login, but changes the agent makes inside the container — including credential refreshes — write through to your host config. Use it when you want one identity everywhere; prefer the default isolated mode when you want the container sandboxed from your host.
 
-Host mode needs auth that works outside the macOS Keychain. **Claude Code does not support `--host`** — its credentials live in the Keychain, which containers can't reach; Pi, Codex, OpenCode, Amp, and Gemini CLI do. For a [custom agent](#custom-agents), `host_mode_supported` decides. Passing `--host` to an agent that doesn't support it is rejected with an error.
+Host mode needs auth that works outside the macOS Keychain. **Claude Code does not support `--host`** — its credentials live in the Keychain, which containers can't reach; Pi, Codex, OpenCode, Amp, Copilot, Crush, and Gemini CLI do. For a [custom agent](#custom-agents), `host_mode_supported` decides. Passing `--host` to an agent that doesn't support it is rejected with an error.
 
 ### Sharing agent profiles
 
@@ -717,6 +717,8 @@ agent:
 Pi gates loading of a project's own `.pi` config (settings, extensions, skills) behind a per-directory trust prompt, saved in `~/.pi/agent/trust.json`. Isolated Pi agent profiles are created with that file pre-trusting `/workspace`, which covers every mounted project, so the prompt never appears. Host-mode profiles share the real `~/.pi` and are left untouched — answer the prompt once and Pi persists the decision.
 
 Gemini CLI workspaces get `NO_BROWSER=true`, so authentication never tries to launch a host browser.
+
+Copilot workspaces get `COPILOT_AUTO_UPDATE=false`: Copilot's self-updater would race pi-tin's background npm refresh, which owns freshness for npm-installed agents. Its `--yolo` covers tools, paths, and URLs — the paths grant is what lets it range across all mounted projects. Sign in with a GitHub token env var, or run `copilot login` once from a session (the device-code flow works headless).
 
 OpenCode workspaces get its `external_directory` permission set to `allow` (via `OPENCODE_CONFIG_CONTENT`, which overrides any project `opencode.json`), so the agent ranges across all mounted projects without prompting — the container is the boundary. OpenCode's other defaults are unchanged: its doom-loop guard and refusal to read `.env` files stay in force.
 

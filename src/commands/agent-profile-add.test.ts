@@ -76,10 +76,10 @@ describe('agent-profile add', () => {
     expect(err.detail.code).toBe('validation');
     expect(err.detail.badInput).toBe('Nonexistent');
     expect(err.detail.validValues).toEqual([
-      'Claude Code', 'Pi', 'Codex', 'OpenCode', 'Amp', 'Gemini CLI',
+      'Claude Code', 'Pi', 'Codex', 'OpenCode', 'Amp', 'Copilot', 'Crush', 'Gemini CLI',
     ]);
     expect(err.message).toBe(
-      "Unknown agent: 'Nonexistent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, "
+      "Unknown agent: 'Nonexistent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, Copilot, Crush, "
       + 'Gemini CLI. To add a custom agent, define it with `pi-tin agent apply <name>` — '
       + '`pi-tin agent show "Claude Code"` prints a template (README: Custom agents).',
     );
@@ -95,7 +95,7 @@ describe('agent-profile add', () => {
     expect(err).toBeInstanceOf(CliError);
     if (!(err instanceof CliError)) throw new Error('unreachable');
     expect(err.detail.validValues).toContain('oh-my-pi');
-    expect(err.message).toContain('Amp, Gemini CLI, oh-my-pi. To add a custom agent,');
+    expect(err.message).toContain('Amp, Copilot, Crush, Gemini CLI, oh-my-pi. To add a custom agent,');
   });
 
   test('creates a profile for a custom agent defined under the agents dir', async () => {
