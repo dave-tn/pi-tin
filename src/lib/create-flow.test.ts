@@ -113,7 +113,7 @@ describe('planAgentProfileSelection', () => {
 describe('hostProfileNameFor', () => {
   test('appends -host to the slugified agent name', () => {
     expect(hostProfileNameFor({ name: 'Codex' })).toBe('codex-host');
-    expect(hostProfileNameFor({ name: 'Gemini CLI' })).toBe('gemini-cli-host');
+    expect(hostProfileNameFor({ name: 'Claude Code' })).toBe('claude-code-host');
   });
 });
 

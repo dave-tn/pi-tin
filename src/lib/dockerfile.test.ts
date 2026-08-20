@@ -350,7 +350,7 @@ describe('generateDockerfile', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
-      { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
+      { name: 'Crush', package: '@charmland/crush@latest' },
     ];
     const claudeManagedSettings = JSON.stringify({
       permissions: {
@@ -360,7 +360,7 @@ describe('generateDockerfile', () => {
     const { extras, dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
         { binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' },
-        { binary: 'gemini', flag: '--approval-mode=yolo' },
+        { binary: 'crush', flag: '--yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
       claudeManagedSettings,
@@ -372,9 +372,9 @@ describe('generateDockerfile', () => {
     expect(extras.find((extra) => extra.name === 'pi-tin-wrapper-claude')).toBeUndefined();
     const codexWrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-codex');
     expect(codexWrapper?.content).toContain('--dangerously-bypass-approvals-and-sandbox');
-    const geminiWrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-gemini');
-    expect(geminiWrapper?.content).toContain('--approval-mode=yolo');
-    expect(dockerfile).toContain('COPY pi-tin-wrapper-gemini /usr/local/pi-tin/bin/gemini');
+    const crushWrapper = extras.find((extra) => extra.name === 'pi-tin-wrapper-crush');
+    expect(crushWrapper?.content).toContain('--yolo');
+    expect(dockerfile).toContain('COPY pi-tin-wrapper-crush /usr/local/pi-tin/bin/crush');
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
     expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
   });
@@ -382,11 +382,11 @@ describe('generateDockerfile', () => {
   test('agentEnv sets container env vars', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
-      { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
+      { name: 'Crush', package: '@charmland/crush@latest' },
     ];
     const { dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
-        { binary: 'gemini', flag: '--approval-mode=yolo' },
+        { binary: 'crush', flag: '--yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' },
       claudeManagedSettings: null,

@@ -40,8 +40,8 @@ describe('KNOWN_AGENTS', () => {
     const amp = KNOWN_AGENTS.find((a) => a.name === 'Amp');
     expect(amp?.skip_permissions_flag).toBeUndefined();
 
-    const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
-    expect(gemini?.skip_permissions_flag).toBe('--approval-mode=yolo');
+    const antigravity = KNOWN_AGENTS.find((a) => a.name === 'Antigravity');
+    expect(antigravity?.skip_permissions_flag).toBe('--dangerously-skip-permissions');
 
     const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
     expect(copilot?.skip_permissions_flag).toBe('--yolo');
@@ -55,9 +55,6 @@ describe('KNOWN_AGENTS', () => {
     // with its own auto-updater.
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
     expect(claude?.container_env).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
-
-    const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI');
-    expect(gemini?.container_env).toEqual({ NO_BROWSER: 'true' });
 
     const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
     expect(opencode?.container_env).toEqual({
@@ -80,12 +77,12 @@ describe('KNOWN_AGENTS', () => {
     expect(pi?.skip_permissions_flag).toBeUndefined();
   });
 
-  test('every agent has an install method; exactly Claude Code and OpenCode are native', () => {
+  test('every agent has an install method; exactly Claude Code, OpenCode and Antigravity are native', () => {
     for (const agent of KNOWN_AGENTS) {
       expect(['npm', 'native']).toContain(agent.install.method);
     }
     const nativeNames = KNOWN_AGENTS.filter((a) => a.install.method === 'native').map((a) => a.name);
-    expect(nativeNames.sort()).toEqual(['Claude Code', 'OpenCode']);
+    expect(nativeNames.sort()).toEqual(['Antigravity', 'Claude Code', 'OpenCode']);
   });
 
   test('Claude Code native install metadata is pinned', () => {
@@ -111,6 +108,20 @@ describe('KNOWN_AGENTS', () => {
       installed_path: '.opencode/bin/opencode',
       persist_dirs: ['.opencode/bin'],
       bin_dir: '.opencode/bin',
+      musl_packages: [],
+      musl_env: {},
+    });
+  });
+
+  test('Antigravity native install metadata is pinned', () => {
+    const antigravity = KNOWN_AGENTS.find((a) => a.name === 'Antigravity');
+    expect(antigravity?.install).toEqual({
+      method: 'native',
+      install_command:
+        'curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh && bash /tmp/agy-install.sh && rm /tmp/agy-install.sh',
+      installed_path: '.local/bin/agy',
+      persist_dirs: ['.local/bin'],
+      bin_dir: '.local/bin',
       musl_packages: [],
       musl_env: {},
     });
@@ -155,10 +166,10 @@ describe('agentContainerEnv', () => {
   test('collects env vars for known agents', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
-      { name: 'Gemini CLI', package: '@google/gemini-cli@latest' },
+      { name: 'Copilot', package: '@github/copilot@latest' },
     ];
     const env = agentContainerEnv(packages, KNOWN_AGENTS);
-    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' });
+    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', COPILOT_AUTO_UPDATE: 'false' });
   });
 
   test('includes the OpenCode external_directory sandbox config', () => {
@@ -317,8 +328,6 @@ describe('defaultProfileNameFor', () => {
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code')!;
     expect(defaultProfileNameFor(claude)).toBe('claude-code');
 
-    const gemini = KNOWN_AGENTS.find((a) => a.name === 'Gemini CLI')!;
-    expect(defaultProfileNameFor(gemini)).toBe('gemini-cli');
   });
 
   test('leaves single-word agent names lowercased', () => {
@@ -474,7 +483,7 @@ describe('findBuiltInByName', () => {
   test('matches a built-in name case-insensitively', () => {
     expect(findBuiltInByName('claude code')?.name).toBe('Claude Code');
     expect(findBuiltInByName('Claude Code')?.name).toBe('Claude Code');
-    expect(findBuiltInByName('GEMINI CLI')?.name).toBe('Gemini CLI');
+    expect(findBuiltInByName('ANTIGRAVITY')?.name).toBe('Antigravity');
   });
 
   test('does not match on a partial name', () => {

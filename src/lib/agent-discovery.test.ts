@@ -94,7 +94,7 @@ describe('findConfiguredAgents', () => {
     mkdir('.gemini');
     mkdir('.claude');
     expect(findConfiguredAgents(KNOWN_AGENTS, fakeHome).map((a) => a.name))
-      .toEqual(['Claude Code', 'Gemini CLI']);
+      .toEqual(['Claude Code', 'Antigravity']);
   });
 });
 

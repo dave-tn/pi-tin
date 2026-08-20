@@ -121,11 +121,11 @@ describe('agent show', () => {
     expect(error.detail.code).toBe('not_found');
     expect(error.detail.badInput).toBe('Nonexistent');
     expect(error.detail.validValues).toEqual([
-      'Claude Code', 'Pi', 'Codex', 'OpenCode', 'Amp', 'Copilot', 'Crush', 'Gemini CLI', 'oh-my-pi',
+      'Claude Code', 'Pi', 'Codex', 'OpenCode', 'Amp', 'Copilot', 'Crush', 'Antigravity', 'oh-my-pi',
     ]);
     expect(error.message).toBe(
       "Agent 'Nonexistent' not found. Available: Claude Code, Pi, Codex, OpenCode, Amp, "
-      + 'Copilot, Crush, Gemini CLI, oh-my-pi',
+      + 'Copilot, Crush, Antigravity, oh-my-pi',
     );
   });
 

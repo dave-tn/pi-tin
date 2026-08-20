@@ -421,16 +421,40 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     isolated_seed_files: [],
   },
   {
-    name: 'Gemini CLI',
-    package: '@google/gemini-cli@latest',
-    binary: 'gemini',
+    name: 'Antigravity',
+    // No npm package: `agy` ships only as a curl-script install, so the
+    // upstream binary name is the identity (agent list, workspace tools).
+    package: 'agy',
+    binary: 'agy',
+    // Everything — settings, conversations, the file-based OAuth token the
+    // CLI falls back to without an OS keyring — lives under
+    // ~/.gemini/antigravity-cli/.
     dot_dirs: ['.gemini'],
     host_mode_supported: true,
-    install: { method: 'npm' },
-    skip_permissions_flag: '--approval-mode=yolo',
-    container_env: { NO_BROWSER: 'true' },
-    // GOOGLE_API_KEY is the Vertex AI express-mode key, read alongside GEMINI_API_KEY.
-    api_key_vars: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    host_mode_warning:
+      'A macOS login is stored in the Keychain and does not transfer. Authenticate in-container '
+      + 'instead: forward GEMINI_API_KEY (needs modelProvider "gemini" in settings.json), or '
+      + 'complete the paste-code login once — the token file persists to the shared ~/.gemini.',
+    skip_permissions_flag: '--dangerously-skip-permissions',
+    // No browser env needed: agy detects headless environments and prints a
+    // paste-code URL. Its own updater stays on, as for the other native
+    // installs — the binary lives on the .local/bin live mount.
+    container_env: {},
+    // Only honoured with modelProvider "gemini" in
+    // ~/.gemini/antigravity-cli/settings.json; the README documents the pair.
+    api_key_vars: ['GEMINI_API_KEY'],
     isolated_seed_files: [],
+    install: {
+      method: 'native',
+      install_command:
+        'curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh && bash /tmp/agy-install.sh && rm /tmp/agy-install.sh',
+      installed_path: '.local/bin/agy',
+      persist_dirs: ['.local/bin'],
+      bin_dir: '.local/bin',
+      // glibc only: upstream publishes no musl build (the installer's musl
+      // manifest 404s), and no package list can supply a missing binary.
+      musl_packages: [],
+      musl_env: {},
+    },
   },
 ];

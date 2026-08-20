@@ -95,7 +95,7 @@ describe('agent-profiles', () => {
       expect(thrownMessage(() => createAgentProfile('test', 'Unknown Agent', 'isolated', KNOWN_AGENTS)))
         .toBe(
           "Unknown agent: 'Unknown Agent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, Copilot, Crush, "
-          + 'Gemini CLI. To add a custom agent, define it with `pi-tin agent apply <name>` — '
+          + 'Antigravity. To add a custom agent, define it with `pi-tin agent apply <name>` — '
           + '`pi-tin agent show "Claude Code"` prints a template (README: Custom agents).',
         );
     });
@@ -104,7 +104,7 @@ describe('agent-profiles', () => {
       expect(thrownMessage(() => createAgentProfile('test', 'Unknown Agent', 'isolated', MERGED_AGENTS)))
         .toBe(
           "Unknown agent: 'Unknown Agent'. Known agents: Claude Code, Pi, Codex, OpenCode, Amp, Copilot, Crush, "
-          + 'Gemini CLI, oh-my-pi, NoHost. To add a custom agent, define it with `pi-tin agent apply <name>` — '
+          + 'Antigravity, oh-my-pi, NoHost. To add a custom agent, define it with `pi-tin agent apply <name>` — '
           + '`pi-tin agent show "Claude Code"` prints a template (README: Custom agents).',
         );
     });
