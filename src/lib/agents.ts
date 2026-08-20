@@ -378,18 +378,33 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
       'A macOS login is stored in the Keychain and does not transfer. Authenticate in-container '
       + 'instead: forward a GitHub token env var, or run `copilot login` once — the device-code '
       + 'flow persists to the shared ~/.copilot.',
-    install: { method: 'npm' },
     // --yolo = --allow-all-tools --allow-all-paths --allow-all-urls; the
     // container is the boundary, and multi-project workspaces need the paths
     // grant, not just the tools one.
     skip_permissions_flag: '--yolo',
-    // Copilot self-updates by default, racing pi-tin's background npm refresh
-    // (an unlinked binary mid-session, same failure as Claude Code's updater).
-    container_env: { COPILOT_AUTO_UPDATE: 'false' },
+    // Updater stays on, as for the other native installs: it swaps the binary
+    // in place and stages packages in ~/.cache/copilot — both on live mounts.
+    container_env: {},
     // Precedence order. Fine-grained PATs need the "Copilot Requests"
     // permission; classic ghp_ tokens are rejected.
     api_key_vars: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
     isolated_seed_files: [],
+    // PREFIX pinned: the script defaults to /usr/local when run as root.
+    // Download-then-run, not `curl | bash`: plain `sh -c` has no pipefail.
+    install: {
+      method: 'native',
+      install_command:
+        'curl -fsSL https://gh.io/copilot-install -o /tmp/copilot-install.sh && PREFIX="$HOME/.local" bash /tmp/copilot-install.sh && rm /tmp/copilot-install.sh',
+      installed_path: '.local/bin/copilot',
+      // .cache/copilot holds the versioned package the binary stub actually
+      // executes; the updater writes both there and over the binary itself.
+      persist_dirs: ['.local/bin', '.cache/copilot'],
+      bin_dir: '.local/bin',
+      // The install script fetches the glibc build even on musl (no libc
+      // detection upstream), so Alpine bases fail at install.
+      musl_packages: [],
+      musl_env: {},
+    },
   },
   {
     name: 'Crush',

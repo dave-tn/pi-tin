@@ -61,10 +61,10 @@ describe('KNOWN_AGENTS', () => {
       OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}',
     });
 
-    // npm-installed Copilot must not self-update: its updater would race
-    // pi-tin's background npm refresh, unlinking the binary mid-session.
+    // No COPILOT_AUTO_UPDATE=false: native-installed Copilot keeps itself
+    // fresh with its own updater, which swaps the binary on the live mount.
     const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
-    expect(copilot?.container_env).toEqual({ COPILOT_AUTO_UPDATE: 'false' });
+    expect(copilot?.container_env).toEqual({});
   });
 
   test('Copilot api_key_vars are in token precedence order', () => {
@@ -77,12 +77,12 @@ describe('KNOWN_AGENTS', () => {
     expect(pi?.skip_permissions_flag).toBeUndefined();
   });
 
-  test('every agent has an install method; exactly Claude Code, OpenCode and Antigravity are native', () => {
+  test('every agent has an install method; exactly Claude Code, OpenCode, Copilot and Antigravity are native', () => {
     for (const agent of KNOWN_AGENTS) {
       expect(['npm', 'native']).toContain(agent.install.method);
     }
     const nativeNames = KNOWN_AGENTS.filter((a) => a.install.method === 'native').map((a) => a.name);
-    expect(nativeNames.sort()).toEqual(['Antigravity', 'Claude Code', 'OpenCode']);
+    expect(nativeNames.sort()).toEqual(['Antigravity', 'Claude Code', 'Copilot', 'OpenCode']);
   });
 
   test('Claude Code native install metadata is pinned', () => {
@@ -108,6 +108,20 @@ describe('KNOWN_AGENTS', () => {
       installed_path: '.opencode/bin/opencode',
       persist_dirs: ['.opencode/bin'],
       bin_dir: '.opencode/bin',
+      musl_packages: [],
+      musl_env: {},
+    });
+  });
+
+  test('Copilot native install metadata is pinned', () => {
+    const copilot = KNOWN_AGENTS.find((a) => a.name === 'Copilot');
+    expect(copilot?.install).toEqual({
+      method: 'native',
+      install_command:
+        'curl -fsSL https://gh.io/copilot-install -o /tmp/copilot-install.sh && PREFIX="$HOME/.local" bash /tmp/copilot-install.sh && rm /tmp/copilot-install.sh',
+      installed_path: '.local/bin/copilot',
+      persist_dirs: ['.local/bin', '.cache/copilot'],
+      bin_dir: '.local/bin',
       musl_packages: [],
       musl_env: {},
     });
@@ -169,7 +183,7 @@ describe('agentContainerEnv', () => {
       { name: 'Copilot', package: '@github/copilot@latest' },
     ];
     const env = agentContainerEnv(packages, KNOWN_AGENTS);
-    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1', COPILOT_AUTO_UPDATE: 'false' });
+    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
   });
 
   test('includes the OpenCode external_directory sandbox config', () => {
