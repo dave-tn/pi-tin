@@ -370,6 +370,51 @@ A native-install agent with no npm package uses its upstream binary name as `pac
 
 Agents authenticated by an API-key env var work on first open (declare the var in `api_key_vars` and forward it — see [API key users](#api-key-users)). Agents that only offer a browser login must complete it once from an attached session; some cannot inside a container at all — check before writing the definition.
 
+#### Agent recipes
+
+Known-good definitions for agents pi-tin does not ship. Copy one to `~/.config/pi-tin/agents/<name>.yaml` and adjust.
+
+**Qwen Code** — npm install, Node 22+ (every managed profile qualifies). Qwen's own OAuth free tier ended in April 2026, so authenticate against any OpenAI-compatible endpoint: alongside the key, forward `OPENAI_BASE_URL` and `OPENAI_MODEL` via workspace `host.env`.
+
+```yaml
+# ~/.config/pi-tin/agents/qwen-code.yaml
+package: "@qwen-code/qwen-code@latest"
+binary: qwen
+dot_dirs: [.qwen]
+skip_permissions_flag: "--approval-mode=yolo"
+container_env: { QWEN_CODE_SUPPRESS_YOLO_WARNING: "1" }
+api_key_vars: [OPENAI_API_KEY]
+```
+
+**Cursor CLI** — native install; glibc bases only (no musl build). Sign in by forwarding `CURSOR_API_KEY`, or once from an attached session with `NO_OPEN_BROWSER=1 cursor-agent login`, which prints the URL rather than expecting a browser. Credentials land in `~/.config/cursor`, so an agent profile carries the login.
+
+```yaml
+# ~/.config/pi-tin/agents/cursor-cli.yaml
+package: cursor-agent           # no npm package — identity only
+binary: cursor-agent
+dot_dirs: [".config/cursor", ".cursor"]
+skip_permissions_flag: "--force"
+api_key_vars: [CURSOR_API_KEY]
+install:
+  method: native
+  install_command: "curl -fsS https://cursor.com/install -o /tmp/cursor-install.sh && bash /tmp/cursor-install.sh && rm /tmp/cursor-install.sh"
+  installed_path: ".local/bin/cursor-agent"
+  persist_dirs: [".local/share/cursor-agent", ".local/bin"]
+  bin_dir: ".local/bin"
+```
+
+**Gemini CLI** — no longer built in: Google retired it for individual accounts in June 2026; enterprise Code Assist continues. This definition restores the previous behaviour. Gemini CLI and Antigravity both keep state in `~/.gemini`, so their agent profiles cannot share a workspace.
+
+```yaml
+# ~/.config/pi-tin/agents/gemini-cli.yaml
+package: "@google/gemini-cli@latest"
+binary: gemini
+dot_dirs: [.gemini]
+skip_permissions_flag: "--approval-mode=yolo"
+container_env: { NO_BROWSER: "true" }
+api_key_vars: [GEMINI_API_KEY, GOOGLE_API_KEY]
+```
+
 Built-ins always win. A definition whose name or `package` collides with a built-in — or with an earlier definition, compared case-insensitively and ignoring the version suffix — is skipped with a warning on stderr, as is one that fails to parse or validate. The remaining definitions still load, so one bad file never takes the CLI down.
 
 ### Update notifications
