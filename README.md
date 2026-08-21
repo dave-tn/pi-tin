@@ -14,11 +14,17 @@ _Pie tins hold pies. `pi-tin` holds your agent dev environments._
 cd ~/dev/my-app && pt        # opens a VM-isolated workspace, agent ready
 ```
 
-The full power of `--dangerously-skip-permissions` (and the other agents' YOLO modes), without the danger. pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so agents can run with permission prompts bypassed, free to move fast _inside the box_, while your Mac, your keys, and your other projects and data stay outside it.
+A simple and convenient way to run your agents in yolo/skip-permissions mode, without exposing your host machine (Mac) or your other projects.
 
-**Running free is the default.** Pi and Amp already work this way; Claude Code, Antigravity, Codex, Copilot, Crush, and OpenCode are launched in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
+Works fantastically with [herdr](https://herdr.dev) and has built-in support for some common coding agents: Pi, Amp, Claude Code, Antigravity, Codex, Copilot, Crush, and OpenCode. Other agents can be added with a simple agent definition.
 
-**Multiplex agents with [herdr](https://herdr.dev).** One config line (`attach: herdr`) and `pt` opens the workspace in herdr: agent panes rendered locally, drag-and-drop images straight into contained agents, detach freely. pi-tin wires everything (SSH endpoint, server install, session persistence) and adds an agent-aware lifecycle — after you detach, the workspace keeps running until the agents finish too, then stops; the next `pt` restores your layout and resumes the agents. → [herdr attach](#herdr-attach)
+Fast, lightweight, and simple to configure — the CLI exposes agent-friendly commands to create, open, and manage workspaces, container profiles, and agent profiles.
+
+pi-tin gives each workspace its own micro-VM — a real Linux container with a full VM boundary, via Apple's efficient, lightweight `container` CLI (no Docker, no shared VM) — so agents can run with permission prompts bypassed, free to move fast _inside the box_, isolated from your Mac, your keys, and your other projects.
+
+**Running free is the default.** Pi and Amp already work this way; the rest launch in bypass mode. (Prefer prompts? Set `agent.skipPermissions: false`.)
+
+**Multiplex agents with [herdr](https://herdr.dev).** One config line (`attach: herdr`) and `pt` opens the workspace in herdr: agent panes rendered locally, drag-and-drop images straight into contained agents, detach freely. pi-tin adds an agent-aware lifecycle — after you detach, the workspace keeps running until the agents finish too, then stops; the next `pt` restores your layout and resumes the agents. → [herdr attach](#herdr-attach)
 
 **Runs on your Mac.** No cloud VMs, no remote dev environment to rent or trust — the sandboxes are local, backed by Apple's native virtualization.
 
@@ -26,11 +32,11 @@ The full power of `--dangerously-skip-permissions` (and the other agents' YOLO m
 
 **OCI-compatible.** Use standard images from Docker Hub, GHCR, and any OCI registry — existing container images just work.
 
-Daily-driven on Pi and Claude Code; Amp, Antigravity, Codex, Copilot, Crush, and OpenCode are supported but lightly tested. Any other agent can be added with an [agent definition](#custom-agents).
+Daily-driven on Pi and Claude Code; other agents are supported but lightly tested. Further agents can be added with an [agent definition](#custom-agents).
 
 The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where agents can be unleashed.
 
-_**Status:** Early (pre-1.0) — the core create/open/share flow is solid, but expect rough edges on less-common agents and setups. Issue reports are welcome._
+_**Status:** The core is solid and daily-driven; expect rough edges on less-common agents and setups. Issue reports are welcome._
 
 > [!IMPORTANT]
 > What you put in the sandbox is what the agent can access. Everything outside the sandbox is off-limits. The agent cannot see your host machine or your files, unless you explicitly make them available.
