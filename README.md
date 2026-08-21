@@ -386,7 +386,7 @@ container_env: { QWEN_CODE_SUPPRESS_YOLO_WARNING: "1" }
 api_key_vars: [OPENAI_API_KEY]
 ```
 
-**Cursor CLI** — native install; glibc bases only (no musl build). Sign in by forwarding `CURSOR_API_KEY`, or once from an attached session with `NO_OPEN_BROWSER=1 cursor-agent login`, which prints the URL rather than expecting a browser. Credentials land in `~/.config/cursor`, so an agent profile carries the login.
+**Cursor CLI** — native install; glibc bases only (no musl build). Sign in by forwarding `CURSOR_API_KEY`, or once from an attached session with `NO_OPEN_BROWSER=1 cursor-agent login`, which prints the URL rather than expecting a browser. Credentials land in `~/.cursor`, so an agent profile carries the login.
 
 ```yaml
 # ~/.config/pi-tin/agents/cursor-cli.yaml
