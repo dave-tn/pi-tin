@@ -26,7 +26,7 @@ The full power of `--dangerously-skip-permissions` (and the other agents' YOLO m
 
 **OCI-compatible.** Use standard images from Docker Hub, GHCR, and any OCI registry — existing container images just work.
 
-Daily-driven on Pi and Claude Code; Amp, OpenCode, and more are supported but lightly tested. Any other agent can be added with an [agent definition](#custom-agents).
+Daily-driven on Pi and Claude Code; Amp, Antigravity, Codex, Copilot, Crush, and OpenCode are supported but lightly tested. Any other agent can be added with an [agent definition](#custom-agents).
 
 The concept is simple: pi-tin makes a workspace (linux vm, agent profile(s), your selected project repos), and 'entering' the workspace via `pt` teleports you from your Mac into the workspace where agents can be unleashed.
 
