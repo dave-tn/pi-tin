@@ -10,6 +10,7 @@ import {
 import { tryWithAgentInstallLock } from './runtime-state.js';
 import { formatDurationMs } from './duration.js';
 import { CLEAR_LINE } from './sync-progress.js';
+import { errorMessage } from './guards.js';
 import type { NativeInstallTarget } from './agents.js';
 import type { ProgressOutput } from './sync-progress.js';
 
@@ -145,10 +146,6 @@ function createInstallTicker(
       out.write(out.isTTY === true ? `${CLEAR_LINE}${line}` : line);
     },
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 type InstallOutcome = 'installed' | 'failed' | 'aborted';

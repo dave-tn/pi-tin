@@ -43,11 +43,11 @@ import {
   type ExecResult,
 } from './container.js';
 import { stopAndRemoveContainer } from './container-lifecycle.js';
-import { isRecord } from './guards.js';
+import { errorMessage, isRecord } from './guards.js';
 import { spawnAutoStopHelper, queryHerdrAgentStates } from './auto-stop.js';
 import { resolveResources, type ResolvedResources } from './resources.js';
 import { resolveEnv } from './env.js';
-import { agentsWithSkipPermissions, agentContainerEnv, claudeManagedSettingsJson, claudeConfigJson, nativeInstallTargets, npmToolSpecs, type KnownAgent } from './agents.js';
+import { agentsWithSkipPermissions, agentContainerEnv, claudeUserSettingsJson, claudeConfigJson, claudeProfileSettingsPath, planClaudeUserSettings, nativeInstallTargets, npmToolSpecs, type KnownAgent } from './agents.js';
 import { allAgents } from './agent-definitions.js';
 import {
   chmodSeededHerdrBinary,
@@ -60,7 +60,8 @@ import {
 import { runAgentInstallStep } from './agent-install.js';
 import { createSyncProgressReporter } from './sync-progress.js';
 import { chownMountParents, planMountParentChown } from './mount-parents.js';
-import { validateAgentProfilesForWorkspace } from './agent-profiles.js';
+import { validateAgentProfilesForWorkspace, type ResolvedAgentProfileMount } from './agent-profiles.js';
+import { atomicWriteFile } from './atomic-write.js';
 import {
   ensureWorkspaceTmuxDir,
   getHostTmuxConfigDir,
@@ -153,6 +154,7 @@ interface RuntimeStartPlan {
   notices: MountNotice[];
   /** Home-relative managed workspace-state mounts that made it into volumes. */
   managedStateMountPaths: string[];
+  agentProfileMounts: ResolvedAgentProfileMount[];
   runtimeHash: string;
   ssh: boolean;
   sshdEnabled: boolean;
@@ -221,10 +223,10 @@ function loadWorkspaceContext(wsName: string): WorkspaceContext {
 function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const tools = context.workspace.tools ?? [];
   const { agents } = context;
-  const skipPermissions = context.workspace.agent?.skipPermissions ?? true;
+  const skipPermissions = workspaceSkipsPermissions(context.workspace);
   const agentWraps = skipPermissions ? agentsWithSkipPermissions(tools, agents) : [];
   const agentEnv = agentContainerEnv(tools, agents);
-  const claudeManagedSettings = claudeManagedSettingsJson(tools, skipPermissions, agents);
+  const claudeUserSettings = claudeUserSettingsJson(tools, skipPermissions, agents);
   const projectContainerPaths = resolveProjectVolumes(context.workspace.projects).map((volume) => volume.container);
   const claudeConfig = claudeConfigJson(tools, projectContainerPaths, agents);
   // Keypair creation is idempotent and must precede Dockerfile generation —
@@ -236,7 +238,7 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
   const { dockerfile, extras } = generateDockerfile(context.containerProfile, tools, {
     agentWraps,
     agentEnv,
-    claudeManagedSettings,
+    claudeUserSettings,
     claudeConfig,
     sshd,
     agents,
@@ -250,6 +252,46 @@ function computeBuildPlan(context: WorkspaceContext): BuildPlan {
     buildHash: hashContent(hashInput),
     hashPath: getBuildHashPath(context.wsName),
   };
+}
+
+function workspaceSkipsPermissions(workspace: Workspace): boolean {
+  return workspace.agent?.skipPermissions ?? true;
+}
+
+// An agent profile mounted at ~/.claude shadows the image-baked Claude Code
+// user settings, so the bypass keys are merged into the agent profile's own
+// settings.json instead. Runs on joins too: a session started from the joining
+// shell reads the file through the live mount. Failures warn rather than
+// abort the open — Claude Code then just prompts for permissions.
+function applyClaudeProfileBypass(context: WorkspaceContext, runtimePlan: RuntimeStartPlan): void {
+  const settingsPath = claudeProfileSettingsPath({
+    packages: context.workspace.tools ?? [],
+    skipPermissions: workspaceSkipsPermissions(context.workspace),
+    agents: context.agents,
+    agentProfileMounts: runtimePlan.agentProfileMounts,
+  });
+  if (settingsPath === null) return;
+
+  try {
+    const existingContent = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf-8') : null;
+    const plan = planClaudeUserSettings(existingContent);
+    switch (plan.action) {
+      case 'unchanged':
+        return;
+      case 'write':
+        atomicWriteFile(settingsPath, plan.content);
+        return;
+      case 'invalid':
+        warnClaudeBypassNotApplied(settingsPath, plan.reason);
+        return;
+    }
+  } catch (error) {
+    warnClaudeBypassNotApplied(settingsPath, errorMessage(error));
+  }
+}
+
+function warnClaudeBypassNotApplied(settingsPath: string, reason: string): void {
+  console.warn(chalk.yellow(`Warning: Claude Code bypass-permissions mode was not applied to ${settingsPath}:\n${reason}`));
 }
 
 function validateProjects(projects: string[]): void {
@@ -275,7 +317,12 @@ function validateProjects(projects: string[]): void {
 
 function resolveWorkspaceVolumes(
   context: WorkspaceContext,
-): { volumes: VolumeMount[]; notices: MountNotice[]; managedStateMountPaths: string[] } {
+): {
+  volumes: VolumeMount[];
+  notices: MountNotice[];
+  managedStateMountPaths: string[];
+  agentProfileMounts: ResolvedAgentProfileMount[];
+} {
   const { workspace, containerProfile, wsName, agents } = context;
   const homeContainer = containerHomeDir(containerProfile.user);
   const volumes = resolveProjectVolumes(workspace.projects);
@@ -359,24 +406,21 @@ function resolveWorkspaceVolumes(
     }
   }
 
-  const agentProfiles = workspace.agent?.profiles ?? [];
-  if (agentProfiles.length > 0) {
-    const resolvedProfiles = validateAgentProfilesForWorkspace(agentProfiles);
-    for (const agentProfile of resolvedProfiles) {
-      const conflicting = hostMounts.find((mount) => mount.container.endsWith(`/${agentProfile.mount}`));
-      if (conflicting) {
-        notices.push({
-          kind: 'warning',
-          text: `Warning: agent profile '${agentProfile.name}' provides ${agentProfile.mount}, but host.mounts also mounts ${conflicting.host} to ${conflicting.container}. The agent profile mount will take precedence.`,
-        });
-      }
-
-      volumes.push({
-        host: agentProfile.hostPath,
-        container: `${homeContainer}/${agentProfile.mount}`,
+  const agentProfileMounts = validateAgentProfilesForWorkspace(workspace.agent?.profiles ?? []);
+  for (const agentProfile of agentProfileMounts) {
+    const conflicting = hostMounts.find((mount) => mount.container.endsWith(`/${agentProfile.mount}`));
+    if (conflicting) {
+      notices.push({
+        kind: 'warning',
+        text: `Warning: agent profile '${agentProfile.name}' provides ${agentProfile.mount}, but host.mounts also mounts ${conflicting.host} to ${conflicting.container}. The agent profile mount will take precedence.`,
       });
-      notices.push({ kind: 'info', text: `Agent profile '${agentProfile.name}' mounted as ~/${agentProfile.mount}` });
     }
+
+    volumes.push({
+      host: agentProfile.hostPath,
+      container: `${homeContainer}/${agentProfile.mount}`,
+    });
+    notices.push({ kind: 'info', text: `Agent profile '${agentProfile.name}' mounted as ~/${agentProfile.mount}` });
   }
 
   if (workspace.host?.githubCLI) {
@@ -415,7 +459,7 @@ function resolveWorkspaceVolumes(
     managedStateMountPaths.push(relPath);
   }
 
-  return { volumes, notices, managedStateMountPaths };
+  return { volumes, notices, managedStateMountPaths, agentProfileMounts };
 }
 
 export function countSharedDirectories(wsName: string, projects: string[]): number {
@@ -496,7 +540,7 @@ function computeRuntimeHash(
 export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStartPlan {
   validateProjects(context.workspace.projects);
 
-  const { volumes, notices, managedStateMountPaths } = resolveWorkspaceVolumes(context);
+  const { volumes, notices, managedStateMountPaths, agentProfileMounts } = resolveWorkspaceVolumes(context);
   const sharedDirectoryCount = countUniqueVolumeSources(volumes);
   if (sharedDirectoryCount > MAX_SHARED_DIRECTORIES) {
     throw new Error(sharedDirectoryLimitMessage(context.wsName, sharedDirectoryCount));
@@ -507,6 +551,7 @@ export function computeRuntimeStartPlan(context: WorkspaceContext): RuntimeStart
     volumes,
     notices,
     managedStateMountPaths,
+    agentProfileMounts,
     runtimeHash: computeRuntimeHash(context, volumes, sshdEnabled),
     ssh: context.workspace.host?.sshAgent ?? true,
     sshdEnabled,
@@ -797,10 +842,6 @@ function readStopTimeout(workspaceName: string, fallback: string): string {
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // A container can need a moment after `container run --detach` before it
 // accepts exec, and a single failed probe can be a transient runtime hiccup —
 // retry before declaring the workspace unattachable.
@@ -1052,9 +1093,12 @@ export async function openWorkspace(
       },
     );
 
+    if (plan.action === 'refuse') {
+      throw new Error(plan.message);
+    }
+    applyClaudeProfileBypass(context, runtimePlan);
+
     switch (plan.action) {
-      case 'refuse':
-        throw new Error(plan.message);
       case 'start': {
         emitMountNotices(runtimePlan.notices);
         const runtimeEnv = resolveRuntimeEnv(context);

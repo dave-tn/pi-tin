@@ -17,7 +17,7 @@ const baseProfile: ContainerProfile = {
   workspace_state: [],
 };
 
-const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
+const noWraps = { agentWraps: [], agentEnv: {}, claudeUserSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
 
 describe('generateDockerfile', () => {
   test('produces basic Dockerfile structure', () => {
@@ -166,31 +166,32 @@ describe('generateDockerfile', () => {
     expect(entrypoint?.content).toContain('gh auth git-credential');
   });
 
-  test('copies Claude managed settings when provided', () => {
+  test('bakes Claude user settings into the user home when provided', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
     ];
-    const claudeManagedSettings = JSON.stringify({
-      permissions: {
-        defaultMode: 'bypassPermissions',
-      },
-      sandbox: {
-        enabled: false,
-      },
+    const claudeUserSettings = JSON.stringify({
+      permissions: { defaultMode: 'bypassPermissions' },
+      sandbox: { enabled: false },
+      skipDangerousModePermissionPrompt: true,
     }, null, 2);
     const { extras, dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
-      claudeManagedSettings,
+      claudeUserSettings,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,
     });
 
-    const settingsFile = extras.find((extra) => extra.name === 'claude-managed-settings.json');
-    expect(settingsFile?.content).toContain('"defaultMode": "bypassPermissions"');
-    expect(settingsFile?.content).toContain('"enabled": false');
-    expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
+    const settingsFile = extras.find((extra) => extra.name === 'claude-user-settings.json');
+    expect(settingsFile?.content).toBe(`${claudeUserSettings}\n`);
+    // Copied before the home-dir chown so Claude Code can write its own settings.
+    const copyLine = dockerfile.indexOf('COPY claude-user-settings.json /home/dev/.claude/settings.json');
+    const chownLine = dockerfile.indexOf('RUN chown -R dev:dev /home/dev');
+    expect(copyLine).toBeGreaterThan(-1);
+    expect(chownLine).toBeGreaterThan(copyLine);
+    expect(dockerfile).not.toContain('managed-settings');
   });
 
   test('bakes a PATH-first wrapper for agents with skip-permissions flags', () => {
@@ -200,7 +201,7 @@ describe('generateDockerfile', () => {
     const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,
@@ -241,7 +242,7 @@ describe('generateDockerfile', () => {
       // As computeBuildPlan derives them, with skipPermissions on.
       agentWraps: agentsWithSkipPermissions(packages, agents),
       agentEnv: agentContainerEnv(packages, agents),
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents,
@@ -319,7 +320,7 @@ describe('generateDockerfile', () => {
       // As computeBuildPlan derives them, with skipPermissions on.
       agentWraps: agentsWithSkipPermissions(packages, agents),
       agentEnv: {},
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents,
@@ -346,16 +347,14 @@ describe('generateDockerfile', () => {
     expect(refresh?.content).not.toContain('npm update -g');
   });
 
-  test('bakes wrappers for non-Claude agents while Claude uses managed settings', () => {
+  test('bakes wrappers for non-Claude agents while Claude uses its user settings', () => {
     const packages: Tool[] = [
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
       { name: 'Codex', package: '@openai/codex@latest' },
       { name: 'Crush', package: '@charmland/crush@latest' },
     ];
-    const claudeManagedSettings = JSON.stringify({
-      permissions: {
-        defaultMode: 'bypassPermissions',
-      },
+    const claudeUserSettings = JSON.stringify({
+      permissions: { defaultMode: 'bypassPermissions' },
     }, null, 2);
     const { extras, dockerfile } = generateDockerfile(baseProfile, packages, {
       agentWraps: [
@@ -363,7 +362,7 @@ describe('generateDockerfile', () => {
         { binary: 'crush', flag: '--yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1' },
-      claudeManagedSettings,
+      claudeUserSettings,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,
@@ -376,7 +375,7 @@ describe('generateDockerfile', () => {
     expect(crushWrapper?.content).toContain('--yolo');
     expect(dockerfile).toContain('COPY pi-tin-wrapper-crush /usr/local/pi-tin/bin/crush');
     expect(dockerfile).toContain('ENV CLAUDE_CODE_SANDBOXED="1"');
-    expect(dockerfile).toContain('COPY claude-managed-settings.json /etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json');
+    expect(dockerfile).toContain('COPY claude-user-settings.json /home/dev/.claude/settings.json');
   });
 
   test('agentEnv sets container env vars', () => {
@@ -389,7 +388,7 @@ describe('generateDockerfile', () => {
         { binary: 'crush', flag: '--yolo' },
       ],
       agentEnv: { CLAUDE_CODE_SANDBOXED: '1', NO_BROWSER: 'true' },
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,
@@ -408,7 +407,7 @@ describe('generateDockerfile', () => {
         { binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' },
       ],
       agentEnv: {},
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,
@@ -501,7 +500,7 @@ describe('generateDockerfile', () => {
     const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [],
       agentEnv: {},
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig,
       sshd: null,
       agents: KNOWN_AGENTS,
@@ -527,7 +526,7 @@ describe('generateDockerfile', () => {
     const { dockerfile, extras } = generateDockerfile(baseProfile, packages, {
       agentWraps: [{ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' }],
       agentEnv: {},
-      claudeManagedSettings: null,
+      claudeUserSettings: null,
       claudeConfig: null,
       sshd: null,
       agents: KNOWN_AGENTS,

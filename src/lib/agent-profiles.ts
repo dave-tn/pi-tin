@@ -166,10 +166,17 @@ export function planAgentProfileDelete(input: {
   };
 }
 
+export interface ResolvedAgentProfileMount {
+  name: string;
+  mount: string;
+  hostPath: string;
+  mode: AgentProfileMode;
+}
+
 export function validateAgentProfilesForWorkspace(
   profileNames: string[],
-): Array<{ name: string; mount: string; hostPath: string }> {
-  const resolved: Array<{ name: string; mount: string; hostPath: string }> = [];
+): ResolvedAgentProfileMount[] {
+  const resolved: ResolvedAgentProfileMount[] = [];
 
   for (const name of profileNames) {
     const profile = loadAgentProfile(name);
@@ -180,7 +187,7 @@ export function validateAgentProfilesForWorkspace(
           ? path.join(os.homedir(), mount)
           : path.join(profile.path, mount);
 
-      resolved.push({ name, mount, hostPath });
+      resolved.push({ name, mount, hostPath, mode: profile.mode });
     }
   }
 

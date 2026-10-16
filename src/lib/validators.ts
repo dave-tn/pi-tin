@@ -297,6 +297,23 @@ export const HerdrAgentListSchema = v.pipe(
   v.transform((payload) => payload.result.agents),
 );
 
+// valibot's object schemas accept arrays (typeof [] === 'object') and return
+// them as {}, which would silently drop the array's contents on a merge.
+function mergeableObject<const TEntries extends v.ObjectEntries>(entries: TEntries) {
+  return v.pipe(
+    v.unknown(),
+    v.check((value) => !Array.isArray(value), 'Expected an object, not an array'),
+    v.looseObject(entries),
+  );
+}
+
+// Claude Code's own ~/.claude/settings.json inside an agent profile. Only the
+// keys pi-tin merges are typed; every other setting passes through untouched.
+const ClaudeUserSettingsSchema = mergeableObject({
+  permissions: v.optional(mergeableObject({})),
+  sandbox: v.optional(mergeableObject({})),
+});
+
 const GitHubAssetSchema = v.object({
   name: v.optional(v.string()),
   browser_download_url: v.optional(v.string()),
@@ -307,6 +324,7 @@ export const GitHubReleaseSchema = v.object({
 });
 
 export type AgentDefinitionFile = v.InferOutput<typeof AgentDefinitionFileSchema>;
+export type ClaudeUserSettings = v.InferOutput<typeof ClaudeUserSettingsSchema>;
 export type ContainerProfile = v.InferOutput<typeof ContainerProfileSchema>;
 export type HostMount = v.InferOutput<typeof HostMountSchema>;
 export type Tool = v.InferOutput<typeof ToolSchema>;
@@ -352,6 +370,10 @@ export function validateWorkspace(raw: unknown): Workspace {
 
 export function validateAgentProfileMeta(raw: unknown): AgentProfileMeta {
   return parseWithContext('agent profile', AgentProfileMetaSchema, raw);
+}
+
+export function validateClaudeUserSettings(raw: unknown): ClaudeUserSettings {
+  return parseWithContext('Claude Code settings', ClaudeUserSettingsSchema, raw);
 }
 
 export function validateAgentDefinition(raw: unknown): AgentDefinitionFile {

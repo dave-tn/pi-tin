@@ -307,6 +307,7 @@ describe('agent-profiles', () => {
       expect(result).toHaveLength(1);
       expect(result[0]!.mount).toBe('.claude');
       expect(result[0]!.hostPath).toContain('agent-profiles/my-claude/.claude');
+      expect(result[0]!.mode).toBe('isolated');
     });
 
     test('resolves host profile paths from home directory', () => {
@@ -315,6 +316,7 @@ describe('agent-profiles', () => {
       expect(result).toHaveLength(1);
       expect(result[0]!.mount).toBe('.pi');
       expect(result[0]!.hostPath).toBe(path.join(os.homedir(), '.pi'));
+      expect(result[0]!.mode).toBe('host');
     });
 
     test('resolves multiple mounts for one profile', () => {

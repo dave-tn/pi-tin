@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeManagedSettingsJson, defaultProfileNameFor, findBuiltInByName, findBuiltInByPackage, nativeInstallTargets, npmToolSpecs, packagesCollide, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
+import { KNOWN_AGENTS, agentsWithSkipPermissions, agentContainerEnv, claudeConfigJson, claudeProfileSettingsPath, claudeUserSettingsJson, defaultProfileNameFor, planClaudeUserSettings, findBuiltInByName, findBuiltInByPackage, nativeInstallTargets, npmToolSpecs, packagesCollide, toolDisplayName, toWorkspaceTool, workspaceHasClaudeCode } from './agents.js';
 import type { KnownAgent, NativeAgentInstall } from './agents.js';
 import { validateWorkspace } from './validators.js';
 import type { Tool } from './validators.js';
@@ -221,7 +221,7 @@ describe('agentsWithSkipPermissions', () => {
     expect(wraps).toContainEqual({ binary: 'codex', flag: '--dangerously-bypass-approvals-and-sandbox' });
   });
 
-  test('excludes agents without skip-permissions flag and agents configured via managed settings', () => {
+  test('excludes agents without skip-permissions flag and Claude Code, which takes bypass from its settings', () => {
     const packages: Tool[] = [
       { name: 'Pi', package: '@earendil-works/pi-coding-agent@latest' },
       { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
@@ -271,7 +271,7 @@ describe('workspaceHasClaudeCode', () => {
   });
 });
 
-describe('claudeManagedSettingsJson', () => {
+describe('claudeUserSettingsJson', () => {
   const claudeCode: Tool[] = [
     { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
   ];
@@ -280,19 +280,156 @@ describe('claudeManagedSettingsJson', () => {
     const packages: Tool[] = [
       { name: 'Codex', package: '@openai/codex@latest' },
     ];
-    expect(claudeManagedSettingsJson(packages, true, KNOWN_AGENTS)).toBeNull();
+    expect(claudeUserSettingsJson(packages, true, KNOWN_AGENTS)).toBeNull();
   });
 
-  test('bypasses permissions and disables sandboxing when skip-permissions is on', () => {
-    const settings = JSON.parse(claudeManagedSettingsJson(claudeCode, true, KNOWN_AGENTS)!);
+  test('bypasses permissions, disables sandboxing and pre-accepts the bypass warning when skip-permissions is on', () => {
+    const settings = JSON.parse(claudeUserSettingsJson(claudeCode, true, KNOWN_AGENTS)!);
     expect(settings).toEqual({
       permissions: { defaultMode: 'bypassPermissions' },
       sandbox: { enabled: false },
+      skipDangerousModePermissionPrompt: true,
     });
   });
 
   test('returns null when skip-permissions is off so Claude Code defaults apply', () => {
-    expect(claudeManagedSettingsJson(claudeCode, false, KNOWN_AGENTS)).toBeNull();
+    expect(claudeUserSettingsJson(claudeCode, false, KNOWN_AGENTS)).toBeNull();
+  });
+});
+
+describe('planClaudeUserSettings', () => {
+  test('writes the bypass settings when the agent profile has no settings file yet', () => {
+    expect(planClaudeUserSettings(null)).toEqual({
+      action: 'write',
+      content: '{\n  "permissions": {\n    "defaultMode": "bypassPermissions"\n  },\n  "sandbox": {\n    "enabled": false\n  },\n  "skipDangerousModePermissionPrompt": true\n}\n',
+    });
+  });
+
+  test('merges into existing settings, keeping unrelated keys and sibling permission and sandbox keys', () => {
+    const existing = JSON.stringify({
+      hooks: { SessionStart: [] },
+      permissions: { allow: ['Bash(bun test:*)'], defaultMode: 'auto' },
+      sandbox: { excludedCommands: ['docker'] },
+      theme: 'dark',
+    });
+    const plan = planClaudeUserSettings(existing);
+    expect(plan.action).toBe('write');
+    if (plan.action !== 'write') return;
+    expect(JSON.parse(plan.content)).toEqual({
+      hooks: { SessionStart: [] },
+      permissions: { allow: ['Bash(bun test:*)'], defaultMode: 'bypassPermissions' },
+      sandbox: { excludedCommands: ['docker'], enabled: false },
+      theme: 'dark',
+      skipDangerousModePermissionPrompt: true,
+    });
+  });
+
+  test('leaves the file alone when the bypass settings are already in place', () => {
+    const existing = JSON.stringify({
+      theme: 'dark',
+      permissions: { defaultMode: 'bypassPermissions', allow: [] },
+      sandbox: { enabled: false },
+      skipDangerousModePermissionPrompt: true,
+    }, null, 4);
+    expect(planClaudeUserSettings(existing)).toEqual({ action: 'unchanged' });
+  });
+
+  test('rewrites settings that hold only some of the bypass keys', () => {
+    const existing = JSON.stringify({
+      permissions: { defaultMode: 'bypassPermissions' },
+      sandbox: { enabled: false },
+    });
+    const plan = planClaudeUserSettings(existing);
+    expect(plan.action).toBe('write');
+    if (plan.action !== 'write') return;
+    expect(JSON.parse(plan.content).skipDangerousModePermissionPrompt).toBe(true);
+  });
+
+  test('refuses a file that is not valid JSON, passing through the parser message', () => {
+    const content = '{ "theme": "dark", }';
+    // The runtime owns JSON syntax messages (they differ between engines), so
+    // the expectation is the runtime's own message for the same input.
+    const syntaxMessage = (() => {
+      try {
+        JSON.parse(content);
+        return 'parsed';
+      } catch (error) {
+        return (error as Error).message;
+      }
+    })();
+    expect(planClaudeUserSettings(content)).toEqual({ action: 'invalid', reason: syntaxMessage });
+  });
+
+  test('refuses settings whose shape it would have to overwrite, naming the field', () => {
+    expect(planClaudeUserSettings('[]')).toEqual({
+      action: 'invalid',
+      reason: 'Invalid Claude Code settings configuration:\n  Expected an object, not an array',
+    });
+    expect(planClaudeUserSettings('{ "permissions": [] }')).toEqual({
+      action: 'invalid',
+      reason: 'Invalid Claude Code settings configuration:\n  permissions: Expected an object, not an array',
+    });
+    expect(planClaudeUserSettings('{ "permissions": "allow-all" }')).toEqual({
+      action: 'invalid',
+      reason: 'Invalid Claude Code settings configuration:\n  permissions: Invalid type: Expected Object but received "allow-all"',
+    });
+    expect(planClaudeUserSettings('{ "sandbox": true }')).toEqual({
+      action: 'invalid',
+      reason: 'Invalid Claude Code settings configuration:\n  sandbox: Invalid type: Expected Object but received true',
+    });
+  });
+});
+
+describe('claudeProfileSettingsPath', () => {
+  const claudeCode: Tool[] = [
+    { name: 'Claude Code', package: '@anthropic-ai/claude-code@latest' },
+  ];
+  const isolatedClaude = { name: 'work', mount: '.claude', hostPath: '/profiles/work/.claude', mode: 'isolated' as const };
+  const isolatedPi = { name: 'pi', mount: '.pi', hostPath: '/profiles/pi/.pi', mode: 'isolated' as const };
+
+  test('targets the settings.json of the isolated agent profile mounted at ~/.claude', () => {
+    expect(claudeProfileSettingsPath({
+      packages: claudeCode,
+      skipPermissions: true,
+      agents: KNOWN_AGENTS,
+      agentProfileMounts: [isolatedPi, isolatedClaude],
+    })).toBe('/profiles/work/.claude/settings.json');
+  });
+
+  test('never targets a host-mode agent profile, which is the real host config', () => {
+    expect(claudeProfileSettingsPath({
+      packages: claudeCode,
+      skipPermissions: true,
+      agents: KNOWN_AGENTS,
+      agentProfileMounts: [{ ...isolatedClaude, hostPath: '/Users/me/.claude', mode: 'host' }],
+    })).toBeNull();
+  });
+
+  test('targets nothing without a Claude agent profile, leaving the baked file to apply', () => {
+    expect(claudeProfileSettingsPath({
+      packages: claudeCode,
+      skipPermissions: true,
+      agents: KNOWN_AGENTS,
+      agentProfileMounts: [isolatedPi],
+    })).toBeNull();
+  });
+
+  test('targets nothing when skip-permissions is off', () => {
+    expect(claudeProfileSettingsPath({
+      packages: claudeCode,
+      skipPermissions: false,
+      agents: KNOWN_AGENTS,
+      agentProfileMounts: [isolatedClaude],
+    })).toBeNull();
+  });
+
+  test('targets nothing when the workspace does not include Claude Code', () => {
+    expect(claudeProfileSettingsPath({
+      packages: [{ name: 'Codex', package: '@openai/codex@latest' }],
+      skipPermissions: true,
+      agents: KNOWN_AGENTS,
+      agentProfileMounts: [isolatedClaude],
+    })).toBeNull();
   });
 });
 
@@ -312,6 +449,7 @@ describe('claudeConfigJson', () => {
     const config = JSON.parse(claudeConfigJson(claudeCode, ['/workspace/pi-tin', '/workspace/other'], KNOWN_AGENTS)!);
     expect(config).toEqual({
       hasCompletedOnboarding: true,
+      hasSeenAutoDefaultNudge: true,
       projects: {
         '/workspace/pi-tin': {
           hasTrustDialogAccepted: true,
@@ -333,7 +471,7 @@ describe('claudeConfigJson', () => {
 
   test('seeds onboarding with an empty trust map when no projects are mounted', () => {
     const config = JSON.parse(claudeConfigJson(claudeCode, [], KNOWN_AGENTS)!);
-    expect(config).toEqual({ hasCompletedOnboarding: true, projects: {} });
+    expect(config).toEqual({ hasCompletedOnboarding: true, hasSeenAutoDefaultNudge: true, projects: {} });
   });
 });
 
@@ -480,7 +618,7 @@ describe('a custom agent that declares binary: claude', () => {
   const table = [...KNOWN_AGENTS, fork];
   const forkTool: Tool = { name: 'Claude Fork', package: 'claude-code-fork@latest' };
 
-  test('keeps its own skip-permissions flag rather than routing to managed settings', () => {
+  test('keeps its own skip-permissions flag rather than routing to Claude Code settings', () => {
     expect(agentsWithSkipPermissions([forkTool], table)).toEqual([
       { binary: 'claude', flag: '--yolo' },
     ]);
@@ -488,7 +626,7 @@ describe('a custom agent that declares binary: claude', () => {
 
   test('does not make the workspace count as having Claude Code', () => {
     expect(workspaceHasClaudeCode([forkTool], table)).toBe(false);
-    expect(claudeManagedSettingsJson([forkTool], true, table)).toBeNull();
+    expect(claudeUserSettingsJson([forkTool], true, table)).toBeNull();
     expect(claudeConfigJson([forkTool], ['/workspace/pi-tin'], table)).toBeNull();
   });
 });

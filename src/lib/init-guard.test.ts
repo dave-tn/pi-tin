@@ -101,7 +101,7 @@ describe('syncDefaultContainerProfiles', () => {
   });
 
   test('default profiles generate a Dockerfile without throwing', () => {
-    const noWraps = { agentWraps: [], agentEnv: {}, claudeManagedSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
+    const noWraps = { agentWraps: [], agentEnv: {}, claudeUserSettings: null, claudeConfig: null, sshd: null, agents: KNOWN_AGENTS };
     for (const content of Object.values(DEFAULT_CONTAINER_PROFILES)) {
       const profile = validateContainerProfile(YAML.parse(content));
       expect(() => generateDockerfile(profile, [], noWraps)).not.toThrow();
