@@ -1,4 +1,4 @@
-import { nativeInstallTargets, npmToolSpecs, type AgentWrap, type KnownAgent } from './agents.js';
+import { CLAUDE_DOT_DIR, nativeInstallTargets, npmToolSpecs, type AgentWrap, type KnownAgent } from './agents.js';
 import { containerHomeDir } from './paths.js';
 import type { ContainerProfile, Tool } from './validators.js';
 
@@ -79,8 +79,6 @@ function createUserLines(pm: PackageManager): string[] {
       ];
   }
 }
-
-const CLAUDE_MANAGED_SETTINGS_PATH = '/etc/claude-code/managed-settings.d/90-pi-tin-claude-settings.json';
 
 // pi-tin installs all agent tools and `global_tools` with npm, whatever the base
 // image. A custom profile that ships no Node.js would otherwise fail deep in the
@@ -244,7 +242,7 @@ export function generateDockerfile(
   opts: {
     agentWraps: AgentWrap[];
     agentEnv: Record<string, string>;
-    claudeManagedSettings: string | null;
+    claudeUserSettings: string | null;
     claudeConfig: string | null;
     sshd: { authorizedKey: string } | null;
     agents: readonly KnownAgent[];
@@ -320,7 +318,7 @@ export function generateDockerfile(
     .filter((binDir) => binDir !== '.local/bin');
   const nativeBinSuffix = nativeBinDirs.map((binDir) => `:$HOME_DIR/${binDir}`).join('');
   lines.push(`ENV PATH=${AGENT_WRAPPER_BIN_DIR}:$HOME_DIR/.npm-refresh/bin:$HOME_DIR/.npm-global/bin:$HOME_DIR/.local/bin${nativeBinSuffix}:${BAKED_BIN_DIR}:$PATH`);
-  const { agentWraps, agentEnv, claudeManagedSettings, claudeConfig } = opts;
+  const { agentWraps, agentEnv, claudeUserSettings, claudeConfig } = opts;
   for (const [key, value] of Object.entries(agentEnv)) {
     lines.push(`ENV ${key}=${dockerfileEnvQuote(value)}`);
   }
@@ -349,13 +347,13 @@ export function generateDockerfile(
     lines.push('');
   }
 
-  if (claudeManagedSettings !== null) {
-    lines.push(
-      'RUN mkdir -p /etc/claude-code/managed-settings.d',
-      `COPY claude-managed-settings.json ${CLAUDE_MANAGED_SETTINGS_PATH}`,
-    );
+  // Seed ~/.claude/settings.json for workspaces without a Claude agent
+  // profile; a profile mounted at ~/.claude shadows it. Copied before the
+  // home-dir chown below so Claude Code can write its own settings.
+  if (claudeUserSettings !== null) {
+    lines.push(`COPY claude-user-settings.json ${homeDir}/${CLAUDE_DOT_DIR}/settings.json`);
     lines.push('');
-    extras.push({ name: 'claude-managed-settings.json', content: `${claudeManagedSettings}\n` });
+    extras.push({ name: 'claude-user-settings.json', content: `${claudeUserSettings}\n` });
   }
 
   // Seed ~/.claude.json (onboarding + per-project trust). Copied before the

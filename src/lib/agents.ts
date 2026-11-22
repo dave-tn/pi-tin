@@ -1,4 +1,7 @@
-import type { AgentDefinitionFile, Tool } from './validators.js';
+import path from 'node:path';
+import { errorMessage } from './guards.js';
+import { validateClaudeUserSettings, type AgentDefinitionFile, type ClaudeUserSettings, type Tool } from './validators.js';
+import type { ResolvedAgentProfileMount } from './agent-profiles.js';
 
 /**
  * A built-in agent: the agent-definition shape, plus the identity a definition
@@ -138,24 +141,93 @@ export function workspaceHasClaudeCode(packages: Tool[], agents: readonly KnownA
 }
 
 /**
- * Build the Claude Code managed-settings JSON baked into the container image,
- * or null when the workspace doesn't include Claude Code or skip-permissions
- * mode is off. In skip-permissions mode the container is the sandbox, so
- * bypassPermissions is set and Claude Code's own sandbox is disabled;
- * otherwise no managed settings are baked and Claude Code's defaults apply.
+ * Build the Claude Code user settings (`~/.claude/settings.json`) baked into
+ * the container image, or null when the workspace doesn't include Claude Code
+ * or skip-permissions mode is off. In skip-permissions mode the container is
+ * the sandbox, so bypassPermissions is set and Claude Code's own sandbox is
+ * disabled. An agent profile mounted at ~/.claude shadows this file; its own
+ * settings get the same keys merged in at open (planClaudeUserSettings).
+ *
+ * User settings, not managed settings: Claude Code reads a single managed
+ * source, and an organisation's server-managed settings outrank (and skip)
+ * any file-based ones, so a baked managed-settings drop-in silently stops
+ * applying for anyone whose org pushes remote settings. User settings are one
+ * of the sources Claude Code allows to grant bypass mode — but the lowest-
+ * precedence one, so a project's own `.claude/settings.json` or
+ * `settings.local.json` that sets `permissions.defaultMode` or
+ * `sandbox.enabled` wins.
  */
-export function claudeManagedSettingsJson(
+export function claudeUserSettingsJson(
   packages: Tool[],
   skipPermissions: boolean,
   agents: readonly KnownAgent[],
 ): string | null {
   if (!workspaceHasClaudeCode(packages, agents) || !skipPermissions) return null;
-  return JSON.stringify({
-    permissions: { defaultMode: 'bypassPermissions' },
-    sandbox: {
-      enabled: false,
-    },
-  }, null, 2);
+  return JSON.stringify(withClaudeBypass({}), null, 2);
+}
+
+/**
+ * The host path of the `settings.json` pi-tin merges its bypass keys into, or
+ * null when there is none to write: skip-permissions off, no Claude Code, or
+ * no isolated agent profile mounted at ~/.claude (the image-baked file then
+ * applies). A host-mode agent profile is the user's real config and is never
+ * written.
+ */
+export function claudeProfileSettingsPath(input: {
+  packages: Tool[];
+  skipPermissions: boolean;
+  agents: readonly KnownAgent[];
+  agentProfileMounts: readonly ResolvedAgentProfileMount[];
+}): string | null {
+  if (!input.skipPermissions || !workspaceHasClaudeCode(input.packages, input.agents)) return null;
+  const claudeProfileMount = input.agentProfileMounts.find(
+    (profileMount) => profileMount.mount === CLAUDE_DOT_DIR && profileMount.mode === 'isolated',
+  );
+  return claudeProfileMount === undefined ? null : path.join(claudeProfileMount.hostPath, 'settings.json');
+}
+
+export type ClaudeUserSettingsPlan =
+  | { action: 'write'; content: string }
+  | { action: 'unchanged' }
+  | { action: 'invalid'; reason: string };
+
+/**
+ * Plan the merge of pi-tin's bypass keys into an agent profile's existing
+ * `settings.json` (null when the file doesn't exist). Only those keys are
+ * set — every other setting, including sibling permission rules, is kept.
+ * A file that isn't valid JSON, or whose `permissions`/`sandbox` isn't an
+ * object, is left untouched rather than overwritten.
+ */
+export function planClaudeUserSettings(existingContent: string | null): ClaudeUserSettingsPlan {
+  const parsed = existingContent === null
+    ? { ok: true as const, settings: {} }
+    : parseClaudeUserSettings(existingContent);
+  if (!parsed.ok) return { action: 'invalid', reason: parsed.reason };
+  const merged = withClaudeBypass(parsed.settings);
+  return JSON.stringify(merged) === JSON.stringify(parsed.settings)
+    ? { action: 'unchanged' }
+    : { action: 'write', content: `${JSON.stringify(merged, null, 2)}\n` };
+}
+
+function parseClaudeUserSettings(
+  content: string,
+): { ok: true; settings: ClaudeUserSettings } | { ok: false; reason: string } {
+  try {
+    return { ok: true, settings: validateClaudeUserSettings(JSON.parse(content)) };
+  } catch (error) {
+    return { ok: false, reason: errorMessage(error) };
+  }
+}
+
+function withClaudeBypass(settings: ClaudeUserSettings): ClaudeUserSettings {
+  return {
+    ...settings,
+    permissions: { ...settings.permissions, defaultMode: 'bypassPermissions' },
+    sandbox: { ...settings.sandbox, enabled: false },
+    // Pre-accepts the bypass-mode warning dialog Claude Code otherwise shows
+    // on every launch that starts in bypass from settings.
+    skipDangerousModePermissionPrompt: true,
+  };
 }
 
 /**
@@ -171,7 +243,10 @@ export function claudeManagedSettingsJson(
  * warning-shown counterpart) pre-answers the dialog gating CLAUDE.md
  * `@`-imports that resolve outside the project directory — same per-project
  * persistence, no other pre-grant mechanism, and anything an import could
- * reach is already inside the container.
+ * reach is already inside the container. `hasSeenAutoDefaultNudge` dismisses
+ * the one-time "make auto mode your default?" prompt shown when a session
+ * starts in bypass mode — it defaults to Yes, so a stray Enter would rewrite
+ * the agent profile's settings to auto mode.
  */
 export function claudeConfigJson(
   packages: Tool[],
@@ -191,7 +266,7 @@ export function claudeConfigJson(
       },
     ]),
   );
-  return JSON.stringify({ hasCompletedOnboarding: true, projects }, null, 2);
+  return JSON.stringify({ hasCompletedOnboarding: true, hasSeenAutoDefaultNudge: true, projects }, null, 2);
 }
 
 /** Return container env vars needed by the workspace's agents. */
@@ -228,8 +303,8 @@ export function agentsWithSkipPermissions(
 ): AgentWrap[] {
   return packages.flatMap((pkg): AgentWrap[] => {
     const agent = knownAgentForPackage(pkg, agents);
-    // Claude Code takes its skip-permissions mode from baked managed settings,
-    // so it needs no launcher wrapper.
+    // Claude Code takes its skip-permissions mode from its user settings
+    // (claudeUserSettingsJson), so it needs no launcher wrapper.
     if (agent === undefined || agent.skip_permissions_flag === undefined || isBuiltInClaudeCode(agent)) {
       return [];
     }
@@ -255,15 +330,27 @@ const OPENCODE_SANDBOX_CONFIG = JSON.stringify({ permission: { external_director
 // where trust decisions stay the user's own.
 const PI_TRUST_SEED = `${JSON.stringify({ '/workspace': true }, null, 2)}\n`;
 
+/** Claude Code's home-relative config dir: its agent-profile mount and settings home. */
+export const CLAUDE_DOT_DIR = '.claude';
+
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
   {
     name: 'Claude Code',
     package: '@anthropic-ai/claude-code@latest',
     binary: 'claude',
-    dot_dirs: ['.claude'],
+    dot_dirs: [CLAUDE_DOT_DIR],
     host_mode_supported: false,
     skip_permissions_flag: '--dangerously-skip-permissions',
-    container_env: { CLAUDE_CODE_SANDBOXED: '1' },
+    // Opt-outs that cost no features. Not DISABLE_TELEMETRY/DO_NOT_TRACK:
+    // both also stop feature-flag fetching (Remote Control and other
+    // flag-gated features). Not CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: it
+    // also disables the auto-updater the native install relies on.
+    container_env: {
+      CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      DISABLE_FEEDBACK_COMMAND: '1',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+    },
     api_key_vars: ['ANTHROPIC_API_KEY'],
     isolated_seed_files: [],
     // Native layout: ~/.local/bin/claude is a symlink into
