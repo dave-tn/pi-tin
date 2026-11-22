@@ -51,10 +51,17 @@ describe('KNOWN_AGENTS', () => {
   });
 
   test('agents with container_env have the expected env vars', () => {
-    // No DISABLE_AUTOUPDATER: native-installed Claude Code keeps itself fresh
-    // with its own auto-updater.
+    // No DISABLE_AUTOUPDATER or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:
+    // native-installed Claude Code keeps itself fresh with its own
+    // auto-updater. No DISABLE_TELEMETRY/DO_NOT_TRACK: they stop feature-flag
+    // fetching, losing Remote Control and other flag-gated features.
     const claude = KNOWN_AGENTS.find((a) => a.name === 'Claude Code');
-    expect(claude?.container_env).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
+    expect(claude?.container_env).toEqual({
+      CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      DISABLE_FEEDBACK_COMMAND: '1',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+    });
 
     const opencode = KNOWN_AGENTS.find((a) => a.name === 'OpenCode');
     expect(opencode?.container_env).toEqual({
@@ -183,7 +190,12 @@ describe('agentContainerEnv', () => {
       { name: 'Copilot', package: '@github/copilot@latest' },
     ];
     const env = agentContainerEnv(packages, KNOWN_AGENTS);
-    expect(env).toEqual({ CLAUDE_CODE_SANDBOXED: '1' });
+    expect(env).toEqual({
+      CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      DISABLE_FEEDBACK_COMMAND: '1',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+    });
   });
 
   test('includes the OpenCode external_directory sandbox config', () => {
@@ -594,6 +606,9 @@ describe('lookup helpers over an extended agents table', () => {
   test('agentContainerEnv merges a custom entry env alongside a built-in', () => {
     expect(agentContainerEnv([claudeTool, ompTool], TABLE)).toEqual({
       CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      DISABLE_FEEDBACK_COMMAND: '1',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
       OMP_LOG: 'info',
     });
   });

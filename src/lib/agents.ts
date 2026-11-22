@@ -341,7 +341,16 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
     dot_dirs: [CLAUDE_DOT_DIR],
     host_mode_supported: false,
     skip_permissions_flag: '--dangerously-skip-permissions',
-    container_env: { CLAUDE_CODE_SANDBOXED: '1' },
+    // Opt-outs that cost no features. Not DISABLE_TELEMETRY/DO_NOT_TRACK:
+    // both also stop feature-flag fetching (Remote Control and other
+    // flag-gated features). Not CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: it
+    // also disables the auto-updater the native install relies on.
+    container_env: {
+      CLAUDE_CODE_SANDBOXED: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      DISABLE_FEEDBACK_COMMAND: '1',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+    },
     api_key_vars: ['ANTHROPIC_API_KEY'],
     isolated_seed_files: [],
     // Native layout: ~/.local/bin/claude is a symlink into
